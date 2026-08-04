@@ -1,0 +1,1 @@
+# Quotes domain app.

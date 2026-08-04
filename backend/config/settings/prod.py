@@ -1,0 +1,23 @@
+from .base import *  # noqa: F403,F401
+
+DEBUG = False
+
+if SECRET_KEY == "unsafe-dev-secret-key":  # noqa: F405
+    raise RuntimeError("DJANGO_SECRET_KEY must be set for production.")
+
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = True
+SECURE_HSTS_SECONDS = env("SECURE_HSTS_SECONDS", default=31536000, cast=int)  # noqa: F405
+SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+SECURE_HSTS_PRELOAD = True
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = True
+X_FRAME_OPTIONS = "DENY"
+SECURE_REFERRER_POLICY = "same-origin"
+
+REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = [  # noqa: F405
+    "rest_framework.renderers.JSONRenderer",
+]

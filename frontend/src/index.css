@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --color-brand: #0869f7;
+  --color-brand-hover: #0758ca;
+  --color-navy: #061c3f;
+  --color-navy-panel: #0e2b58;
+  --color-ink: #0a1428;
+  --color-muted: #697488;
+  --color-text-subtle: #667083;
+  --color-text-soft: #758094;
+  --color-border: #dce2eb;
+  --color-border-input: #d5dce6;
+  --color-border-muted: #dbe1ea;
+  --color-border-soft: #edf0f5;
+  --color-surface: #f4f7fc;
+  --color-canvas: #f5f7fb;
+  --color-surface-raised: #f7f9fc;
+  --color-surface-muted: #f3f6fb;
+  --color-brand-soft: #e8f0ff;
+  --color-info-soft: #edf4ff;
+  --color-accent: #b8ff33;
+  --color-success: #258949;
+  --color-success-soft: #dcf7e7;
+  --color-danger: #c23f49;
+  --color-danger-soft: #fee5e7;
+  --color-warning: #a86112;
+  --color-warning-soft: #fff4d9;
+
+  --container-site: 90rem;
+  --spacing-page: 3rem;
+  --spacing-section: 5.5rem;
+  --spacing-control: 3.25rem;
+  --radius-control: 0.4375rem;
+  --radius-panel: 0.5rem;
+  --shadow-card: 0 15px 32px rgba(20, 45, 80, 0.1);
+  --shadow-overlay: -20px 0 44px rgba(7, 25, 52, 0.16);
+
+  --breakpoint-phone: 35rem;
+  --breakpoint-mobile: 40rem;
+  --breakpoint-tablet: 56.25rem;
+  --breakpoint-laptop: 68.75rem;
+  --breakpoint-desktop: 73.75rem;
+
+  /* Compatibility aliases are variables only; components use Tailwind classes. */
+  --blue: var(--color-brand);
+  --blue-dark: var(--color-brand-hover);
+  --navy: var(--color-navy);
+  --navy-panel: var(--color-navy-panel);
+  --ink: var(--color-ink);
+  --muted: var(--color-muted);
+  --line: var(--color-border);
+  --soft: var(--color-surface);
+  --lime: var(--color-accent);
+  --shell: var(--container-site);
+  --page-gutter: var(--spacing-page);
+  --section-space: var(--spacing-section);
+}

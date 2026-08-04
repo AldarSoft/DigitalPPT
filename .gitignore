@@ -1,0 +1,44 @@
+﻿# AI-generated working documentation
+/docsai/
+/backend/ARCHITECTURE.md
+/frontend/design-qa.md
+/frontend/audit-spacing/
+/frontend/cart-design-qa-final.jpg
+
+# Frontend dependencies and build output
+/frontend/node_modules/
+/frontend/dist/
+/frontend/dist-ssr/
+/frontend/.vite/
+
+# Python environments and caches
+/backend/.venv/
+/backend/venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local configuration and runtime data
+.env
+.env.*
+!.env.example
+/backend/db.sqlite3
+/backend/commerce.sqlite3
+/backend/media/
+/backend/staticfiles/
+*.log
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
