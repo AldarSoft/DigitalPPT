@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { BarChart3, Bell, Box, FileText, LayoutDashboard, LogOut, Menu, PanelsTopLeft, RadioTower, Search, Settings, ShoppingCart, Tag, Users, Warehouse, X } from 'lucide-react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { OverflowTooltipText } from '../components/OverflowTooltipText'
 import { useAuth } from '../contexts/AuthContext'
 import { tw } from '../lib/tailwind-styles'
 
@@ -8,6 +9,7 @@ export function AdminLayout() {
     const auth = useAuth();
     const navigate = useNavigate();
     const [open, setOpen] = useState(false);
+    const adminName = `${auth.user?.first_name ?? ''} ${auth.user?.last_name ?? ''}`.trim() || 'Administrator';
     const links = [
         ['/admin', LayoutDashboard, 'Overview', true],
         ['/admin/products', Box, 'Products', false],
@@ -31,7 +33,7 @@ export function AdminLayout() {
         </nav>
         <div className={tw("admin-user")}>
           <span>{`${auth.user?.first_name[0] ?? ''}${auth.user?.last_name[0] ?? ''}` || 'AD'}</span>
-          <div><strong>{auth.user?.first_name || 'Administrator'}</strong><small>Administrator</small></div>
+          <div><OverflowTooltipText as="strong" text={adminName}/><OverflowTooltipText as="small" text={auth.user?.email || 'Administrator'}/></div>
           <button type="button" aria-label="Log out" onClick={async () => { await auth.logout(); navigate('/login'); }}><LogOut size={18}/></button>
         </div>
       </aside>

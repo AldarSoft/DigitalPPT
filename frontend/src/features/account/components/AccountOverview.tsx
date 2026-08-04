@@ -1,18 +1,20 @@
 import { Boxes, FileText, Package, Search } from 'lucide-react'
 import { tw } from '../../../lib/tailwind-styles'
-import type { Order, QuoteRequest, User } from '../../../types'
+import type { QuoteRequest, User } from '../../../types'
 import type { AccountTab } from '../types'
 import { QuotesTable } from './QuotesTable'
 
 export function AccountOverview({
   user,
-  orders,
   quotes,
+  orderCount,
+  quoteCount,
   onTab,
 }: {
   user: User;
-  orders: Order[];
   quotes: QuoteRequest[];
+  orderCount: number;
+  quoteCount: number;
   onTab: (tab: AccountTab) => void;
 }) {
   const inReview = quotes.filter((quote) => quote.status === 'new' || quote.status === 'reviewing').length;
@@ -21,7 +23,7 @@ export function AccountOverview({
       <div className={tw("account-stats")}>
         <article>
           <FileText size={23} />
-          <strong>{quotes.length}</strong>
+          <strong>{quoteCount}</strong>
           <span>Quote requests</span>
         </article>
         <article>
@@ -31,7 +33,7 @@ export function AccountOverview({
         </article>
         <article>
           <Package size={23} />
-          <strong>{orders.length}</strong>
+          <strong>{orderCount}</strong>
           <span>Past orders</span>
         </article>
       </div>

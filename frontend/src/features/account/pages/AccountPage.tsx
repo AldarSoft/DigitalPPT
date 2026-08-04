@@ -2,11 +2,13 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { FileText, LayoutDashboard, LogOut, MapPin, Package, Settings, UserRound } from 'lucide-react'
 import { Navigate } from 'react-router-dom'
+import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { useAuth } from '../../../contexts/AuthContext'
 import { api, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
 import type { User } from '../../../types'
 import { AccountOverview } from '../components/AccountOverview'
+import { AccountPagination } from '../components/AccountPagination'
 import { OrdersTable } from '../components/OrdersTable'
 import { ProfileForm } from '../components/ProfileForm'
 import { QuotesTable } from '../components/QuotesTable'
@@ -15,15 +17,22 @@ import type { AccountTab } from '../types'
 export function AccountPage() {
   const auth = useAuth();
   const [tab, setTab] = useState<AccountTab>("overview");
+  const [orderPage, setOrderPage] = useState(1);
+  const [quotePage, setQuotePage] = useState(1);
+  const pageSize = 10;
   const ordersQuery = useQuery({
-    queryKey: ["orders", "mine"],
-    queryFn: () => api.orders(),
+    queryKey: ["orders", "mine", orderPage],
+    queryFn: () => api.orders(`ordering=-created_at&page=${orderPage}&page_size=${pageSize}`),
     enabled: Boolean(auth.user),
+    placeholderData: (previous) => previous,
   });
   const quotesQuery = useQuery({
-    queryKey: ['quotes', 'mine'],
-    queryFn: () => api.quotes('ordering=-created_at&page_size=100'),
+    queryKey: ['quotes', 'mine', quotePage],
+    queryFn: () => api.quotes(`ordering=-created_at&page=${quotePage}&page_size=${pageSize}`),
     enabled: Boolean(auth.user),
+    staleTime: 0,
+    refetchOnMount: 'always',
+    placeholderData: (previous) => previous,
   });
   if (!auth.ready)
     return <main className={tw("route-loading")}>Loading account...</main>;
@@ -31,8 +40,17 @@ export function AccountPage() {
     return <Navigate to="/login" state={{ from: "/account" }} replace />;
   const orders = ordersQuery.data ? unwrap(ordersQuery.data) : [];
   const quotes = quotesQuery.data ? unwrap(quotesQuery.data) : [];
+  const orderCount = ordersQuery.data && !Array.isArray(ordersQuery.data) ? ordersQuery.data.count : orders.length;
+  const quoteCount = quotesQuery.data && !Array.isArray(quotesQuery.data) ? quotesQuery.data.count : quotes.length;
   const name =
     `${auth.user.first_name} ${auth.user.last_name}`.trim() || auth.user.email;
+  const selectTab = (nextTab: AccountTab) => {
+    if (nextTab === 'overview') {
+      setOrderPage(1);
+      setQuotePage(1);
+    }
+    setTab(nextTab);
+  };
   return (
     <main className={tw("account-page")}>
       <section className={tw("account-welcome shell")}>
@@ -46,8 +64,8 @@ export function AccountPage() {
             <div className={tw("account-person")}>
               <span>{initials(auth.user)}</span>
               <div>
-                <strong>{name}</strong>
-                <small>{auth.user.email}</small>
+                <OverflowTooltipText as="strong" text={name} />
+                <OverflowTooltipText as="small" text={auth.user.email} />
               </div>
             </div>
             {(
@@ -63,10 +81,10 @@ export function AccountPage() {
                 className={tw(tab === value ? "active" : "")}
                 type="button"
                 key={value}
-                onClick={() => setTab(value)}
+                onClick={() => selectTab(value)}
               >
                 <Icon size={19} />
-                {label}
+                <span>{label}</span>
               </button>
             ))}
             <button
@@ -75,16 +93,22 @@ export function AccountPage() {
               onClick={() => auth.logout()}
             >
               <LogOut size={19} />
-              Log out
+              <span>Log out</span>
             </button>
           </aside>
           <div className={tw("account-content")}>
             {tab === "overview" ? (
-              <AccountOverview user={auth.user} orders={orders} quotes={quotes} onTab={setTab} />
+              <AccountOverview user={auth.user} quotes={quotes} orderCount={orderCount} quoteCount={quoteCount} onTab={selectTab} />
             ) : null}
-            {tab === 'quotes' ? <QuotesTable quotes={quotes} loading={quotesQuery.isLoading} /> : null}
+            {tab === 'quotes' ? <>
+              <QuotesTable quotes={quotes} loading={quotesQuery.isLoading} />
+              <AccountPagination page={quotePage} pageSize={pageSize} total={quoteCount} loading={quotesQuery.isFetching} onPageChange={setQuotePage} />
+            </> : null}
             {tab === "orders" ? (
-              <OrdersTable orders={orders} loading={ordersQuery.isLoading} />
+              <>
+                <OrdersTable orders={orders} loading={ordersQuery.isLoading} />
+                <AccountPagination page={orderPage} pageSize={pageSize} total={orderCount} loading={ordersQuery.isFetching} onPageChange={setOrderPage} />
+              </>
             ) : null}
             {tab === "addresses" ? (
               <ProfileForm user={auth.user} addressOnly />
@@ -101,4 +125,3 @@ function initials(user: User) {
     `${user.first_name[0] ?? ""}${user.last_name[0] ?? ""}`.trim();
   return letters.toUpperCase() || <UserRound size={22} />;
 }
-

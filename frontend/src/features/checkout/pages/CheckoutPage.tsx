@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { ArrowRight, Check, Clock3, FileText, ShieldCheck } from 'lucide-react'
@@ -21,20 +21,27 @@ const quoteSchema = z.object({
 
 type QuoteForm = z.infer<typeof quoteSchema>
 
+const quoteDefaults = (user: ReturnType<typeof useAuth>['user']): QuoteForm => ({
+  requester_email: user?.email ?? '',
+  requester_contact_person: `${user?.first_name ?? ''} ${user?.last_name ?? ''}`.trim(),
+  requester_phone: user?.phone_number ?? '',
+  requester_company_name: user?.profile.company_name ?? '',
+  notes: '',
+})
+
 export function CheckoutPage() {
   const cart = useCart()
   const auth = useAuth()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [completedQuote, setCompletedQuote] = useState<QuoteRequest | null>(null)
-  const { register, handleSubmit, setError, formState: { errors } } = useForm<QuoteForm>({
-    defaultValues: {
-      requester_email: auth.user?.email ?? '',
-      requester_contact_person: `${auth.user?.first_name ?? ''} ${auth.user?.last_name ?? ''}`.trim(),
-      requester_phone: auth.user?.phone_number ?? '',
-      requester_company_name: auth.user?.profile.company_name ?? '',
-      notes: '',
-    },
+  const { register, handleSubmit, reset, setError, formState: { errors, isDirty } } = useForm<QuoteForm>({
+    defaultValues: quoteDefaults(auth.user),
   })
+  useEffect(() => {
+    if (auth.ready && auth.user && !isDirty)
+      reset(quoteDefaults(auth.user))
+  }, [auth.ready, auth.user, isDirty, reset])
   const quote = useMutation({
     mutationFn: (values: QuoteForm) => api.createQuote({
       ...values,
@@ -47,6 +54,7 @@ export function CheckoutPage() {
     onSuccess(value) {
       setCompletedQuote(value)
       cart.clear()
+      queryClient.invalidateQueries({ queryKey: ['quotes', 'mine'] })
       toast.success(`Quote request ${value.quote_number} submitted`)
     },
     onError(error) {

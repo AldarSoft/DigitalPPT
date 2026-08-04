@@ -33,6 +33,29 @@ export function ShopPage() {
     const categories = categoriesQuery.data ? unwrap(categoriesQuery.data) : fallbackCategories;
     const selectedCategory = categories.find((item) => item.slug === category);
     const showCategoryDropdown = categories.length > 6;
+    const rawProducts = useMemo(
+        () => productsQuery.data ? unwrap(productsQuery.data) : fallbackProducts,
+        [productsQuery.data],
+    );
+    const priceRange = useMemo(() => {
+        const prices = rawProducts.map((product) => Number(product.current_price)).filter((price) => Number.isFinite(price));
+        return {
+            min: prices.length ? Math.min(...prices) : 0,
+            max: prices.length ? Math.max(...prices) : 0,
+        };
+    }, [rawProducts]);
+    const parseNumericParam = (value: string | null, fallback: number) => {
+        const parsed = Number(value);
+        return value !== null && !Number.isNaN(parsed) ? parsed : fallback;
+    };
+    const clampPrice = (value: number) => Math.min(Math.max(value, priceRange.min), priceRange.max);
+    const priceMinParam = clampPrice(parseNumericParam(params.get('price_min'), priceRange.min));
+    const priceMaxParam = clampPrice(parseNumericParam(params.get('price_max'), priceRange.max));
+    const priceMin = Math.min(priceMinParam, priceMaxParam);
+    const priceMax = Math.max(priceMinParam, priceMaxParam);
+    const priceSpan = priceRange.max - priceRange.min;
+    const priceMinPercent = priceSpan ? ((priceMin - priceRange.min) / priceSpan) * 100 : 0;
+    const priceMaxPercent = priceSpan ? ((priceMax - priceRange.min) / priceSpan) * 100 : 100;
     const catalogHero = category === 'poc-radios' ? {
         eyebrow: 'CONNECTED TEAM COMMUNICATION',
         title: 'Professional radios for work without range limits.',
@@ -53,11 +76,15 @@ export function ShopPage() {
         alt: 'Professional Digital PTT radio equipment',
     };
     const products = useMemo(() => {
-        let list = productsQuery.data ? unwrap(productsQuery.data) : fallbackProducts;
+        let list = rawProducts;
         if (category)
             list = list.filter((product) => product.category.slug === category);
         if (inStock)
             list = list.filter((product) => product.inventory_quantity > 0);
+        list = list.filter((product) => {
+            const price = Number(product.current_price);
+            return price >= priceMin && price <= priceMax;
+        });
         if (ordering === 'price') {
             list = [...list].sort((a, b) => Number(a.current_price) - Number(b.current_price));
         }
@@ -68,13 +95,13 @@ export function ShopPage() {
             list = [...list].sort((a, b) => Number(b.is_featured) - Number(a.is_featured));
         }
         return list;
-    }, [productsQuery.data, category, inStock, ordering]);
-    const setParam = (key: string, value: string) => {
+    }, [rawProducts, category, inStock, ordering, priceMin, priceMax]);
+    const setParam = (key: string, value: string, defaultValue?: string) => {
         const next = new URLSearchParams(params);
-        if (value)
-            next.set(key, value);
-        else
+        if (!value || value === defaultValue)
             next.delete(key);
+        else
+            next.set(key, value);
         setParams(next);
     };
     return (<main className={tw("catalog-page")}>
@@ -135,6 +162,54 @@ export function ShopPage() {
                     </label>))}
                 </div>
               </fieldset>)}
+            <fieldset className={tw("price-filter")}>
+              <legend className={tw("price-filter-header")}>Price range</legend>
+              <div className={tw("price-filter-values")}>
+                <span>Min <strong>${priceMin}</strong></span>
+                <span>Max <strong>${priceMax}</strong></span>
+              </div>
+              <div className={tw("price-range")}>
+                <span className={tw("price-range-track")}/>
+                <span
+                  className={tw("price-range-active")}
+                  style={{ left: `${priceMinPercent}%`, right: `${100 - priceMaxPercent}%` }}
+                />
+                <label>
+                  <span className="sr-only">Minimum price</span>
+                  <input
+                    type="range"
+                    aria-label="Minimum price"
+                    min={priceRange.min}
+                    max={priceRange.max}
+                    step={1}
+                    value={priceMinParam}
+                    onChange={(event) => {
+                        const nextMin = Math.min(Number(event.target.value), priceMaxParam);
+                        setParam('price_min', String(nextMin), String(priceRange.min));
+                        if (nextMin > priceMaxParam)
+                            setParam('price_max', String(nextMin), String(priceRange.max));
+                    }}
+                  />
+                </label>
+                <label>
+                  <span className="sr-only">Maximum price</span>
+                  <input
+                    type="range"
+                    aria-label="Maximum price"
+                    min={priceRange.min}
+                    max={priceRange.max}
+                    step={1}
+                    value={priceMaxParam}
+                    onChange={(event) => {
+                        const nextMax = Math.max(Number(event.target.value), priceMinParam);
+                        setParam('price_max', String(nextMax), String(priceRange.max));
+                        if (nextMax < priceMinParam)
+                            setParam('price_min', String(nextMax), String(priceRange.min));
+                    }}
+                  />
+                </label>
+              </div>
+            </fieldset>
             <label className={tw("check-row")}>
               <input type="checkbox" checked={inStock} onChange={(event) => setParam('stock', event.target.checked ? 'true' : '')}/>
               <span>In stock only</span>

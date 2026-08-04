@@ -1,7 +1,13 @@
 import type { Banner, Category, Order, Paginated, Product, Promotion, QuoteRequest, SiteSettings, User } from '../types'
 
+const localApiHost =
+  typeof window !== 'undefined' &&
+  ['localhost', '127.0.0.1'].includes(window.location.hostname)
+    ? window.location.hostname
+    : '127.0.0.1'
+
 export const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000/api/v1'
+  import.meta.env.VITE_API_BASE_URL ?? `http://${localApiHost}:8000/api/v1`
 export const API_ORIGIN = new URL(API_BASE).origin
 
 let accessToken: string | null = null

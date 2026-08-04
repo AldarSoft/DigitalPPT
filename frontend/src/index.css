@@ -30,10 +30,10 @@
   --color-warning: #a86112;
   --color-warning-soft: #fff4d9;
 
-  --container-site: 90rem;
-  --spacing-page: 3rem;
-  --spacing-section: 5.5rem;
-  --spacing-control: 3.25rem;
+  --container-site: 88rem;
+  --spacing-page: clamp(2rem, 4vw, 4rem);
+  --spacing-section: 4.5rem;
+  --spacing-control: 2.75rem;
   --radius-control: 0.4375rem;
   --radius-panel: 0.5rem;
   --shadow-card: 0 15px 32px rgba(20, 45, 80, 0.1);

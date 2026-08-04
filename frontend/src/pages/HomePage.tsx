@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { ArrowRight, BadgeCheck, Check, CreditCard, Headphones, MapPin, MessageSquare, Package, Plus, Radio, RadioTower, ShieldCheck, Truck } from 'lucide-react'
@@ -9,6 +9,14 @@ import { tw } from '../lib/tailwind-styles'
 import type { Banner, Product as ApiProduct, SiteSettings } from '../types'
 
 const FleetVisualization = lazy(() => import('../components/FleetVisualization'));
+
+function StoreLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
+    if (href.startsWith('/') || href.startsWith('#')) {
+        return <Link className={className} to={href}>{children}</Link>;
+    }
+    return <a className={className} href={href}>{children}</a>;
+}
+
 type ProductGroup = 'POC Radios' | 'Holsters';
 interface Product {
     id: number;
@@ -165,11 +173,11 @@ function Hero({ banner, settings }: { banner?: Banner; settings?: SiteSettings }
           <h1>{title}</h1>
           <p className={tw("hero-description")}>{description}</p>
           <div className={tw("hero-actions")}>
-            <a className={tw("button button-primary")} href={banner?.cta_url || '#products'}>
+            <StoreLink className={tw("button button-primary")} href={banner?.cta_url || '#products'}>
               {banner?.cta_label || 'Shop radios'}
               <ArrowRight size={18}/>
-            </a>
-            <a className={tw("button button-secondary")} href={settings?.homepage_hero_secondary_cta_url || '#contact'}>{settings?.homepage_hero_secondary_cta_label || 'Talk to an expert'}</a>
+            </StoreLink>
+            <StoreLink className={tw("button button-secondary")} href={settings?.homepage_hero_secondary_cta_url || '#contact'}>{settings?.homepage_hero_secondary_cta_label || 'Talk to an expert'}</StoreLink>
           </div>
           <dl className={tw("hero-stats")}>
             {stats.map((stat) => <div key={`${stat.value}-${stat.label}`}><dt>{stat.value}</dt><dd>{stat.label}</dd></div>)}
@@ -186,14 +194,14 @@ function Categories() {
       <div className={tw("shell")}>
         <SectionHeading eyebrow="BUILT AROUND YOUR OPERATION" title="Choose your communication layer" link="Browse all categories" href="/shop"/>
         <div className={tw("category-grid")}>
-          {categories.map(({ title, description, className, icon: Icon }) => (<a className={tw(`category-card ${className}`)} href={title === 'PTT over cellular' ? '/shop?category=poc-radios' : title === 'Radio accessories' ? '/shop?category=radio-holsters' : '/shop'} key={title}>
+          {categories.map(({ title, description, className, icon: Icon }) => (<Link className={tw(`category-card ${className}`)} to={title === 'PTT over cellular' ? '/shop?category=poc-radios' : title === 'Radio accessories' ? '/shop?category=radio-holsters' : '/shop'} key={title}>
               <span className={tw("category-icon")}><Icon size={25}/></span>
               <span>
                 <strong>{title}</strong>
                 <small>{description}</small>
                 <em>Explore <ArrowRight size={16}/></em>
               </span>
-            </a>))}
+            </Link>))}
         </div>
       </div>
     </section>);
@@ -319,7 +327,7 @@ function Resources({ settings }: { settings?: SiteSettings }) {
         <div className={tw("article-grid")}>
           {resourceItems.map((article) => {
               const content = <><img src={mediaUrl(article.image_url)} alt=""/><span className={tw("eyebrow")}>{article.eyebrow}</span><h3>{article.title}</h3><p>{article.description}</p></>;
-              return article.url ? <a className={tw("article-card")} href={article.url} key={article.title}>{content}</a> : <article className={tw("article-card")} key={article.title}>{content}</article>;
+              return article.url ? <StoreLink className={tw("article-card")} href={article.url} key={article.title}>{content}</StoreLink> : <article className={tw("article-card")} key={article.title}>{content}</article>;
           })}
         </div>
       </div>
@@ -335,10 +343,10 @@ function ContactCta({ settings }: { settings?: SiteSettings }) {
             <h2>{settings?.homepage_contact_title || "Tell us how your team works. We'll match the right system."}</h2>
             <p>{settings?.homepage_contact_description || 'From a single radio to a connected fleet, get practical guidance before you buy.'}</p>
           </div>
-          <a className={tw("button button-white")} href={contactUrl}>
+          <StoreLink className={tw("button button-white")} href={contactUrl}>
             {settings?.homepage_contact_cta_label || 'Contact a specialist'}
             <ArrowRight size={18}/>
-          </a>
+          </StoreLink>
         </div>
       </div>
     </section>);
