@@ -1,8 +1,11 @@
 import { useState } from 'react'
-import { BarChart3, Bell, Box, FileText, LayoutDashboard, LogOut, Menu, PanelsTopLeft, RadioTower, Search, Settings, ShoppingCart, Tag, Users, Warehouse, X } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { BarChart3, Box, CreditCard, FileText, LayoutDashboard, LogOut, Menu, PanelsTopLeft, RadioTower, Search, Settings, ShoppingCart, Tag, Users, Warehouse, X } from 'lucide-react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NotificationMenu } from '../components/NotificationMenu'
 import { OverflowTooltipText } from '../components/OverflowTooltipText'
 import { useAuth } from '../contexts/AuthContext'
+import { api } from '../lib/api'
 import { tw } from '../lib/tailwind-styles'
 
 export function AdminLayout() {
@@ -10,14 +13,33 @@ export function AdminLayout() {
     const navigate = useNavigate();
     const [open, setOpen] = useState(false);
     const adminName = `${auth.user?.first_name ?? ''} ${auth.user?.last_name ?? ''}`.trim() || 'Administrator';
+    const quoteCountQuery = useQuery({
+        queryKey: ['admin-quotes', 'sidebar-count'],
+        queryFn: () => api.quotes('status=new&page=1&page_size=1'),
+        enabled: Boolean(auth.user?.is_staff),
+        refetchInterval: 10_000,
+        refetchIntervalInBackground: false,
+    });
+    const orderCountQuery = useQuery({
+        queryKey: ['admin-orders', 'sidebar-count'],
+        queryFn: () => api.orders('status=pending&page=1&page_size=1'),
+        enabled: Boolean(auth.user?.is_staff),
+        refetchInterval: 10_000,
+        refetchIntervalInBackground: false,
+    });
+    const badgeCounts = {
+        quotes: resultCount(quoteCountQuery.data),
+        orders: resultCount(orderCountQuery.data),
+    };
     const links = [
-        ['/admin', LayoutDashboard, 'Overview', true],
-        ['/admin/products', Box, 'Products', false],
-        ['/admin/quotes', FileText, 'Quotes', false],
-        ['/admin/orders', ShoppingCart, 'Orders', false],
-        ['/admin/customers', Users, 'Customers', false],
-        ['/admin/promotions', Tag, 'Promotions', false],
-        ['/admin/inventory', Warehouse, 'Inventory', false],
+        ['/admin', LayoutDashboard, 'Overview', true, null],
+        ['/admin/products', Box, 'Products', false, null],
+        ['/admin/quotes', FileText, 'Quotes', false, 'quotes'],
+        ['/admin/orders', ShoppingCart, 'Orders', false, 'orders'],
+        ['/admin/payments', CreditCard, 'Payments', false, null],
+        ['/admin/customers', Users, 'Customers', false, null],
+        ['/admin/promotions', Tag, 'Promotions', false, null],
+        ['/admin/inventory', Warehouse, 'Inventory', false, null],
     ] as const;
     return (<div className={tw("admin-shell")}>
       <aside className={tw(`admin-sidebar ${open ? 'open' : ''}`)}>
@@ -25,7 +47,10 @@ export function AdminLayout() {
         <button className={tw("admin-close")} type="button" aria-label="Close menu" onClick={() => setOpen(false)}><X /></button>
         <p>OPERATIONS</p>
         <nav>
-          {links.map(([to, Icon, label, end]) => (<NavLink end={end} to={to} key={to} onClick={() => setOpen(false)}><Icon size={20}/>{label}</NavLink>))}
+          {links.map(([to, Icon, label, end, badge]) => {
+            const count = badge ? badgeCounts[badge] : 0;
+            return <NavLink end={end} to={to} key={to} onClick={() => setOpen(false)}><Icon size={20}/>{label}{count > 0 ? <strong className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-extrabold leading-5 text-white" aria-label={`${count} ${label.toLowerCase()} waiting`}>{count > 99 ? '99+' : count}</strong> : null}</NavLink>;
+          })}
           <span>INSIGHTS</span>
           <NavLink to="/admin/analytics" onClick={() => setOpen(false)}><BarChart3 size={20}/>Analytics</NavLink>
           <NavLink to="/admin/site-settings" onClick={() => setOpen(false)}><PanelsTopLeft size={20}/>Site settings</NavLink>
@@ -44,9 +69,14 @@ export function AdminLayout() {
             if (event.key === 'Enter')
                 navigate(`/admin/products?search=${encodeURIComponent(event.currentTarget.value)}`);
         }}/></div>
-          <button type="button" aria-label="Notifications"><Bell size={20}/></button>
+          {auth.user ? <NotificationMenu userId={auth.user.id} variant="admin" /> : null}
         </header>
         <Outlet />
       </div>
     </div>);
+}
+
+function resultCount(value: { count: number } | unknown[] | undefined) {
+    if (!value) return 0;
+    return Array.isArray(value) ? value.length : value.count;
 }

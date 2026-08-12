@@ -1,24 +1,77 @@
 import { useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Boxes, Download, Package, Search, ShoppingCart, X } from 'lucide-react'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Boxes, Download, Package, Search, ShoppingCart, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, unwrap } from '../../../lib/api'
+import { api, ApiError, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
 import type { Order } from '../../../types'
 import { AdminSelect } from '../components/AdminSelect'
 import { AdminErrorState } from '../components/AdminErrorState'
 import { Metric } from '../components/Metric'
 import { OrderRows } from '../components/OrderRows'
-import { exportCsv } from '../utils/exportCsv'
+import { Pagination } from '../../../components/Pagination'
+import { ProductThumbnail } from '../../../components/ProductThumbnail'
+import { StatusTimeline } from '../../../components/StatusTimeline'
+import { exportAdminReport } from '../utils/exportAdminReport'
+
+const PAGE_SIZE = 10
+const ORDER_STEPS = [
+    { value: 'pending', label: 'Pending' },
+    { value: 'scheduled', label: 'Scheduled' },
+    { value: 'processing', label: 'Processing' },
+    { value: 'completed', label: 'Completed' },
+] as const
+
+const ORDER_TRANSITIONS: Record<Order['status'], Order['status'][]> = {
+    pending: ['processing', 'completed', 'cancelled'],
+    scheduled: ['processing', 'completed', 'cancelled'],
+    processing: ['completed', 'cancelled'],
+    completed: [],
+    cancelled: [],
+}
+
+const STATUS_LABELS: Record<Order['status'], string> = {
+    pending: 'Pending', scheduled: 'Scheduled', processing: 'Processing', completed: 'Completed', cancelled: 'Cancelled',
+}
+
+function orderUpdateError(error: Error) {
+    if (!(error instanceof ApiError) || typeof error.data !== 'object' || !error.data) return 'Could not update the order status'
+    const data = error.data as Record<string, unknown>
+    if (data.inventory && typeof data.inventory === 'object') {
+        const message = Object.values(data.inventory as Record<string, string>)[0]
+        return `Awaiting stock. ${message}`
+    }
+    return typeof data.status === 'string' ? data.status : error.message
+}
+
+function availableTransitions(order: Order) {
+    const shortage = order.items.some((item) => item.available_stock !== null && item.quantity > item.available_stock)
+    return ORDER_TRANSITIONS[order.status].filter((status) => !shortage || !['processing', 'completed'].includes(status))
+}
 
 export function AdminOrdersPage() {
     const queryClient = useQueryClient();
     const [search, setSearch] = useState('');
     const [status, setStatus] = useState('');
+    const [page, setPage] = useState(1);
     const [selected, setSelected] = useState<Order | null>(null);
-    const ordersQuery = useQuery({ queryKey: ['admin-orders'], queryFn: () => api.orders('ordering=-created_at&page_size=100') });
-    const orders = (ordersQuery.data ? unwrap(ordersQuery.data) : []).filter((order) => (!search || `${order.order_number} ${order.customer_first_name} ${order.customer_last_name} ${order.customer_email}`.toLowerCase().includes(search.toLowerCase())) &&
-        (!status || order.status === status));
+    const [confirmingCancel, setConfirmingCancel] = useState(false);
+    const ordersQuery = useQuery({
+      queryKey: ['admin-orders', search, status, page],
+      queryFn: () => {
+        const query = new URLSearchParams();
+        if (search) query.set('search', search);
+        if (status) query.set('status', status);
+        query.set('ordering', '-created_at');
+        query.set('page', String(page));
+        query.set('page_size', String(PAGE_SIZE));
+        return api.orders(query.toString());
+      },
+      placeholderData: keepPreviousData,
+    });
+    const orders = ordersQuery.data ? unwrap(ordersQuery.data) : [];
+    const orderTotal = ordersQuery.data && !Array.isArray(ordersQuery.data) ? ordersQuery.data.count : orders.length;
+
     const update = useMutation({
         mutationFn: ({ orderNumber, value }: {
             orderNumber: string;
@@ -26,32 +79,44 @@ export function AdminOrdersPage() {
         }) => api.updateOrder(orderNumber, value),
         onSuccess: (order) => {
             queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
-            setSelected(order);
-            toast.success(`Order ${order.order_number} updated`);
+            setSelected((current) => current ? { ...current, status: order.status, updated_at: order.updated_at } : null);
+            setConfirmingCancel(false);
+            toast.success('Order status updated');
         },
-        onError: () => toast.error('That status transition is not allowed'),
+        onError: (error) => toast.error(orderUpdateError(error)),
     });
     if (ordersQuery.isError)
         return <AdminErrorState resource="orders" />;
     return (<main className={tw("admin-page")}>
-      <div className={tw("admin-title-row")}><div><p className={tw("admin-breadcrumb")}>Workspace / Orders</p><h1>Order management</h1><p>Track order status and customer fulfillment.</p></div><button type="button" onClick={() => exportCsv('digital-ptt-orders.csv', orders)}><Download size={18}/>Export</button></div>
+      <div className={tw("admin-title-row")}><div><p className={tw("admin-breadcrumb")}>Workspace / Orders</p><h1>Order management</h1><p>Track order status and customer fulfillment.</p></div><button type="button" onClick={() => void exportAdminReport({ kind: 'orders', rows: orders })}><Download size={18}/>Export page</button></div>
       <section className={tw("admin-stats order-stats")}>
-        <Metric label="Total orders" value={String(orders.length)} icon={ShoppingCart}/>
-        <Metric label="Pending" value={String(orders.filter((order) => order.status === 'pending').length)} icon={Package}/>
-        <Metric label="Completed" value={String(orders.filter((order) => order.status === 'completed').length)} icon={Boxes}/>
-        <Metric label="Cancelled" value={String(orders.filter((order) => order.status === 'cancelled').length)} icon={X}/>
+        <Metric label="Total orders" value={String(orderTotal)} icon={ShoppingCart}/>
+        <Metric label="Pending on page" value={String(orders.filter((order) => order.status === 'pending').length)} icon={Package}/>
+        <Metric label="Completed on page" value={String(orders.filter((order) => order.status === 'completed').length)} icon={Boxes}/>
+        <Metric label="Cancelled on page" value={String(orders.filter((order) => order.status === 'cancelled').length)} icon={X}/>
       </section>
       <section className={tw("admin-panel admin-section-gap")}>
-        <div className={tw("orders-toolbar")}><h2>Recent orders</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => setSearch(event.target.value)}/></div><AdminSelect aria-label="Filter by order status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All status</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
-        <OrderRows orders={orders} onSelect={setSelected}/>
+        <div className={tw("orders-toolbar")}><h2>Recent orders</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }}/></div><AdminSelect aria-label="Filter by order status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">All status</option><option value="pending">Pending</option><option value="scheduled">Scheduled</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
+        <OrderRows orders={orders} onSelect={(order) => { setConfirmingCancel(false); setSelected(order); }}/>
       </section>
-      {selected ? (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={() => setSelected(null)}>
-          <aside className={tw("order-editor")} onMouseDown={(event) => event.stopPropagation()}>
-            <div className={tw("panel-heading")}><div><p className={tw("eyebrow")}>ORDER DETAILS</p><h2>{selected.order_number}</h2></div><button type="button" aria-label="Close order details" onClick={() => setSelected(null)}><X /></button></div>
+      <Pagination
+        page={page}
+        pageSize={PAGE_SIZE}
+        total={orderTotal}
+        loading={ordersQuery.isFetching}
+        className="mt-3"
+        onPageChange={setPage}
+      />
+      {selected ? (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={() => { setConfirmingCancel(false); setSelected(null); }}>
+          <aside className={tw("order-editor")} role="dialog" aria-modal="true" aria-labelledby="admin-order-details-title" onMouseDown={(event) => event.stopPropagation()}>
+            <div className={tw("panel-heading")}><div><p className={tw("eyebrow")}>ORDER DETAILS</p><h2 id="admin-order-details-title">{selected.order_number}</h2></div><button type="button" aria-label="Close order details" onClick={() => { setConfirmingCancel(false); setSelected(null); }}><X /></button></div>
             <p>{selected.customer_first_name} {selected.customer_last_name}<br />{selected.customer_email}<br />{selected.shipping_address}, {selected.shipping_city}</p>
-            <div className={tw("order-editor-items")}>{selected.items.map((item) => <div key={item.id}><span>{item.product_name} x {item.quantity}</span><strong>${Number(item.line_total).toFixed(2)}</strong></div>)}</div>
+            <div className={tw("order-editor-items")}>{selected.items.map((item) => <div key={item.id}><div className={tw('record-item-main')}><ProductThumbnail imageUrl={item.image_url} name={item.product_name} /><span>{item.product_name}<small>{item.sku || 'Product'} · Qty {item.quantity}</small></span></div><strong>${Number(item.line_total).toFixed(2)}</strong></div>)}</div>
             <div className={tw("order-editor-total")}><span>Total</span><strong>${Number(selected.total).toFixed(2)}</strong></div>
-            <label>Order status<AdminSelect value={selected.status} onChange={(event) => update.mutate({ orderNumber: selected.order_number, value: event.target.value as Order['status'] })}><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></label>
+            {selected.status === 'scheduled' && selected.items.some((item) => item.available_stock !== null && item.quantity > item.available_stock) ? <div className="mt-4 rounded-control border border-warning bg-warning-soft p-3 text-sm text-warning"><strong>Awaiting inventory</strong><p className="mt-1 text-xs">This paid quote order stays Scheduled until enough stock is available. Update inventory before moving it to Processing.</p></div> : null}
+            <StatusTimeline noun="Order" currentStatus={selected.status} initialStatus="pending" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={ORDER_STEPS} />
+            {availableTransitions(selected).length ? <label>Order status<AdminSelect value={selected.status} onChange={(event) => { const value = event.target.value as Order['status']; if (value === 'cancelled') setConfirmingCancel(true); else update.mutate({ orderNumber: selected.order_number, value }); }}><option value={selected.status}>{STATUS_LABELS[selected.status]}</option>{availableTransitions(selected).map((value) => <option value={value} key={value}>{STATUS_LABELS[value]}</option>)}</AdminSelect></label> : <p className="mt-4 text-sm text-text-soft">This order is {selected.status} and cannot be changed.</p>}
+            {confirmingCancel ? <div className={tw('quote-close-alert')} role="alertdialog" aria-labelledby="cancel-order-title" aria-describedby="cancel-order-description"><AlertTriangle size={20} /><div><strong id="cancel-order-title">Cancel this order?</strong><p id="cancel-order-description">This action is permanent. Any inventory already deducted for this order will be restored.</p></div><div><button type="button" onClick={() => setConfirmingCancel(false)}>Keep order</button><button type="button" disabled={update.isPending} onClick={() => update.mutate({ orderNumber: selected.order_number, value: 'cancelled' })}>{update.isPending ? 'Cancelling...' : 'Cancel order'}</button></div></div> : null}
           </aside>
         </div>) : null}
     </main>);

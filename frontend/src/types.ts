@@ -176,14 +176,16 @@ export interface OrderItem {
   quantity: number
   line_total: string
   image_url: string
+  available_stock: number | null
 }
 
 export interface Order {
   id: number
   order_number: string
   quote_number: string | null
+  source: 'direct' | 'quote' | 'admin'
   user_id: number | null
-  status: 'pending' | 'processing' | 'completed' | 'cancelled'
+  status: 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
   customer_first_name: string
   customer_last_name: string
   customer_email: string
@@ -195,6 +197,8 @@ export interface Order {
   shipping_postal_code: string
   shipping_country: string
   subtotal: string
+  tax_amount: string
+  shipping_fee: string
   total: string
   stock_deducted: boolean
   notes: string
@@ -211,18 +215,39 @@ export interface QuoteRequestItem {
   sku: string
   quantity: number
   specifications: Record<string, unknown>
+  quoted_unit_price: string | null
+  quoted_line_total: string | null
+  image_url: string
+}
+
+export interface QuoteMessage {
+  id: number
+  sender_role: 'admin' | 'customer'
+  author_name: string
+  body: string
+  created_at: string
 }
 
 export interface QuoteRequest {
   id: number
   quote_number: string
-    status: 'new' | 'reviewing' | 'quoted' | 'approved' | 'closed'
+  status: 'new' | 'reviewing' | 'quoted' | 'approved' | 'closed'
   order_number: string
+  order_status: '' | 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
   requester_company_name: string
   requester_contact_person: string
   requester_email: string
   requester_phone: string
   notes: string
+  admin_message: string
+  quoted_subtotal: string | null
+  quoted_shipping: string
+  quoted_total: string | null
+  quoted_at: string | null
+  invoice_number: string | null
+  invoice_pdf_url: string
+  invoiced_at: string | null
+  messages: QuoteMessage[]
   items: QuoteRequestItem[]
   created_at: string
   updated_at: string
@@ -231,4 +256,84 @@ export interface QuoteRequest {
 export interface CartItem {
   product: Product
   quantity: number
+}
+
+export type PaymentProviderCode = 'stripe' | 'paypal' | 'qpay' | 'bank_transfer'
+
+export interface PaymentProvider {
+  id: number
+  code: PaymentProviderCode
+  display_name: string
+  is_enabled: boolean
+  test_mode: boolean
+  api_connected: boolean
+  sort_order: number
+}
+
+export interface PaymentStatus {
+  storefront_enabled: boolean
+  live_processing_available: boolean
+  test_mode: boolean
+  providers: PaymentProvider[]
+}
+
+export interface PaymentAttempt {
+  id: number
+  reference: string
+  order_number: string
+  order_status: Order['status']
+  provider_code: PaymentProviderCode
+  provider_name: string
+  amount: number | string
+  currency: string
+  status: 'pending' | 'succeeded' | 'failed' | 'cancelled' | 'expired' | 'refunded'
+  is_test: boolean
+  session_id: string
+  checkout_url: string
+  external_reference: string
+  failure_message: string
+  created_by_email: string
+  expires_at: string | null
+  paid_at: string | null
+  created_at: string
+}
+
+export interface UserNotification {
+  id: number
+  title: string
+  message: string
+  url: string
+  is_read: boolean
+  created_at: string
+}
+
+export interface NotificationInbox {
+  unread_count: number
+  notifications: UserNotification[]
+}
+
+export interface StorefrontPaymentProvider {
+  code: PaymentProviderCode
+  display_name: string
+  test_mode: boolean
+  sort_order: number
+}
+
+export interface StorefrontPaymentStatus {
+  storefront_enabled: boolean
+  development_simulator: boolean
+  providers: StorefrontPaymentProvider[]
+}
+
+export interface BillingDetails {
+  email: string
+  first_name: string
+  last_name: string
+  phone: string
+  company: string
+  address: string
+  city: string
+  state: string
+  postal_code: string
+  country: string
 }

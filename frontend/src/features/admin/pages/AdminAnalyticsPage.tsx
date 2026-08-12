@@ -7,12 +7,14 @@ import { AdminErrorState } from '../components/AdminErrorState'
 import { Metric } from '../components/Metric'
 import { OrderRows } from '../components/OrderRows'
 import { useAdminData } from '../hooks/useAdminData'
-import { exportCsv } from '../utils/exportCsv'
+import { exportAnalyticsReport } from '../utils/exportAnalyticsReport'
+import { toast } from 'sonner'
 
 export function AdminAnalyticsPage() {
     const data = useAdminData();
     const [search, setSearch] = useState('');
     const [status, setStatus] = useState('');
+    const [isExporting, setIsExporting] = useState(false);
     const completed = data.orderList.filter((order) => order.status === 'completed');
     const revenue = completed.reduce((total, order) => total + Number(order.total), 0);
     const average = completed.length ? revenue / completed.length : 0;
@@ -33,8 +35,23 @@ export function AdminAnalyticsPage() {
     })();
     if (data.isError)
         return <AdminErrorState resource="analytics" />;
+    const handleExport = async () => {
+        if (!filtered.length) {
+            toast('There is no data to export for the current filters');
+            return;
+        }
+        setIsExporting(true);
+        try {
+            await exportAnalyticsReport(filtered, { search, status });
+            toast.success('Analytics report exported');
+        } catch {
+            toast.error('Could not export the analytics report');
+        } finally {
+            setIsExporting(false);
+        }
+    };
     return (<main className={tw("admin-page")}>
-      <div className={tw("admin-title-row")}><div><p className={tw("admin-breadcrumb")}>Workspace / Analytics</p><h1>Business analytics</h1><p>Understand revenue, product demand and customer activity.</p></div><button type="button" onClick={() => exportCsv('digital-ptt-analytics.csv', filtered)}><Download size={18}/>Export report</button></div>
+      <div className={tw("admin-title-row")}><div><p className={tw("admin-breadcrumb")}>Workspace / Analytics</p><h1>Business analytics</h1><p>Understand revenue, product demand and customer activity.</p></div><button type="button" disabled={isExporting} onClick={handleExport}><Download size={18}/>{isExporting ? 'Preparing report...' : 'Export report'}</button></div>
       <section className={tw("admin-stats")}>
         <Metric label="Revenue" value={`$${revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`} icon={BarChart3}/>
         <Metric label="Orders" value={String(data.orderList.length)} icon={ShoppingCart}/>
@@ -56,7 +73,7 @@ export function AdminAnalyticsPage() {
         </div>
       </section>
       <section className={tw("admin-panel analytics-orders")}>
-        <div className={tw("orders-toolbar")}><h2>Performance overview</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => setSearch(event.target.value)}/></div><AdminSelect aria-label="Filter analytics by order status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All status</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
+        <div className={tw("orders-toolbar")}><h2>Performance overview</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => setSearch(event.target.value)}/></div><AdminSelect aria-label="Filter analytics by order status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All status</option><option value="pending">Pending</option><option value="scheduled">Scheduled</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
         <OrderRows orders={filtered.slice(0, 10)} compact/>
       </section>
     </main>);

@@ -1,4 +1,4 @@
-import type { Banner, Category, Order, Paginated, Product, Promotion, QuoteRequest, SiteSettings, User } from '../types'
+import type { Banner, BillingDetails, Category, NotificationInbox, Order, Paginated, PaymentAttempt, PaymentProvider, PaymentProviderCode, PaymentStatus, Product, Promotion, QuoteRequest, SiteSettings, StorefrontPaymentStatus, User, UserNotification } from '../types'
 
 const localApiHost =
   typeof window !== 'undefined' &&
@@ -85,6 +85,11 @@ export const api = {
     }),
   deleteProduct: (slug: string) =>
     request<void>(`/products/catalog/${slug}/`, { method: 'DELETE' }),
+  uploadProductImage: (image: File) => {
+    const body = new FormData()
+    body.append('image', image)
+    return request<{ image_url: string }>('/products/upload-image/', { method: 'POST', body })
+  },
   login: (data: { email: string; password: string }) =>
     request<{ user: User; access: string }>('/users/auth/login/', {
       method: 'POST',
@@ -119,19 +124,71 @@ export const api = {
   checkout: (data: unknown) =>
     request<Order>('/orders/checkout/', { method: 'POST', body: JSON.stringify(data) }),
   updateOrder: (orderNumber: string, status: Order['status']) =>
-    request<Order>(`/orders/${orderNumber}/`, {
+    request<Pick<Order, 'status' | 'updated_at'>>(`/orders/${orderNumber}/`, {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+  paymentStatus: () => request<PaymentStatus>('/payments/status/'),
+  storefrontPaymentStatus: () => request<StorefrontPaymentStatus>('/payments/storefront-status/'),
+  createPaymentSession: (data: {
+    order_number: string
+    provider: PaymentProviderCode
+    idempotency_key: string
+    billing: BillingDetails
+  }) => request<PaymentAttempt>('/payments/checkout-sessions/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  paymentSession: (sessionId: string) =>
+    request<PaymentAttempt>(`/payments/checkout-sessions/${sessionId}/`),
+  simulatePaymentSession: (sessionId: string, outcome: 'succeeded' | 'failed') =>
+    request<PaymentAttempt>(`/payments/checkout-sessions/${sessionId}/simulate/`, {
+      method: 'POST',
+      body: JSON.stringify({ outcome }),
+    }),
+  paymentAttempts: (query = '') =>
+    request<Paginated<PaymentAttempt> | PaymentAttempt[]>(`/payments/attempts/${query ? `?${query}` : ''}`),
+  simulatePayment: (data: {
+    order_number: string
+    provider: PaymentProviderCode
+    outcome: PaymentAttempt['status']
+  }) => request<PaymentAttempt>('/payments/attempts/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  updatePaymentProvider: (id: number, data: Pick<PaymentProvider, 'is_enabled'>) =>
+    request<PaymentProvider>(`/payments/providers/${id}/`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  notifications: () => request<NotificationInbox>('/core/notifications/'),
+  readNotification: (id: number) =>
+    request<UserNotification>(`/core/notifications/${id}/read/`, { method: 'PATCH' }),
   quotes: (query = '') =>
     request<Paginated<QuoteRequest> | QuoteRequest[]>(`/quotes/${query ? `?${query}` : ''}`),
+  quote: (quoteNumber: string) => request<QuoteRequest>(`/quotes/${quoteNumber}/`),
   createQuote: (data: unknown) =>
     request<QuoteRequest>('/quotes/', { method: 'POST', body: JSON.stringify(data) }),
-  updateQuote: (quoteNumber: string, status: QuoteRequest['status']) =>
-    request<Pick<QuoteRequest, 'status' | 'order_number'>>(`/quotes/${quoteNumber}/`, {
+  updateQuote: (quoteNumber: string, data: { status: QuoteRequest['status'] }) =>
+    request<QuoteRequest>(`/quotes/${quoteNumber}/`, {
       method: 'PATCH',
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(data),
     }),
+  issueQuoteInvoice: (quoteNumber: string, data: {
+    items: Array<{ id: number; quoted_unit_price: string }>
+    quoted_shipping: string
+    admin_message: string
+  }) => request<QuoteRequest>(`/quotes/${quoteNumber}/invoice/`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  addQuoteMessage: (quoteNumber: string, body: string) =>
+    request<QuoteRequest>(`/quotes/${quoteNumber}/messages/`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    }),
+  cancelQuote: (quoteNumber: string) =>
+    request<QuoteRequest>(`/quotes/${quoteNumber}/cancel/`, { method: 'POST' }),
   promotions: (query = '') =>
     request<Paginated<Promotion> | Promotion[]>(`/core/promotions/${query ? `?${query}` : ''}`),
   createPromotion: (data: unknown) =>

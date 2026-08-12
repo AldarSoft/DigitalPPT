@@ -8,6 +8,7 @@ import { AdminCustomersPage } from '../features/admin/pages/AdminCustomersPage'
 import { AdminDashboardPage } from '../features/admin/pages/AdminDashboardPage'
 import { AdminInventoryPage } from '../features/admin/pages/AdminInventoryPage'
 import { AdminOrdersPage } from '../features/admin/pages/AdminOrdersPage'
+import { AdminPaymentsPage } from '../features/admin/pages/AdminPaymentsPage'
 import { AdminProductsPage } from '../features/admin/pages/AdminProductsPage'
 import { AdminQuotesPage } from '../features/admin/pages/AdminQuotesPage'
 import { AdminPromotionsPage } from '../features/admin/pages/AdminPromotionsPage'
@@ -16,6 +17,7 @@ import { LoginPage } from '../features/auth/pages/LoginPage'
 import { RegisterPage } from '../features/auth/pages/RegisterPage'
 import { CartPage } from '../features/cart/pages/CartPage'
 import { CheckoutPage } from '../features/checkout/pages/CheckoutPage'
+import { PaymentPage } from '../features/payments/pages/PaymentPage'
 import { ProductDetailsPage } from '../features/products/pages/ProductDetailsPage'
 import { ShopPage } from '../features/products/pages/ShopPage'
 import { AdminLayout } from '../layouts/AdminLayout'
@@ -48,6 +50,10 @@ export function AppRouter() {
           <Route path="register" element={<RegisterPage />} />
           <Route element={<RequireAuth />}>
             <Route path="account" element={<AccountPage />} />
+            <Route path="payment" element={<PaymentPage />} />
+          </Route>
+          <Route element={<RequireStaff />}>
+            <Route path="payment-preview" element={<PaymentPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Route>
@@ -56,6 +62,7 @@ export function AppRouter() {
             <Route index element={<AdminDashboardPage />} />
             <Route path="products" element={<AdminProductsPage />} />
             <Route path="orders" element={<AdminOrdersPage />} />
+            <Route path="payments" element={<AdminPaymentsPage />} />
             <Route path="quotes" element={<AdminQuotesPage />} />
             <Route path="customers" element={<AdminCustomersPage />} />
             <Route path="promotions" element={<AdminPromotionsPage />} />

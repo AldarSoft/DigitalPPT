@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from core.models import Banner, ContactMessage, NotificationJob, SiteSetting
+from core.models import Banner, ContactMessage, NotificationJob, SiteSetting, UserNotification
 
 
 @admin.register(Banner)
@@ -44,3 +44,11 @@ class NotificationJobAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(UserNotification)
+class UserNotificationAdmin(admin.ModelAdmin):
+    list_display = ("title", "recipient", "is_read", "created_at")
+    list_filter = ("is_read", "created_at")
+    search_fields = ("title", "message", "recipient__email")
+    readonly_fields = ("recipient", "title", "message", "url", "created_at", "updated_at")

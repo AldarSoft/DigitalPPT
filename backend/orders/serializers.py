@@ -12,6 +12,7 @@ from products.models import Product
 class OrderItemSerializer(serializers.ModelSerializer):
     product_slug = serializers.CharField(source="product.slug", read_only=True)
     image_url = serializers.SerializerMethodField()
+    available_stock = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
@@ -25,11 +26,15 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "quantity",
             "line_total",
             "image_url",
+            "available_stock",
         )
 
     def get_image_url(self, obj) -> str:
         image = obj.product.images.order_by("-is_primary", "sort_order", "id").first() if obj.product else None
         return image.image_url if image else ""
+
+    def get_available_stock(self, obj) -> int | None:
+        return obj.product.inventory_quantity if obj.product else None
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -43,6 +48,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "id",
             "order_number",
             "quote_number",
+            "source",
             "user_id",
             "status",
             "customer_first_name",
@@ -56,6 +62,8 @@ class OrderSerializer(serializers.ModelSerializer):
             "shipping_postal_code",
             "shipping_country",
             "subtotal",
+            "tax_amount",
+            "shipping_fee",
             "total",
             "stock_deducted",
             "notes",
@@ -144,6 +152,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 
 
 class CheckoutSerializer(serializers.ModelSerializer):
+    idempotency_key = serializers.UUIDField(write_only=True)
     items = CheckoutItemSerializer(many=True)
     customer_phone = serializers.CharField(
         required=False,
@@ -154,6 +163,7 @@ class CheckoutSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = (
+            "idempotency_key",
             "customer_first_name",
             "customer_last_name",
             "customer_email",
@@ -193,7 +203,8 @@ class CheckoutSerializer(serializers.ModelSerializer):
 class OrderStatusSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
-        fields = ("status",)
+        fields = ("status", "updated_at")
+        read_only_fields = ("updated_at",)
 
     def update(self, instance, validated_data):
         return OrderService.update_status(

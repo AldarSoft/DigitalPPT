@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from functools import lru_cache
 from urllib.parse import quote
 
@@ -59,6 +60,7 @@ def _send_with_graph(
     recipients: list[str],
     html_body: str | None,
     reply_to: list[str],
+    attachments: list[tuple[str, bytes, str]],
 ) -> None:
     content = html_body or text_body
     message = {
@@ -74,6 +76,16 @@ def _send_with_graph(
     if reply_to:
         message["replyTo"] = [
             {"emailAddress": {"address": address}} for address in reply_to
+        ]
+    if attachments:
+        message["attachments"] = [
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "name": filename,
+                "contentType": content_type,
+                "contentBytes": base64.b64encode(content).decode("ascii"),
+            }
+            for filename, content, content_type in attachments
         ]
 
     sender = quote(settings.MICROSOFT_GRAPH_SENDER_EMAIL, safe="@._-")
@@ -99,8 +111,10 @@ def send_application_email(
     recipients: list[str],
     html_body: str | None = None,
     reply_to: list[str] | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ) -> None:
     reply_to = reply_to or []
+    attachments = attachments or []
     if settings.MICROSOFT_GRAPH_EMAIL_ENABLED:
         _send_with_graph(
             subject=subject,
@@ -108,6 +122,7 @@ def send_application_email(
             recipients=recipients,
             html_body=html_body,
             reply_to=reply_to,
+            attachments=attachments,
         )
         return
 
@@ -120,4 +135,6 @@ def send_application_email(
     )
     if html_body:
         message.attach_alternative(html_body, "text/html")
+    for filename, content, content_type in attachments:
+        message.attach(filename, content, content_type)
     message.send(fail_silently=False)

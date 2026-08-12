@@ -9,7 +9,7 @@ import type { Promotion } from '../../../types'
 import { AdminSelect } from '../components/AdminSelect'
 import { AdminErrorState } from '../components/AdminErrorState'
 import { Metric } from '../components/Metric'
-import { exportCsv } from '../utils/exportCsv'
+import { exportAdminReport } from '../utils/exportAdminReport'
 
 export function AdminPromotionsPage() {
     const queryClient = useQueryClient();
@@ -37,7 +37,7 @@ export function AdminPromotionsPage() {
         <Metric label="Redeemed" value={String(promotions.reduce((total, item) => total + item.times_redeemed, 0))} icon={Percent}/>
         <Metric label="Expired" value={String(promotions.filter((item) => item.status === 'expired').length)} icon={X}/>
       </section>
-      <section className={tw("admin-toolbar compact-toolbar")}><div><Search size={19}/><input placeholder="Search code or campaign" value={search} onChange={(event) => setSearch(event.target.value)}/></div><button type="button" onClick={() => exportCsv('digital-ptt-promotions.csv', promotions)}><Download size={17}/>Export</button></section>
+      <section className={tw("admin-toolbar compact-toolbar")}><div><Search size={19}/><input placeholder="Search code or campaign" value={search} onChange={(event) => setSearch(event.target.value)}/></div><button type="button" onClick={() => void exportAdminReport({ kind: 'promotions', rows: promotions })}><Download size={17}/>Export</button></section>
       <section className={tw("admin-panel admin-table-wrap")}>
         <table className={tw("admin-table")}><thead><tr><th>Promotion</th><th>Discount</th><th>Schedule</th><th>Redeemed</th><th>Status</th><th>Action</th></tr></thead><tbody>{promotions.length ? promotions.map((promotion) => <tr key={promotion.id}>
           <td><div className={tw("promotion-cell")}><Tag size={18}/><span><strong>{promotion.title}</strong><small>{promotion.code}</small></span></div></td><td>{promotion.discount_type === 'percentage' ? `${Number(promotion.discount_value)}%` : `$${Number(promotion.discount_value).toFixed(2)}`}</td><td>{promotion.starts_at ? new Date(promotion.starts_at).toLocaleDateString() : 'Now'} - {promotion.ends_at ? new Date(promotion.ends_at).toLocaleDateString() : 'Open'}</td><td>{promotion.times_redeemed}{promotion.usage_limit ? ` / ${promotion.usage_limit}` : ''}</td><td><button className={tw(`status status-${promotion.status === 'active' ? 'completed' : promotion.status === 'expired' ? 'cancelled' : 'pending'} status-button`)} type="button" onClick={() => toggle.mutate(promotion)}>{promotion.status}</button></td><td><div className={tw("table-actions")}><button type="button" aria-label={`Edit ${promotion.title}`} onClick={() => setEditing(promotion)}><ChevronRight size={18}/></button><button type="button" aria-label={`Delete ${promotion.title}`} onClick={() => { if (confirm(`Delete ${promotion.title}?`))

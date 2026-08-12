@@ -8,7 +8,7 @@ import { tw } from '../../../lib/tailwind-styles'
 import type { User } from '../../../types'
 import { Metric } from '../components/Metric'
 import { AdminErrorState } from '../components/AdminErrorState'
-import { exportCsv } from '../utils/exportCsv'
+import { exportAdminReport } from '../utils/exportAdminReport'
 
 export function AdminCustomersPage() {
     const queryClient = useQueryClient();
@@ -34,7 +34,7 @@ export function AdminCustomersPage() {
         <Metric label="New this month" value={String(thisMonth)} icon={CalendarClock}/>
         <Metric label="Inactive" value={String(customers.filter((user) => !user.is_active).length)} icon={X}/>
       </section>
-      <section className={tw("admin-toolbar compact-toolbar")}><div><Search size={19}/><input placeholder="Search customers" value={search} onChange={(event) => setSearch(event.target.value)}/></div><button type="button" onClick={() => exportCsv('digital-ptt-customers.csv', customers)}><Download size={17}/>Export</button></section>
+      <section className={tw("admin-toolbar compact-toolbar")}><div><Search size={19}/><input placeholder="Search customers" value={search} onChange={(event) => setSearch(event.target.value)}/></div><button type="button" onClick={() => void exportAdminReport({ kind: 'customers', rows: customers })}><Download size={17}/>Export</button></section>
       <section className={tw("admin-panel admin-table-wrap")}>
         <table className={tw("admin-table")}>
           <thead><tr><th>Customer</th><th>Company</th><th>Phone</th><th>Joined</th><th>Status</th><th>Action</th></tr></thead>

@@ -20,6 +20,7 @@ interface CartContextValue {
 }
 
 const STORAGE_KEY = 'digital-ptt-cart-v1'
+const MAX_QUOTE_QUANTITY = 1000
 const CartContext = createContext<CartContextValue | null>(null)
 
 export function CartProvider({ children }: { children: ReactNode }) {
@@ -47,7 +48,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         toast.error(`${product.name} is currently out of stock`)
         return
       }
-      const safeQuantity = Math.min(Math.max(quantity, 1), product.inventory_quantity)
+      const safeQuantity = Math.min(Math.max(quantity, 1), MAX_QUOTE_QUANTITY)
       setItems((current) => {
         const match = current.find((item) => item.product.id === product.id)
         if (match) {
@@ -57,7 +58,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
                   ...item,
                   quantity: Math.min(
                     item.quantity + safeQuantity,
-                    product.inventory_quantity,
+                    MAX_QUOTE_QUANTITY,
                   ),
                 }
               : item,
@@ -75,7 +76,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
                 ...item,
                 quantity: Math.max(
                   1,
-                  Math.min(quantity, Math.max(item.product.inventory_quantity, 1)),
+                  Math.min(quantity, MAX_QUOTE_QUANTITY),
                 ),
               }
             : item,

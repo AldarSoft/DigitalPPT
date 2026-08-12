@@ -16,11 +16,17 @@ logger = logging.getLogger(__name__)
 class OrderService:
     ALLOWED_STATUS_TRANSITIONS = {
         Order.Status.PENDING: {
+            Order.Status.SCHEDULED,
             Order.Status.PROCESSING,
             Order.Status.COMPLETED,
             Order.Status.CANCELLED,
         },
         Order.Status.PROCESSING: {
+            Order.Status.COMPLETED,
+            Order.Status.CANCELLED,
+        },
+        Order.Status.SCHEDULED: {
+            Order.Status.PROCESSING,
             Order.Status.COMPLETED,
             Order.Status.CANCELLED,
         },
@@ -34,6 +40,8 @@ class OrderService:
         items_data = validated_data.pop("items")
         quote_request = validated_data.pop("quote_request", None)
         validated_data.pop("quote_number", None)
+        tax_amount = validated_data.pop("tax_amount", Decimal("0.00"))
+        shipping_fee = validated_data.pop("shipping_fee", Decimal("0.00"))
         authenticated_user = user if user and user.is_authenticated else None
         order_user = authenticated_user
 
@@ -47,6 +55,7 @@ class OrderService:
         order = Order.objects.create(
             user=order_user,
             quote_request=quote_request,
+            source=Order.Source.QUOTE if quote_request else Order.Source.ADMIN,
             **validated_data,
         )
 
@@ -73,9 +82,9 @@ class OrderService:
 
         OrderItem.objects.bulk_create(order_items)
         order.subtotal = subtotal
-        order.tax_amount = Decimal("0.00")
-        order.shipping_fee = Decimal("0.00")
-        order.total = subtotal
+        order.tax_amount = tax_amount
+        order.shipping_fee = shipping_fee
+        order.total = subtotal + tax_amount + shipping_fee
         order.save(update_fields=["subtotal", "tax_amount", "shipping_fee", "total", "updated_at"])
 
         logger.info("Created order %s with %s items", order.order_number, len(order_items))
@@ -89,7 +98,22 @@ class OrderService:
     @transaction.atomic
     def create_checkout_order(*, validated_data, user=None):
         items_data = validated_data.pop("items")
+        checkout_key = validated_data.pop("idempotency_key")
         authenticated_user = user if user and user.is_authenticated else None
+        if not authenticated_user:
+            raise ValidationError({"detail": "Sign in before starting checkout."})
+
+        existing = (
+            Order.objects.select_for_update()
+            .select_related("user")
+            .prefetch_related("items__product")
+            .filter(checkout_key=checkout_key)
+            .first()
+        )
+        if existing:
+            if existing.user_id != authenticated_user.id:
+                raise ValidationError({"idempotency_key": "This checkout key is already in use."})
+            return existing
         product_ids = [item["product"].pk for item in items_data]
         products = Product.objects.select_for_update().public().in_bulk(product_ids)
 
@@ -122,7 +146,12 @@ class OrderService:
         if inventory_errors:
             raise ValidationError({"inventory": inventory_errors})
 
-        order = Order.objects.create(user=authenticated_user, **validated_data)
+        order = Order.objects.create(
+            user=authenticated_user,
+            source=Order.Source.DIRECT,
+            checkout_key=checkout_key,
+            **validated_data,
+        )
         for item in prepared_items:
             item.order = order
         OrderItem.objects.bulk_create(prepared_items)

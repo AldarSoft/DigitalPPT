@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
@@ -171,6 +172,8 @@ class NotificationJob(TimeStampedModel):
         QUOTE_CUSTOMER_EMAIL = "quote_customer_email", "Quote customer email"
         QUOTE_STAFF_EMAIL = "quote_staff_email", "Quote staff email"
         QUOTE_WEBHOOK = "quote_webhook", "Quote Power Automate webhook"
+        QUOTE_READY_EMAIL = "quote_ready_email", "Quote ready email"
+        QUOTE_MESSAGE_EMAIL = "quote_message_email", "Quote message email"
         ORDER_STATUS_EMAIL = "order_status_email", "Order status email"
         ORDER_STATUS_WEBHOOK = "order_status_webhook", "Order status webhook"
 
@@ -204,3 +207,27 @@ class NotificationJob(TimeStampedModel):
 
     def __str__(self):
         return f"{self.get_kind_display()} ({self.status})"
+
+
+class UserNotification(TimeStampedModel):
+    recipient = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notifications",
+    )
+    title = models.CharField(max_length=255)
+    message = models.TextField(blank=True)
+    url = models.CharField(max_length=500)
+    is_read = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(
+                fields=["recipient", "is_read", "created_at"],
+                name="core_adminn_recipient_idx",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.recipient} - {self.title}"

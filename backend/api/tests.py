@@ -1,10 +1,13 @@
 import json
+import tempfile
+from uuid import uuid4
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core import mail
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
@@ -12,11 +15,11 @@ from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from products.models import Category, Product, ProductSpecification
+from products.models import Category, Product, ProductImage, ProductSpecification
 from quotes.models import QuoteRequest
 from orders.models import Order
 from common.integrations.power_automate import send_power_automate_event
-from core.models import NotificationJob, Promotion
+from core.models import NotificationJob, Promotion, UserNotification
 
 
 class ActiveApiPermissionTests(APITestCase):
@@ -50,6 +53,7 @@ class ActiveApiPermissionTests(APITestCase):
 
     def order_payload(self):
         return {
+            "idempotency_key": str(uuid4()),
             "customer_first_name": "Test",
             "customer_last_name": "Customer",
             "customer_email": "customer@example.com",
@@ -122,9 +126,10 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(mail.outbox), 1)
 
-    def test_guest_checkout_uses_server_price(self):
+    def test_customer_direct_checkout_uses_server_price(self):
         payload = self.order_payload()
         payload["items"][0]["unit_price"] = "0.01"
+        self.client.force_authenticate(self.customer)
         response = self.client.post(
             "/api/v1/orders/checkout/",
             payload,
@@ -133,6 +138,17 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["total"], Decimal("1000.00"))
         self.assertEqual(response.data["items"][0]["unit_price"], Decimal("1000.00"))
+        self.assertEqual(response.data["source"], Order.Source.DIRECT)
+
+    def test_direct_checkout_is_idempotent(self):
+        payload = self.order_payload()
+        self.client.force_authenticate(self.customer)
+        first = self.client.post("/api/v1/orders/checkout/", payload, format="json")
+        second = self.client.post("/api/v1/orders/checkout/", payload, format="json")
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(first.data["order_number"], second.data["order_number"])
+        self.assertEqual(Order.objects.count(), 1)
 
     def test_public_product_does_not_expose_cost_price(self):
         self.product.cost_price = "500.00"
@@ -140,6 +156,57 @@ class ActiveApiPermissionTests(APITestCase):
         response = self.client.get(f"/api/v1/products/catalog/{self.product.slug}/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertNotIn("cost_price", response.data)
+
+    def test_admin_can_upload_product_image(self):
+        self.client.force_authenticate(self.admin)
+        image = SimpleUploadedFile(
+            "radio.png",
+            b"\x89PNG\r\n\x1a\n",
+            content_type="image/png",
+        )
+        with tempfile.TemporaryDirectory() as media_root:
+            with override_settings(MEDIA_ROOT=media_root):
+                response = self.client.post(
+                    "/api/v1/products/upload-image/",
+                    {"image": image},
+                    format="multipart",
+                )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data["image_url"].startswith("/media/products/"))
+
+    def test_admin_can_manage_multiple_product_images_with_one_primary(self):
+        self.client.force_authenticate(self.admin)
+        product_url = f"/api/v1/products/catalog/{self.product.slug}/"
+        images = [
+            {
+                "image_url": "/media/products/front.webp",
+                "alt_text": "Front view",
+                "is_primary": False,
+                "sort_order": 0,
+            },
+            {
+                "image_url": "/media/products/rear.webp",
+                "alt_text": "Rear view",
+                "is_primary": False,
+                "sort_order": 1,
+            },
+        ]
+
+        response = self.client.patch(product_url, {"images": images}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        saved_images = list(ProductImage.objects.filter(product=self.product))
+        self.assertEqual(len(saved_images), 2)
+        self.assertTrue(saved_images[0].is_primary)
+        self.assertFalse(saved_images[1].is_primary)
+
+        images[0]["is_primary"] = True
+        images[1]["is_primary"] = True
+        invalid = self.client.patch(product_url, {"images": images}, format="json")
+
+        self.assertEqual(invalid.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("images", invalid.data)
 
     def test_customer_can_register(self):
         response = self.client.post(
@@ -174,6 +241,7 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(Order.objects.count(), 0)
         self.assertEqual(response.data["status"], QuoteRequest.Status.NEW)
         self.assertEqual(response.data["order_number"], "")
+        self.assertIn("image_url", response.data["items"][0])
         self.assertEqual(len(mail.outbox), 2)
         self.assertCountEqual(
             [message.to[0] for message in mail.outbox],
@@ -194,7 +262,7 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertNotIn("order_number", event_data)
         self.assertEqual(event_data["items"][0]["sku"], self.product.sku)
 
-    def test_quote_creates_one_order_only_after_staff_approval(self):
+    def test_quote_creates_one_order_only_after_agreement_and_invoice(self):
         created = self.client.post("/api/v1/quotes/", self.quote_payload(), format="json")
         quote_url = f"/api/v1/quotes/{created.data['quote_number']}/"
         self.assertEqual(Order.objects.count(), 0)
@@ -204,28 +272,220 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(premature.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Order.objects.count(), 0)
 
-        for next_status in ("reviewing", "quoted"):
-            response = self.client.patch(quote_url, {"status": next_status}, format="json")
-            self.assertEqual(response.status_code, status.HTTP_200_OK)
-            self.assertEqual(Order.objects.count(), 0)
+        reviewing = self.client.patch(quote_url, {"status": "reviewing"}, format="json")
+        self.assertEqual(reviewing.status_code, status.HTTP_200_OK)
+        quote = QuoteRequest.objects.get()
+        invoice_payload = {
+            "items": [{"id": quote.items.get().id, "quoted_unit_price": "900.00"}],
+            "quoted_shipping": "50.00",
+            "admin_message": "Valid while stock lasts.",
+        }
+        self.client.force_authenticate(self.customer)
+        hidden_draft = self.client.get(quote_url)
+        self.assertIsNone(hidden_draft.data["quoted_total"])
+        self.assertIsNone(hidden_draft.data["items"][0]["quoted_unit_price"])
 
-        approved = self.client.patch(quote_url, {"status": "approved"}, format="json")
-        self.assertEqual(approved.status_code, status.HTTP_200_OK)
+        self.client.force_authenticate(self.admin)
+        admin_message = self.client.post(
+            f"{quote_url}messages/", {"body": "Delivery is estimated at two weeks."}, format="json"
+        )
+        self.assertEqual(admin_message.status_code, status.HTTP_200_OK)
+        self.assertEqual(Order.objects.count(), 0)
+        before_customer_confirmation = self.client.post(
+            f"{quote_url}invoice/", invoice_payload, format="json"
+        )
+        self.assertEqual(before_customer_confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+
+        self.client.force_authenticate(self.customer)
+        hidden_invoice = self.client.get(quote_url)
+        self.assertIsNone(hidden_invoice.data["quoted_total"])
+        self.assertIsNone(hidden_invoice.data["items"][0]["quoted_unit_price"])
+        customer_message = self.client.post(
+            f"{quote_url}messages/", {"body": "That schedule works for us."}, format="json"
+        )
+        self.assertEqual(customer_message.status_code, status.HTTP_200_OK)
+        self.assertEqual(Order.objects.count(), 0)
+
+        customer_invoice = self.client.post(
+            f"{quote_url}invoice/", invoice_payload, format="json"
+        )
+        self.assertEqual(customer_invoice.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(self.admin)
+        self.product.inventory_quantity = 0
+        self.product.save(update_fields=["inventory_quantity", "updated_at"])
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            with self.captureOnCommitCallbacks(execute=True):
+                invoiced = self.client.post(
+                    f"{quote_url}invoice/", invoice_payload, format="json"
+                )
+            self.assertEqual(invoiced.status_code, status.HTTP_200_OK)
+            self.assertEqual(invoiced.data["status"], QuoteRequest.Status.QUOTED)
+            self.assertTrue(invoiced.data["invoice_number"].startswith("INV-"))
+            self.assertTrue(invoiced.data["invoice_pdf_url"].endswith(".pdf"))
+            quote.refresh_from_db()
+            with quote.invoice_pdf.open("rb") as invoice_file:
+                self.assertEqual(invoice_file.read(4), b"%PDF")
+            self.assertEqual(len(mail.outbox), 1)
+            self.assertEqual(mail.outbox[0].attachments[0][2], "application/pdf")
+
+            order_number = invoiced.data["order_number"]
+            self.client.force_authenticate(self.customer)
+            revision_message = self.client.post(
+                f"{quote_url}messages/",
+                {"body": "Please reduce the price and resend the invoice."},
+                format="json",
+            )
+            self.assertEqual(revision_message.status_code, status.HTTP_200_OK)
+
+            revised_payload = {
+                **invoice_payload,
+                "items": [{"id": quote.items.get().id, "quoted_unit_price": "850.00"}],
+                "quoted_shipping": "25.00",
+                "admin_message": "Revised final pricing.",
+            }
+            self.client.force_authenticate(self.admin)
+            with self.captureOnCommitCallbacks(execute=True):
+                revised = self.client.post(
+                    f"{quote_url}invoice/", revised_payload, format="json"
+                )
+            self.assertEqual(revised.status_code, status.HTTP_200_OK)
+            self.assertEqual(revised.data["quoted_total"], Decimal("875.00"))
+            self.assertEqual(revised.data["order_number"], order_number)
+            self.assertEqual(Order.objects.count(), 1)
+
         self.assertEqual(Order.objects.count(), 1)
         order = Order.objects.get()
         self.assertEqual(order.status, Order.Status.PENDING)
+        self.assertEqual(order.source, Order.Source.QUOTE)
+        self.assertEqual(order.total, Decimal("875.00"))
         self.assertEqual(order.quote_request.quote_number, created.data["quote_number"])
-        self.assertEqual(approved.data["order_number"], order.order_number)
+        self.assertEqual(invoiced.data["order_number"], order.order_number)
 
-        repeated = self.client.patch(quote_url, {"status": "approved"}, format="json")
-        self.assertEqual(repeated.status_code, status.HTTP_200_OK)
-        self.assertEqual(Order.objects.count(), 1)
-
+        self.client.force_authenticate(self.admin)
         close_after_approval = self.client.patch(
             quote_url, {"status": "closed"}, format="json"
         )
         self.assertEqual(close_after_approval.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Order.objects.count(), 1)
+
+    @override_settings(
+        NOTIFICATIONS_ASYNC=True,
+        QUOTE_NOTIFICATION_EMAIL="sales@example.com",
+        FRONTEND_URL="http://localhost:5173",
+    )
+    def test_quote_messages_notify_the_other_party_with_portal_links(self):
+        self.client.force_authenticate(self.customer)
+        created = self.client.post(
+            "/api/v1/quotes/", self.quote_payload(), format="json"
+        )
+        quote_url = f"/api/v1/quotes/{created.data['quote_number']}/"
+
+        self.client.force_authenticate(self.admin)
+        reviewing = self.client.patch(
+            quote_url, {"status": "reviewing"}, format="json"
+        )
+        self.assertEqual(reviewing.status_code, status.HTTP_200_OK)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            admin_message = self.client.post(
+                f"{quote_url}messages/",
+                {"body": "Delivery is estimated at two weeks."},
+                format="json",
+            )
+        self.assertEqual(admin_message.status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(self.customer)
+        with self.captureOnCommitCallbacks(execute=True):
+            customer_message = self.client.post(
+                f"{quote_url}messages/",
+                {"body": "That delivery schedule works."},
+                format="json",
+            )
+        self.assertEqual(customer_message.status_code, status.HTTP_200_OK)
+
+        customer_notification = UserNotification.objects.get(recipient=self.customer)
+        self.assertFalse(customer_notification.is_read)
+        self.assertEqual(
+            customer_notification.url,
+            f"/account?tab=quotes&quote={created.data['quote_number']}",
+        )
+        customer_inbox = self.client.get("/api/v1/core/notifications/")
+        self.assertEqual(customer_inbox.status_code, status.HTTP_200_OK)
+        self.assertEqual(customer_inbox.data["unread_count"], 1)
+        self.assertEqual(
+            customer_inbox.data["notifications"][0]["id"],
+            customer_notification.id,
+        )
+
+        admin_notification = UserNotification.objects.get(recipient=self.admin)
+        self.assertFalse(admin_notification.is_read)
+        self.assertEqual(
+            admin_notification.url,
+            f"/admin/quotes?quote={created.data['quote_number']}",
+        )
+
+        cannot_read_admin_notification = self.client.patch(
+            f"/api/v1/core/notifications/{admin_notification.id}/read/",
+            format="json",
+        )
+        self.assertEqual(
+            cannot_read_admin_notification.status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+        self.client.force_authenticate(self.admin)
+        inbox = self.client.get("/api/v1/core/notifications/")
+        self.assertEqual(inbox.status_code, status.HTTP_200_OK)
+        self.assertEqual(inbox.data["unread_count"], 1)
+        self.assertEqual(inbox.data["notifications"][0]["id"], admin_notification.id)
+        read = self.client.patch(
+            f"/api/v1/core/notifications/{admin_notification.id}/read/",
+            format="json",
+        )
+        self.assertEqual(read.status_code, status.HTTP_200_OK)
+        self.assertTrue(read.data["is_read"])
+
+        jobs = NotificationJob.objects.filter(
+            kind=NotificationJob.Kind.QUOTE_MESSAGE_EMAIL
+        )
+        self.assertEqual(jobs.count(), 2)
+        self.assertEqual(len(mail.outbox), 0)
+
+        call_command("process_notifications", once=True)
+
+        self.assertFalse(jobs.exclude(status=NotificationJob.Status.SENT).exists())
+        self.assertEqual(len(mail.outbox), 2)
+        customer_email = next(
+            message for message in mail.outbox if message.to == ["customer@example.com"]
+        )
+        staff_email = next(
+            message for message in mail.outbox if message.to == ["sales@example.com"]
+        )
+        quote_number = created.data["quote_number"]
+        self.assertIn(
+            f"/account?tab=quotes&quote={quote_number}", customer_email.body
+        )
+        self.assertIn(
+            f"/admin/quotes?quote={quote_number}", staff_email.body
+        )
+        self.assertNotIn("Delivery is estimated", customer_email.body)
+        self.assertNotIn("That delivery schedule", staff_email.body)
+
+    def test_customer_can_cancel_own_quote_during_negotiation(self):
+        self.client.force_authenticate(self.customer)
+        created = self.client.post("/api/v1/quotes/", self.quote_payload(), format="json")
+        quote_url = f"/api/v1/quotes/{created.data['quote_number']}/"
+
+        self.client.force_authenticate(self.admin)
+        reviewing = self.client.patch(quote_url, {"status": "reviewing"}, format="json")
+        self.assertEqual(reviewing.status_code, status.HTTP_200_OK)
+
+        self.client.force_authenticate(self.customer)
+        cancelled = self.client.post(f"{quote_url}cancel/", format="json")
+        self.assertEqual(cancelled.status_code, status.HTTP_200_OK)
+        self.assertEqual(cancelled.data["status"], QuoteRequest.Status.CLOSED)
+        self.assertEqual(Order.objects.count(), 0)
 
     def test_public_quote_rejects_arbitrary_or_hidden_products(self):
         arbitrary_payload = self.quote_payload()
@@ -284,6 +544,7 @@ class ActiveApiPermissionTests(APITestCase):
         with self.captureOnCommitCallbacks(execute=True):
             processing = self.client.patch(order_url, {"status": "processing"}, format="json")
         self.assertEqual(processing.status_code, status.HTTP_200_OK)
+        self.assertIn("updated_at", processing.data)
         self.product.refresh_from_db()
         self.assertEqual(self.product.inventory_quantity, 4)
         self.assertTrue(Order.objects.get(pk=created.data["id"]).stock_deducted)
@@ -407,6 +668,45 @@ class ActiveApiPermissionTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["count"], 1)
+
+    def test_catalog_stock_filter_supports_server_pagination(self):
+        Product.objects.create(
+            category=self.product.category,
+            name="Out of stock rack",
+            sku="OUT-1",
+            price="500.00",
+            inventory_quantity=0,
+            status=Product.Status.PUBLISHED,
+        )
+
+        response = self.client.get(
+            "/api/v1/products/catalog/",
+            {"stock": "true", "page": 1, "page_size": 1},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["sku"], self.product.sku)
+
+    def test_catalog_orders_by_effective_sale_price(self):
+        Product.objects.create(
+            category=self.product.category,
+            name="Discounted rack",
+            sku="SALE-1",
+            price="1200.00",
+            sale_price="400.00",
+            inventory_quantity=1,
+            status=Product.Status.PUBLISHED,
+        )
+
+        response = self.client.get(
+            "/api/v1/products/catalog/",
+            {"ordering": "current_price_value", "page_size": 1},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["count"], 2)
+        self.assertEqual(response.data["results"][0]["sku"], "SALE-1")
 
     def test_admin_can_search_order_by_internal_id(self):
         self.client.force_authenticate(self.admin)

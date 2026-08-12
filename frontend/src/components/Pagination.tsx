@@ -1,17 +1,19 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { tw } from '../../../lib/tailwind-styles'
+import { tw } from '../lib/tailwind-styles'
 
-export function AccountPagination({
+export function Pagination({
   page,
   pageSize,
   total,
   loading,
+  className,
   onPageChange,
 }: {
   page: number
   pageSize: number
   total: number
   loading?: boolean
+  className?: string
   onPageChange: (page: number) => void
 }) {
   const pageCount = Math.max(1, Math.ceil(total / pageSize))
@@ -21,7 +23,7 @@ export function AccountPagination({
   if (total <= pageSize) return null
 
   return (
-    <nav className={tw('account-pagination')} aria-label="List pagination">
+    <nav className={tw('pagination', className)} aria-label="List pagination">
       <p>Showing {firstItem}-{lastItem} of {total}</p>
       <div>
         <button

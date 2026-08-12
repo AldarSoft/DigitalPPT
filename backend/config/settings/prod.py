@@ -1,6 +1,7 @@
 from .base import *  # noqa: F403,F401
 
 DEBUG = False
+PAYMENTS_DEVELOPMENT_SIMULATOR = False
 
 if SECRET_KEY == "unsafe-dev-secret-key":  # noqa: F405
     raise RuntimeError("DJANGO_SECRET_KEY must be set for production.")

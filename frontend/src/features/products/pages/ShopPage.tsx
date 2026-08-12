@@ -1,12 +1,22 @@
 import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Search, SlidersHorizontal } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { SelectControl } from '../../../components/SelectControl'
+import { Pagination } from '../../../components/Pagination'
 import { ProductCard } from '../components/ProductCard'
 import { api, unwrap } from '../../../lib/api'
 import { fallbackCategories, fallbackProducts } from '../../../lib/fallback-data'
 import { tw } from '../../../lib/tailwind-styles'
+
+const PAGE_SIZE = 12
+
+const ORDERING_MAP: Record<string, string> = {
+    featured: '-is_featured,-created_at',
+    price: 'current_price_value',
+    '-price': '-current_price_value',
+    '-created_at': '-created_at',
+}
 
 export function ShopPage() {
     const [params, setParams] = useSearchParams();
@@ -14,6 +24,8 @@ export function ShopPage() {
     const category = params.get('category') ?? '';
     const ordering = params.get('ordering') ?? 'featured';
     const inStock = params.get('stock') === 'true';
+    const requestedPage = Number(params.get('page') ?? '1');
+    const page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     const categoriesQuery = useQuery({
         queryKey: ['categories'],
         queryFn: api.categories,
@@ -22,28 +34,64 @@ export function ShopPage() {
         queryKey: ['products', params.toString()],
         queryFn: () => {
             const query = new URLSearchParams(params);
-            if (ordering === 'featured') {
-                query.delete('ordering');
-                query.delete('featured');
+            query.set('ordering', ORDERING_MAP[ordering] ?? ORDERING_MAP.featured);
+            if (inStock) {
+                query.set('stock', 'true');
+            } else {
+                query.delete('stock');
             }
-            query.delete('stock');
+            if (params.get('price_min')) {
+                query.set('min_price', params.get('price_min') ?? '');
+                query.delete('price_min');
+            }
+            if (params.get('price_max')) {
+                query.set('max_price', params.get('price_max') ?? '');
+                query.delete('price_max');
+            }
+            query.set('page', String(page));
+            query.set('page_size', String(PAGE_SIZE));
             return api.products(query.toString());
+        },
+        placeholderData: keepPreviousData,
+    });
+    const priceBoundsQuery = useQuery({
+        queryKey: ['product-price-bounds', category, params.get('search') ?? '', inStock],
+        queryFn: async () => {
+            const base = new URLSearchParams(params);
+            for (const key of ['page', 'ordering', 'price_min', 'price_max'])
+                base.delete(key);
+            base.set('page_size', '1');
+            const minimumQuery = new URLSearchParams(base);
+            const maximumQuery = new URLSearchParams(base);
+            minimumQuery.set('ordering', 'current_price_value');
+            maximumQuery.set('ordering', '-current_price_value');
+            const [minimumResult, maximumResult] = await Promise.all([
+                api.products(minimumQuery.toString()),
+                api.products(maximumQuery.toString()),
+            ]);
+            return {
+                min: Number(unwrap(minimumResult)[0]?.current_price ?? 0),
+                max: Number(unwrap(maximumResult)[0]?.current_price ?? 0),
+            };
         },
     });
     const categories = categoriesQuery.data ? unwrap(categoriesQuery.data) : fallbackCategories;
     const selectedCategory = categories.find((item) => item.slug === category);
     const showCategoryDropdown = categories.length > 6;
-    const rawProducts = useMemo(
-        () => productsQuery.data ? unwrap(productsQuery.data) : fallbackProducts,
-        [productsQuery.data],
-    );
+    const rawProducts = useMemo(() => {
+        if (productsQuery.isError)
+            return fallbackProducts;
+        return productsQuery.data ? unwrap(productsQuery.data) : [];
+    }, [productsQuery.data, productsQuery.isError]);
     const priceRange = useMemo(() => {
-        const prices = rawProducts.map((product) => Number(product.current_price)).filter((price) => Number.isFinite(price));
+        if (priceBoundsQuery.data)
+            return priceBoundsQuery.data;
+        const prices = fallbackProducts.map((product) => Number(product.current_price)).filter((price) => Number.isFinite(price));
         return {
             min: prices.length ? Math.min(...prices) : 0,
             max: prices.length ? Math.max(...prices) : 0,
         };
-    }, [rawProducts]);
+    }, [priceBoundsQuery.data]);
     const parseNumericParam = (value: string | null, fallback: number) => {
         const parsed = Number(value);
         return value !== null && !Number.isNaN(parsed) ? parsed : fallback;
@@ -77,13 +125,18 @@ export function ShopPage() {
     };
     const products = useMemo(() => {
         let list = rawProducts;
-        if (category)
+        const searchTerm = (params.get('search') ?? '').trim().toLowerCase();
+        if (category) {
             list = list.filter((product) => product.category.slug === category);
-        if (inStock)
+        }
+        if (inStock) {
             list = list.filter((product) => product.inventory_quantity > 0);
+        }
         list = list.filter((product) => {
             const price = Number(product.current_price);
-            return price >= priceMin && price <= priceMax;
+            const matchesSearch = !searchTerm || [product.name, product.sku, product.category.name]
+                .some((value) => value.toLowerCase().includes(searchTerm));
+            return price >= priceMin && price <= priceMax && matchesSearch;
         });
         if (ordering === 'price') {
             list = [...list].sort((a, b) => Number(a.current_price) - Number(b.current_price));
@@ -95,13 +148,20 @@ export function ShopPage() {
             list = [...list].sort((a, b) => Number(b.is_featured) - Number(a.is_featured));
         }
         return list;
-    }, [rawProducts, category, inStock, ordering, priceMin, priceMax]);
+    }, [rawProducts, category, inStock, ordering, priceMin, priceMax, params]);
+    const totalProducts = productsQuery.isError
+        ? products.length
+        : productsQuery.data && !Array.isArray(productsQuery.data)
+            ? productsQuery.data.count
+            : products.length;
     const setParam = (key: string, value: string, defaultValue?: string) => {
         const next = new URLSearchParams(params);
         if (!value || value === defaultValue)
             next.delete(key);
         else
             next.set(key, value);
+        if (key !== 'page')
+            next.delete('page');
         setParams(next);
     };
     return (<main className={tw("catalog-page")}>
@@ -112,7 +172,7 @@ export function ShopPage() {
             <h1>{catalogHero.title}</h1>
             <p>{catalogHero.copy}</p>
             <div className={tw("catalog-pills")}>
-              <span>{products.length} field options</span>
+              <span>{totalProducts} field options</span>
               <span>{selectedCategory?.name ?? 'Live inventory'}</span>
             </div>
           </div>
@@ -183,11 +243,10 @@ export function ShopPage() {
                     max={priceRange.max}
                     step={1}
                     value={priceMinParam}
+                    disabled={!priceSpan}
                     onChange={(event) => {
                         const nextMin = Math.min(Number(event.target.value), priceMaxParam);
                         setParam('price_min', String(nextMin), String(priceRange.min));
-                        if (nextMin > priceMaxParam)
-                            setParam('price_max', String(nextMin), String(priceRange.max));
                     }}
                   />
                 </label>
@@ -200,11 +259,10 @@ export function ShopPage() {
                     max={priceRange.max}
                     step={1}
                     value={priceMaxParam}
+                    disabled={!priceSpan}
                     onChange={(event) => {
                         const nextMax = Math.max(Number(event.target.value), priceMinParam);
                         setParam('price_max', String(nextMax), String(priceRange.max));
-                        if (nextMax < priceMinParam)
-                            setParam('price_min', String(nextMax), String(priceRange.min));
                     }}
                   />
                 </label>
@@ -219,9 +277,19 @@ export function ShopPage() {
 
           <div>
             {productsQuery.isError ? (<p className={tw("connection-note")}>Showing the built-in development catalog while the Django API is offline.</p>) : null}
-            {products.length ? (<div className={tw("catalog-grid")}>
-                {products.map((product) => <ProductCard product={product} key={product.id}/>)}
-              </div>) : (<div className={tw("empty-state")}><Search size={30}/><h3>No products found</h3><p>Try clearing a filter or using a broader search.</p></div>)}
+            {products.length ? (<>
+                <div className={tw("catalog-grid")}>
+                  {products.map((product) => <ProductCard product={product} key={product.id}/>)}
+                </div>
+                <Pagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  total={totalProducts}
+                  loading={productsQuery.isFetching}
+                  className="mt-5"
+                  onPageChange={(nextPage) => setParam('page', String(nextPage), '1')}
+                />
+              </>) : (<div className={tw("empty-state")}><Search size={30}/><h3>No products found</h3><p>Try clearing a filter or using a broader search.</p></div>)}
           </div>
         </div>
       </section>

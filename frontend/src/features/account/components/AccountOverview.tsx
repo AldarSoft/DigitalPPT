@@ -10,12 +10,14 @@ export function AccountOverview({
   orderCount,
   quoteCount,
   onTab,
+  onQuoteSelect,
 }: {
   user: User;
   quotes: QuoteRequest[];
   orderCount: number;
   quoteCount: number;
   onTab: (tab: AccountTab) => void;
+  onQuoteSelect: (quote: QuoteRequest) => void;
 }) {
   const inReview = quotes.filter((quote) => quote.status === 'new' || quote.status === 'reviewing').length;
   return (
@@ -44,7 +46,7 @@ export function AccountOverview({
             View all requests
           </button>
         </div>
-        <QuotesTable quotes={quotes.slice(0, 4)} />
+        <QuotesTable quotes={quotes.slice(0, 4)} onSelect={onQuoteSelect} />
       </section>
       <div className={tw("account-detail-grid")}>
         <section className={tw("account-panel")}>

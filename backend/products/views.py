@@ -94,7 +94,15 @@ class ProductViewSet(viewsets.ModelViewSet):
         "specifications__key",
         "specifications__value",
     )
-    ordering_fields = ("name", "price", "created_at", "inventory_quantity")
+    ordering_fields = (
+        "name",
+        "price",
+        "current_price_value",
+        "created_at",
+        "updated_at",
+        "inventory_quantity",
+        "is_featured",
+    )
     lookup_field = "slug"
 
     def get_queryset(self):
@@ -111,6 +119,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         category_slug = self.request.query_params.get("category")
         featured = self.request.query_params.get("featured")
         best_sellers = self.request.query_params.get("best_sellers")
+        stock = self.request.query_params.get("stock")
         min_price = self.request.query_params.get("min_price")
         max_price = self.request.query_params.get("max_price")
         status_value = self.request.query_params.get("status")
@@ -119,6 +128,14 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(category__slug=category_slug)
         if featured in {"true", "1"}:
             queryset = queryset.filter(is_featured=True)
+        if stock in {"true", "1"}:
+            queryset = queryset.filter(inventory_quantity__gt=0)
+        if stock == "out":
+            queryset = queryset.filter(inventory_quantity=0)
+        if stock == "low":
+            queryset = queryset.filter(inventory_quantity__gt=0, inventory_quantity__lte=5)
+        if stock == "healthy":
+            queryset = queryset.filter(inventory_quantity__gt=5)
         if best_sellers in {"true", "1"}:
             sold_quantity = (
                 OrderItem.objects.filter(
@@ -141,7 +158,6 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(current_price_value__lte=max_price)
         if status_value and self.request.user and self.request.user.is_staff:
             queryset = queryset.filter(status=status_value)
-
         return queryset
 
     def get_permissions(self):

@@ -69,7 +69,7 @@ class OrderViewSet(viewsets.ModelViewSet):
 
 
 class CheckoutViewSet(viewsets.GenericViewSet):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     serializer_class = CheckoutSerializer
     throttle_scope = "checkout"
 

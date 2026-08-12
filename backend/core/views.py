@@ -1,16 +1,45 @@
 from django.core.cache import cache
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, viewsets
-from rest_framework.permissions import AllowAny, IsAdminUser
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 from common.permissions import IsAdminOrReadOnly
-from core.models import Banner, ContactMessage, Promotion, SiteSetting
+from core.models import Banner, ContactMessage, Promotion, SiteSetting, UserNotification
 from core.serializers import (
+    UserNotificationSerializer,
     BannerSerializer,
     ContactMessageSerializer,
     PromotionSerializer,
     SiteSettingSerializer,
 )
+
+
+class UserNotificationListView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserNotificationSerializer
+
+    def get(self, request):
+        queryset = UserNotification.objects.filter(recipient=request.user)
+        return Response({
+            "unread_count": queryset.filter(is_read=False).count(),
+            "notifications": self.get_serializer(queryset[:20], many=True).data,
+        })
+
+
+class UserNotificationReadView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = UserNotificationSerializer
+
+    def patch(self, request, pk):
+        notification = get_object_or_404(
+            UserNotification,
+            pk=pk,
+            recipient=request.user,
+        )
+        notification.is_read = True
+        notification.save(update_fields=["is_read", "updated_at"])
+        return Response(self.get_serializer(notification).data)
 
 
 class BannerViewSet(viewsets.ModelViewSet):

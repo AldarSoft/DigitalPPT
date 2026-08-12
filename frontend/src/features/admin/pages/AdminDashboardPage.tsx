@@ -7,7 +7,7 @@ import { Metric } from '../components/Metric'
 import { OrderRows } from '../components/OrderRows'
 import { AdminErrorState } from '../components/AdminErrorState'
 import { useAdminData } from '../hooks/useAdminData'
-import { exportCsv } from '../utils/exportCsv'
+import { exportAdminReport } from '../utils/exportAdminReport'
 
 export function AdminDashboardPage() {
     const data = useAdminData();
@@ -35,7 +35,7 @@ export function AdminDashboardPage() {
     return (<main className={tw("admin-page")}>
       <div className={tw("admin-title-row")}>
         <div><h1>Dashboard</h1><p>{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })} &nbsp;-&nbsp; Store overview</p></div>
-        <button type="button" onClick={() => exportCsv('digital-ptt-orders.csv', data.orderList)}><Download size={18}/>Export report</button>
+        <button type="button" onClick={() => void exportAdminReport({ kind: 'orders', rows: data.orderList })}><Download size={18}/>Export report</button>
       </div>
       <section className={tw("admin-stats")}>
         <Metric label="Revenue" value={`$${revenue.toLocaleString()}`} icon={BarChart3}/>

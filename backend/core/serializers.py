@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from core.models import Banner, ContactMessage, Promotion, SiteSetting
+from core.models import Banner, ContactMessage, Promotion, SiteSetting, UserNotification
 from common.validators import validate_phone
 
 
@@ -74,6 +74,13 @@ class ContactMessageSerializer(serializers.ModelSerializer):
         model = ContactMessage
         fields = ("id", "name", "email", "phone", "subject", "message", "is_read", "created_at")
         read_only_fields = ("id", "is_read", "created_at")
+
+
+class UserNotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserNotification
+        fields = ("id", "title", "message", "url", "is_read", "created_at")
+        read_only_fields = fields
 
 
 class PromotionSerializer(serializers.ModelSerializer):

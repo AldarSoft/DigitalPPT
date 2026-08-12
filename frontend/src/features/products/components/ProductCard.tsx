@@ -4,11 +4,12 @@ import { Link } from 'react-router-dom';
 import { useCart } from '../../../contexts/CartContext';
 import { mediaUrl } from '../../../lib/api';
 import type { Product } from '../../../types';
+import { primaryProductImage } from '../../../lib/product-images';
 export function ProductCard({ product }: {
     product: Product;
 }) {
     const cart = useCart();
-    const image = [...product.images].sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.sort_order - b.sort_order)[0];
+    const image = primaryProductImage(product);
     return (<article className={tw("catalog-card")}>
       <Link className={tw("catalog-card-link")} to={`/products/${product.slug}`} aria-label={`View ${product.name}`}/>
       <div className={tw("catalog-card-image")}>

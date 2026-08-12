@@ -111,7 +111,7 @@ export function CheckoutPage() {
             </fieldset>
             <div className={tw('payment-excluded')}>
               <Clock3 size={22} />
-              <div><strong>Online checkout is coming soon</strong><p>This form submits a quote request only. No order payment or card details are collected.</p></div>
+              <div><strong>Quote request only</strong><p>Your request goes to our team for custom pricing. Direct purchases and payments use the separate cart payment option.</p></div>
             </div>
           </div>
           <aside className={tw('checkout-summary')}>

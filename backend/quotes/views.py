@@ -1,18 +1,24 @@
 from django.db.models import Q
 from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 from quotes.models import QuoteRequest
 from quotes.serializers import (
+    QuoteMessageCreateSerializer,
+    QuoteInvoiceSerializer,
     QuoteRequestCreateSerializer,
     QuoteRequestSerializer,
     QuoteRequestStatusSerializer,
 )
+from quotes.services import QuoteService
 
 
 class QuoteRequestViewSet(viewsets.ModelViewSet):
-    queryset = QuoteRequest.objects.prefetch_related("items__product")
+    queryset = QuoteRequest.objects.prefetch_related(
+        "items__product", "orders", "messages__author"
+    )
     http_method_names = ["get", "post", "patch", "head", "options"]
     lookup_field = "quote_number"
     permission_classes = [IsAdminUser]
@@ -28,6 +34,10 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         if self.action == "create":
             return [AllowAny()]
         if self.action in {"partial_update", "update", "destroy"}:
+            return [IsAdminUser()]
+        if self.action in {"messages", "cancel"}:
+            return [IsAuthenticated()]
+        if self.action == "invoice":
             return [IsAdminUser()]
         return [IsAuthenticated()]
 
@@ -72,3 +82,39 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
             headers=headers,
         )
+
+    def _serialize(self, quote_request):
+        return Response(QuoteRequestSerializer(
+            quote_request,
+            context=self.get_serializer_context(),
+        ).data)
+
+    @action(detail=True, methods=["post"])
+    def messages(self, request, quote_number=None):
+        quote_request = self.get_object()
+        serializer = QuoteMessageCreateSerializer(
+            data=request.data,
+            context={**self.get_serializer_context(), "quote_request": quote_request},
+        )
+        serializer.is_valid(raise_exception=True)
+        return self._serialize(serializer.save())
+
+    @action(detail=True, methods=["post"])
+    def invoice(self, request, quote_number=None):
+        quote_request = self.get_object()
+        serializer = QuoteInvoiceSerializer(
+            data=request.data,
+            context={**self.get_serializer_context(), "quote_request": quote_request},
+        )
+        serializer.is_valid(raise_exception=True)
+        return self._serialize(serializer.save())
+
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, quote_number=None):
+        quote_request = QuoteService.update_status(
+            quote_request=self.get_object(),
+            new_status=QuoteRequest.Status.CLOSED,
+            user=request.user,
+        )
+        return self._serialize(quote_request)

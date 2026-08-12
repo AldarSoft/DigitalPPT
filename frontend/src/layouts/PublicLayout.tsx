@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { LayoutDashboard, LogIn, LogOut, Menu, RadioTower, Search, ShoppingBag, UserPlus, UserRound, X } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { NotificationMenu } from '../components/NotificationMenu'
 import { useAuth } from '../contexts/AuthContext'
 import { useCart } from '../contexts/CartContext'
 import { api } from '../lib/api'
@@ -30,7 +31,7 @@ function Header({ cartCount, siteName, user, authReady, onLogout }: {
     const location = useLocation();
     const navigate = useNavigate();
     const isProductPage = location.pathname.startsWith('/products/');
-    const isCommercePage = isProductPage || location.pathname === '/cart' || location.pathname === '/checkout';
+    const isCommercePage = isProductPage || location.pathname === '/cart' || location.pathname === '/checkout' || location.pathname === '/payment' || location.pathname === '/payment-preview';
     useEffect(() => {
         if (!accountOpen)
             return;
@@ -98,6 +99,7 @@ function Header({ cartCount, siteName, user, authReady, onLogout }: {
             <button className={tw("icon-button")} type="button" aria-label="Search" aria-expanded={searchOpen} onClick={() => setSearchOpen((open) => !open)}>
               <Search size={21}/>
             </button>
+            {user ? <NotificationMenu userId={user.id} variant="public" /> : null}
             <div className={tw("account-menu-wrap desktop-action")} ref={accountMenuRef}>
               <button className={tw("icon-button")} type="button" aria-label={user ? 'Open profile menu' : 'Open sign in menu'} aria-haspopup="menu" aria-expanded={accountOpen} disabled={!authReady} onClick={() => setAccountOpen((open) => !open)}>
                 <UserRound size={21}/>

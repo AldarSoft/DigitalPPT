@@ -30,6 +30,7 @@ INSTALLED_APPS = [
     "products",
     "orders",
     "quotes",
+    "payments",
     "core",
     'drf_spectacular',
 ]
@@ -152,9 +153,23 @@ REST_FRAMEWORK = {
         "quote": env("THROTTLE_QUOTE", default="10/hour"),
         "checkout": env("THROTTLE_CHECKOUT", default="20/hour"),
         "image_upload": env("THROTTLE_IMAGE_UPLOAD", default="30/hour"),
+        "payment_test": env("THROTTLE_PAYMENT_TEST", default="30/hour"),
     },
     "COERCE_DECIMAL_TO_STRING": False,
 }
+
+PAYMENTS_STOREFRONT_ENABLED = env("PAYMENTS_STOREFRONT_ENABLED", default=False, cast=bool)
+PAYMENTS_DEVELOPMENT_SIMULATOR = env("PAYMENTS_DEVELOPMENT_SIMULATOR", default=False, cast=bool)
+PAYMENT_SESSION_TTL_MINUTES = env("PAYMENT_SESSION_TTL_MINUTES", default=30, cast=int)
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", default="")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", default="")
+PAYPAL_CLIENT_ID = env("PAYPAL_CLIENT_ID", default="")
+PAYPAL_CLIENT_SECRET = env("PAYPAL_CLIENT_SECRET", default="")
+PAYPAL_WEBHOOK_ID = env("PAYPAL_WEBHOOK_ID", default="")
+QPAY_CLIENT_ID = env("QPAY_CLIENT_ID", default="")
+QPAY_CLIENT_SECRET = env("QPAY_CLIENT_SECRET", default="")
+QPAY_INVOICE_CODE = env("QPAY_INVOICE_CODE", default="")
+PAYMENT_BANK_TRANSFER_INSTRUCTIONS = env("PAYMENT_BANK_TRANSFER_INSTRUCTIONS", default="")
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),

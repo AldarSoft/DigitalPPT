@@ -8,6 +8,7 @@ import { useCart } from '../../../contexts/CartContext';
 import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api';
 import { fallbackProducts } from '../../../lib/fallback-data';
 import type { Product } from '../../../types';
+import { orderedProductImages, primaryProductImage } from '../../../lib/product-images';
 const defaultGallery = [
     {
         src: '/images/radio-510.png',
@@ -109,7 +110,7 @@ export function ProductDetailsPage() {
         });
     };
     const gallery = product.images.length
-        ? product.images.map((image) => ({
+        ? orderedProductImages(product.images).map((image) => ({
             src: mediaUrl(image.image_url),
             alt: image.alt_text || product.name,
         }))
@@ -285,13 +286,16 @@ export function ProductDetailsPage() {
             <Link to={`/shop?category=${product.category.slug}`}>View all {product.category.name} <ArrowUpRight size={17}/></Link>
           </div>
           {relatedProducts.length ? <div className={tw("related-grid")}>
-            {relatedProducts.map((relatedProduct) => (<Link className={tw("related-card")} to={`/products/${relatedProduct.slug}`} key={relatedProduct.id}>
-                <img src={mediaUrl(relatedProduct.images[0]?.image_url)} alt={relatedProduct.images[0]?.alt_text || relatedProduct.name}/>
+            {relatedProducts.map((relatedProduct) => {
+              const image = primaryProductImage(relatedProduct);
+              return (<Link className={tw("related-card")} to={`/products/${relatedProduct.slug}`} key={relatedProduct.id}>
+                <img src={mediaUrl(image?.image_url)} alt={image?.alt_text || relatedProduct.name}/>
                 <span>{relatedProduct.category.name.toUpperCase()}</span>
                 <h3>{relatedProduct.name}</h3>
                 <strong>${Number(relatedProduct.current_price).toFixed(2)}</strong>
                 <ArrowUpRight className={tw("related-arrow")} size={21}/>
-              </Link>))}
+              </Link>);
+            })}
           </div> : <p className={tw("related-empty")}>No other products are currently available in this category.</p>}
         </div>
       </section>

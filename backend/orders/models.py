@@ -7,8 +7,14 @@ from common.models import TimeStampedModel
 
 
 class Order(TimeStampedModel):
+    class Source(models.TextChoices):
+        DIRECT = "direct", "Direct checkout"
+        QUOTE = "quote", "Accepted quote"
+        ADMIN = "admin", "Admin created"
+
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"
+        SCHEDULED = "scheduled", "Scheduled"
         PROCESSING = "processing", "Processing"
         COMPLETED = "completed", "Completed"
         CANCELLED = "cancelled", "Cancelled"
@@ -27,6 +33,13 @@ class Order(TimeStampedModel):
         on_delete=models.SET_NULL,
         related_name="orders",
     )
+    source = models.CharField(
+        max_length=20,
+        choices=Source.choices,
+        default=Source.ADMIN,
+        db_index=True,
+    )
+    checkout_key = models.UUIDField(null=True, blank=True, unique=True)
     order_number = models.CharField(max_length=40, unique=True, blank=True)
     status = models.CharField(
         max_length=20,
@@ -57,6 +70,7 @@ class Order(TimeStampedModel):
         verbose_name_plural = "Orders"
         indexes = [
             models.Index(fields=["user", "status"]),
+            models.Index(fields=["source", "status"]),
             models.Index(fields=["quote_request", "status"]),
             models.Index(fields=["status", "created_at"]),
             models.Index(fields=["customer_email", "created_at"]),
@@ -77,6 +91,8 @@ class Order(TimeStampedModel):
 
         if self.status in {self.Status.COMPLETED, self.Status.CANCELLED}:
             target_status = QuoteRequest.Status.CLOSED
+        elif self.status == self.Status.PENDING:
+            target_status = QuoteRequest.Status.QUOTED
         else:
             target_status = QuoteRequest.Status.APPROVED
 

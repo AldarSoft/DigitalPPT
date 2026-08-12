@@ -68,6 +68,12 @@ def _admin_quote_url(quote_request) -> str:
     return f"{base_url}/admin/quotes?quote={quote_number}"
 
 
+def _customer_quote_url(quote_request) -> str:
+    base_url = settings.FRONTEND_URL.rstrip("/")
+    quote_number = quote(quote_request.quote_number, safe="")
+    return f"{base_url}/account?tab=quotes&quote={quote_number}"
+
+
 def _send_quote_customer_email(payload: dict) -> None:
     quote = _quote_context(payload)
     text_body = (
@@ -134,6 +140,104 @@ def _send_quote_webhook(payload: dict) -> None:
         raise RuntimeError("Power Automate did not accept the quote event.")
 
 
+def _send_quote_ready_email(payload: dict) -> None:
+    quote_request = _quote_context(payload)
+    account_url = f"{settings.FRONTEND_URL.rstrip('/')}/account?tab=quotes"
+    priced_items = "\n".join(
+        f"- {item.product_name} x {item.quantity}: {item.quoted_line_total}"
+        for item in quote_request.items.all()
+    )
+    text_body = (
+        f"Hello {quote_request.requester_contact_person},\n\n"
+        f"Invoice {quote_request.invoice_number} for quote {quote_request.quote_number} is ready.\n\n"
+        f"{priced_items}\n"
+        f"Shipping: {quote_request.quoted_shipping}\n"
+        f"Total: {quote_request.quoted_total}\n\n"
+        f"Download and pay the invoice in your account: {account_url}\n\n"
+        f"{settings.SITE_NAME}"
+    )
+    html_items = "".join(
+        f"<li>{escape(item.product_name)} &times; {item.quantity}: {item.quoted_line_total}</li>"
+        for item in quote_request.items.all()
+    )
+    html_body = (
+        f"<p>Hello {escape(quote_request.requester_contact_person)},</p>"
+        f"<p>Invoice <strong>{escape(quote_request.invoice_number or '')}</strong> for quote "
+        f"<strong>{escape(quote_request.quote_number)}</strong> is ready.</p>"
+        f"<ul>{html_items}</ul>"
+        f"<p><strong>Shipping:</strong> {quote_request.quoted_shipping}<br>"
+        f"<strong>Total:</strong> {quote_request.quoted_total}</p>"
+        f'<p><a href="{escape(account_url, quote=True)}">Download and pay invoice</a></p>'
+        f"<p>{escape(settings.SITE_NAME)}</p>"
+    )
+    attachments = []
+    if quote_request.invoice_pdf:
+        with quote_request.invoice_pdf.open("rb") as invoice_file:
+            attachments.append((
+                f"{quote_request.invoice_number}.pdf",
+                invoice_file.read(),
+                "application/pdf",
+            ))
+    send_application_email(
+        subject=f"Invoice ready: {quote_request.invoice_number}",
+        text_body=text_body,
+        html_body=html_body,
+        recipients=[quote_request.requester_email],
+        attachments=attachments,
+    )
+
+
+def _send_quote_message_email(payload: dict) -> None:
+    from quotes.models import QuoteMessage
+
+    message = QuoteMessage.objects.select_related("quote_request", "author").get(
+        pk=payload["message_id"]
+    )
+    quote_request = message.quote_request
+    sender_name = (
+        message.author.get_full_name().strip()
+        or message.author.email
+        if message.author
+        else message.get_sender_role_display()
+    )
+
+    if message.sender_role == QuoteMessage.SenderRole.ADMIN:
+        recipients = [quote_request.requester_email]
+        recipient_name = quote_request.requester_contact_person
+        portal_url = _customer_quote_url(quote_request)
+    else:
+        if not settings.QUOTE_NOTIFICATION_EMAIL:
+            return
+        recipients = [settings.QUOTE_NOTIFICATION_EMAIL]
+        recipient_name = "Sales team"
+        portal_url = _admin_quote_url(quote_request)
+
+    text_body = (
+        f"Hello {recipient_name},\n\n"
+        f"{sender_name} sent a new message about quote {quote_request.quote_number}.\n"
+        "Open the quote to read and reply in the negotiation history:\n"
+        f"{portal_url}\n\n"
+        "This email is a notification. Keep quote replies inside the portal so the "
+        "complete conversation stays with the quote.\n\n"
+        f"{settings.SITE_NAME}"
+    )
+    html_body = (
+        f"<p>Hello {escape(recipient_name)},</p>"
+        f"<p><strong>{escape(sender_name)}</strong> sent a new message about quote "
+        f"<strong>{escape(quote_request.quote_number)}</strong>.</p>"
+        f'<p><a href="{escape(portal_url, quote=True)}">Open quote conversation</a></p>'
+        "<p>This email is a notification. Keep quote replies inside the portal so "
+        "the complete conversation stays with the quote.</p>"
+        f"<p>{escape(settings.SITE_NAME)}</p>"
+    )
+    send_application_email(
+        subject=f"New quote message: {quote_request.quote_number}",
+        text_body=text_body,
+        html_body=html_body,
+        recipients=recipients,
+    )
+
+
 def _send_order_status_email(payload: dict) -> None:
     from orders.models import Order
 
@@ -182,6 +286,8 @@ HANDLERS = {
     NotificationJob.Kind.QUOTE_CUSTOMER_EMAIL: _send_quote_customer_email,
     NotificationJob.Kind.QUOTE_STAFF_EMAIL: _send_quote_staff_email,
     NotificationJob.Kind.QUOTE_WEBHOOK: _send_quote_webhook,
+    NotificationJob.Kind.QUOTE_READY_EMAIL: _send_quote_ready_email,
+    NotificationJob.Kind.QUOTE_MESSAGE_EMAIL: _send_quote_message_email,
     NotificationJob.Kind.ORDER_STATUS_EMAIL: _send_order_status_email,
     NotificationJob.Kind.ORDER_STATUS_WEBHOOK: _send_order_status_webhook,
 }
@@ -213,6 +319,14 @@ def publish_quote_created(quote_id: int) -> None:
         _dispatch(NotificationJob.Kind.QUOTE_STAFF_EMAIL, payload)
     if settings.POWER_AUTOMATE_ENABLED:
         _dispatch(NotificationJob.Kind.QUOTE_WEBHOOK, payload)
+
+
+def publish_quote_ready(quote_id: int) -> None:
+    _dispatch(NotificationJob.Kind.QUOTE_READY_EMAIL, {"quote_id": quote_id})
+
+
+def publish_quote_message(message_id: int) -> None:
+    _dispatch(NotificationJob.Kind.QUOTE_MESSAGE_EMAIL, {"message_id": message_id})
 
 
 def publish_order_status_changed(

@@ -144,6 +144,9 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             errors["sale_price"] = "Sale price cannot be negative."
         if price is not None and sale_price is not None and sale_price > price:
             errors["sale_price"] = "Sale price cannot be greater than the regular price."
+        images = attrs.get("images")
+        if images is not None and sum(bool(image.get("is_primary")) for image in images) > 1:
+            errors["images"] = "Only one product image can be primary."
         if errors:
             raise serializers.ValidationError(errors)
         return attrs
@@ -170,6 +173,8 @@ class ProductWriteSerializer(serializers.ModelSerializer):
     def _sync_children(self, product, images_data, specifications_data):
         if images_data is not None:
             product.images.all().delete()
+            if images_data and not any(image.get("is_primary") for image in images_data):
+                images_data[0]["is_primary"] = True
             ProductImage.objects.bulk_create(
                 [ProductImage(product=product, **image) for image in images_data]
             )
