@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom'
 import { tw } from '../../../lib/tailwind-styles'
+import { orderSourceLabel, orderStatusKey, orderStatusLabel } from '../../../lib/status-labels'
 import type { Order } from '../../../types'
 
 export function OrdersTable({
@@ -19,6 +20,7 @@ export function OrdersTable({
         <thead>
           <tr>
             <th>Order</th>
+            <th>Order type</th>
             <th>Date</th>
             <th>Status</th>
             <th>Total</th>
@@ -28,16 +30,17 @@ export function OrdersTable({
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={5}>Loading orders...</td>
+              <td colSpan={6}>Loading orders...</td>
             </tr>
           ) : orders.length ? (
             orders.map((order) => (
               <tr className={tw('record-row')} key={order.id} onDoubleClick={() => onSelect?.(order)}>
-                <td>{order.order_number}</td>
+                <td><button className={tw('view-order')} type="button" onClick={() => onSelect?.(order)}>{order.order_number}</button></td>
+                <td>{orderSourceLabel(order.source)}</td>
                 <td>{new Date(order.created_at).toLocaleDateString()}</td>
                 <td>
-                  <span className={tw(`status status-${order.status}`)}>
-                    {order.status}
+                  <span className={tw(`status status-${orderStatusKey(order.status)}`)}>
+                    {orderStatusLabel(order.status)}
                   </span>
                 </td>
                 <td>${Number(order.total).toFixed(2)}</td>
@@ -46,7 +49,7 @@ export function OrdersTable({
             ))
           ) : (
             <tr>
-              <td colSpan={5}>No orders yet.</td>
+              <td colSpan={6}>No orders yet.</td>
             </tr>
           )}
         </tbody>

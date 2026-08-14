@@ -3,6 +3,7 @@ import { ArrowRight, FileText, LockKeyhole, Minus, Plus, ShoppingBag } from 'luc
 import { Link } from 'react-router-dom'
 import { useCart } from '../../../contexts/CartContext'
 import { api, mediaUrl } from '../../../lib/api'
+import { unitPriceForQuantity } from '../../../lib/pricing'
 import { tw } from '../../../lib/tailwind-styles'
 import { primaryProductImage } from '../../../lib/product-images'
 
@@ -31,6 +32,8 @@ export function CartPage() {
                 {cart.items.map(({ product, quantity }) => {
                 const image = primaryProductImage(product);
                 const availableForPayment = product.inventory_quantity >= quantity;
+                const unitPrice = unitPriceForQuantity(product, quantity);
+                const bulkPriceActive = Boolean(product.bulk_minimum_quantity && product.bulk_unit_price !== null && quantity >= product.bulk_minimum_quantity);
                 const availabilityLabel = availableForPayment
                   ? `In stock - ${product.inventory_quantity} ready`
                   : `${product.inventory_quantity} in stock - quote required`;
@@ -53,7 +56,8 @@ export function CartPage() {
                         </button>
                       </div>
                       <div className={tw("cart-item-price")}>
-                        <strong>${(Number(product.current_price) * quantity).toFixed(2)}</strong>
+                        <small className={tw(`cart-item-unit-price ${bulkPriceActive ? 'bulk' : ''}`)}>${unitPrice.toFixed(2)} each{bulkPriceActive ? ' - Bulk price' : ''}</small>
+                        <strong>${(unitPrice * quantity).toFixed(2)}</strong>
                         <button type="button" onClick={() => cart.remove(product.id)}>Remove</button>
                       </div>
                     </article>);
@@ -74,9 +78,9 @@ export function CartPage() {
             </dl>
             {paymentsEnabled && canPurchase ? <Link className={tw("primary-action")} to="/payment">
               <LockKeyhole size={17}/>Proceed to payment <ArrowRight size={18}/>
-            </Link> : paymentsEnabled ? <span className={tw("primary-action disabled")} aria-disabled="true" title={canContinue ? 'Requested quantity exceeds available stock. Request a quote instead.' : undefined}>
-              <LockKeyhole size={17}/>{canContinue ? 'Payment unavailable - request quote' : 'Proceed to payment'}
-            </span> : <button className={tw("payment-coming-soon-button")} type="button" disabled aria-disabled="true">
+            </Link> : paymentsEnabled ? <button className={tw("primary-action disabled")} type="button" disabled title={canContinue ? 'Requested quantity exceeds available stock. Request a quote instead.' : undefined}>
+              <LockKeyhole size={17}/>Proceed to payment <ArrowRight size={18}/>
+            </button> : <button className={tw("payment-coming-soon-button")} type="button" disabled aria-disabled="true">
               <LockKeyhole size={17}/>Online payment coming soon
             </button>}
             {canContinue ? <Link className={tw("payment-order-button")} to="/checkout">

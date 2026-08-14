@@ -7,27 +7,27 @@ import { ProductThumbnail } from '../../../components/ProductThumbnail'
 import { StatusTimeline } from '../../../components/StatusTimeline'
 import { tw } from '../../../lib/tailwind-styles'
 import { api, ApiError, mediaUrl } from '../../../lib/api'
+import { orderSourceLabel, orderStatusKey, orderStatusLabel, quoteStatusKey, quoteStatusLabel } from '../../../lib/status-labels'
 import type { Order, QuoteRequest } from '../../../types'
 
 const orderSteps = [
   { value: 'pending', label: 'Pending' },
-  { value: 'scheduled', label: 'Scheduled' },
   { value: 'processing', label: 'Processing' },
   { value: 'completed', label: 'Completed' },
 ] as const
 
 const quoteSteps = [
-  { value: 'new', label: 'Submitted' },
-  { value: 'reviewing', label: 'Negotiating' },
-  { value: 'quoted', label: 'Invoice sent' },
-  { value: 'approved', label: 'Converted' },
+  { value: 'new', label: 'Pending' },
+  { value: 'reviewing', label: 'Processing' },
+  { value: 'quoted', label: 'Processing' },
+  { value: 'approved', label: 'Completed' },
 ] as const
 
 export type AccountRecord =
   | { kind: 'order'; value: Order }
   | { kind: 'quote'; value: QuoteRequest }
 
-export function AccountRecordDialog({ record, onClose, paymentsEnabled = false }: { record: AccountRecord; onClose: () => void; paymentsEnabled?: boolean }) {
+export function AccountRecordDialog({ record, onClose, onLinkedQuoteSelect, paymentsEnabled = false }: { record: AccountRecord; onClose: () => void; onLinkedQuoteSelect?: (quoteNumber: string) => void; paymentsEnabled?: boolean }) {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -47,18 +47,19 @@ export function AccountRecordDialog({ record, onClose, paymentsEnabled = false }
           <div><p>{isOrder ? 'ORDER DETAILS' : 'QUOTE REQUEST'}</p><h2 id="account-record-title">{title}</h2></div>
           <button type="button" aria-label="Close details" onClick={onClose}><X size={21} /></button>
         </header>
-        {isOrder ? <ClientOrderDetails order={record.value} paymentsEnabled={paymentsEnabled} /> : <ClientQuoteDetails initialQuote={record.value} paymentsEnabled={paymentsEnabled} />}
+        {isOrder ? <ClientOrderDetails order={record.value} paymentsEnabled={paymentsEnabled} onLinkedQuoteSelect={onLinkedQuoteSelect} /> : <ClientQuoteDetails initialQuote={record.value} paymentsEnabled={paymentsEnabled} />}
       </section>
     </div>
   )
 }
 
-function ClientOrderDetails({ order, paymentsEnabled }: { order: Order; paymentsEnabled: boolean }) {
+function ClientOrderDetails({ order, paymentsEnabled, onLinkedQuoteSelect }: { order: Order; paymentsEnabled: boolean; onLinkedQuoteSelect?: (quoteNumber: string) => void }) {
   return (<>
     <div className={tw('record-summary')}>
-      <div><span>Status</span><strong className={tw(`status status-${order.status}`)}>{order.status}</strong></div>
+      <div><span>Status</span><strong className={tw(`status status-${orderStatusKey(order.status)}`)}>{orderStatusLabel(order.status)}</strong></div>
       <div><span>Placed</span><strong>{new Date(order.created_at).toLocaleDateString()}</strong></div>
-      {order.quote_number ? <div><span>Quote</span><strong>{order.quote_number}</strong></div> : null}
+      <div><span>Order type</span><strong>{orderSourceLabel(order.source)}</strong></div>
+      {order.quote_number ? <div><span>Quote</span><button className={tw('view-order')} type="button" onClick={() => onLinkedQuoteSelect?.(order.quote_number!)}>{order.quote_number}</button></div> : null}
     </div>
     <section className={tw('record-section')}>
       <h3>Items</h3>
@@ -70,7 +71,7 @@ function ClientOrderDetails({ order, paymentsEnabled }: { order: Order; payments
     <section className={tw('record-section')}><h3>Delivery address</h3><p>{order.shipping_address}<br />{[order.shipping_city, order.shipping_state, order.shipping_postal_code].filter(Boolean).join(', ')}<br />{order.shipping_country}</p></section>
     {paymentsEnabled && order.status === 'pending' ? <Link className={tw('record-payment-link')} to={`/payment?order=${encodeURIComponent(order.order_number)}`}><CreditCard size={17} />Pay this order</Link> : null}
     {order.notes ? <section className={tw('record-section')}><h3>Notes</h3><p>{order.notes}</p></section> : null}
-    <StatusTimeline noun="Order" currentStatus={order.status} initialStatus="pending" createdAt={order.created_at} updatedAt={order.updated_at} steps={orderSteps} />
+    <StatusTimeline noun="Order" currentStatus={orderStatusKey(order.status)} initialStatus="pending" createdAt={order.created_at} updatedAt={order.updated_at} steps={orderSteps} />
   </>)
 }
 
@@ -122,7 +123,7 @@ function ClientQuoteDetails({ initialQuote, paymentsEnabled }: { initialQuote: Q
   const invoiceSent = Boolean(quote.invoiced_at && quote.quoted_total)
   return (<>
     <div className={tw('record-summary')}>
-      <div><span>Status</span><strong className={tw(`status status-${quote.status}`)}>{quoteStatusLabel(quote.status)}</strong></div>
+      <div><span>Status</span><strong className={tw(`status status-${quoteStatusKey(quote.status)}`)}>{quoteStatusLabel(quote.status)}</strong></div>
       <div><span>Submitted</span><strong>{new Date(quote.created_at).toLocaleDateString()}</strong></div>
       {quote.order_number ? <div><span>Order</span><strong>{quote.order_number}</strong></div> : null}
     </div>
@@ -142,8 +143,4 @@ function ClientQuoteDetails({ initialQuote, paymentsEnabled }: { initialQuote: Q
     {quote.status === 'new' || quote.status === 'reviewing' ? <section className="mt-5 border-t border-border-soft pt-5">{!confirmingCancel ? <button className="inline-flex min-h-10 items-center gap-2 rounded-control border border-danger bg-white px-4 text-sm font-bold text-danger" type="button" onClick={() => setConfirmingCancel(true)}><AlertTriangle size={17} />Cancel quote request</button> : <div className={tw('quote-close-alert')} role="alertdialog" aria-labelledby="cancel-client-quote-title" aria-describedby="cancel-client-quote-description"><AlertTriangle size={20} /><div><strong id="cancel-client-quote-title">Cancel this quote request?</strong><p id="cancel-client-quote-description">This ends the negotiation permanently. The quote cannot be reopened.</p></div><div><button type="button" onClick={() => setConfirmingCancel(false)}>Keep negotiating</button><button type="button" disabled={cancelQuote.isPending} onClick={() => cancelQuote.mutate()}>{cancelQuote.isPending ? 'Cancelling...' : 'Cancel quote'}</button></div></div>}</section> : null}
     <StatusTimeline noun="Quote request" currentStatus={quote.status} initialStatus="new" createdAt={quote.created_at} updatedAt={quote.updated_at} steps={quoteSteps} />
   </>)
-}
-
-function quoteStatusLabel(status: QuoteRequest['status']) {
-  return quoteSteps.find((step) => step.value === status)?.label ?? status
 }

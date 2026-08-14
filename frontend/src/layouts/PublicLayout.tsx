@@ -66,13 +66,6 @@ function Header({ cartCount, siteName, user, authReady, onLogout }: {
         navigate(`/shop?search=${encodeURIComponent(term)}`);
     };
     return (<>
-      <div className={tw("announcement")}>
-        <span>{isCommercePage ? 'FIELD-READY GEAR' : 'GLOBAL RADIO SOLUTIONS'}</span>
-        <i />
-        <span>QUOTE SUPPORT</span>
-        <i />
-        <span>EXPERT SUPPORT</span>
-      </div>
       <header className={tw("site-header")}>
         <div className={tw("shell nav-shell")}>
           <Logo siteName={siteName} />

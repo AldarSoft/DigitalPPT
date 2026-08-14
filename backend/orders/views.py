@@ -1,8 +1,10 @@
+from django.db.models import Exists, OuterRef
 from rest_framework import status, viewsets
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
 from orders.models import Order
+from payments.models import PaymentAttempt
 from orders.serializers import (
     CheckoutSerializer,
     OrderCreateSerializer,
@@ -36,8 +38,28 @@ class OrderViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         status_value = self.request.query_params.get("status")
-        if status_value:
+        display_status = self.request.query_params.get("display_status")
+        display_statuses = {
+            "pending": [Order.Status.PENDING],
+            "processing": [Order.Status.SCHEDULED, Order.Status.PROCESSING],
+            "completed": [Order.Status.COMPLETED],
+            "cancelled": [Order.Status.CANCELLED],
+        }
+        if display_status in display_statuses:
+            queryset = queryset.filter(status__in=display_statuses[display_status])
+        elif status_value:
             queryset = queryset.filter(status=status_value)
+        else:
+            successful_payment = PaymentAttempt.objects.filter(
+                order_id=OuterRef("pk"),
+                status=PaymentAttempt.Status.SUCCEEDED,
+            )
+            queryset = queryset.annotate(
+                has_successful_payment=Exists(successful_payment)
+            ).exclude(
+                status=Order.Status.CANCELLED,
+                has_successful_payment=False,
+            )
 
         if self.request.user and self.request.user.is_staff:
             return queryset

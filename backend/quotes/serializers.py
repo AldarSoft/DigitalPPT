@@ -13,17 +13,35 @@ from quotes.services import QuoteService
 class QuoteRequestItemSerializer(serializers.ModelSerializer):
     product_slug = serializers.CharField(source="product.slug", read_only=True)
     image_url = serializers.SerializerMethodField()
+    suggested_unit_price = serializers.SerializerMethodField()
+    bulk_price_applied = serializers.SerializerMethodField()
 
     class Meta:
         model = QuoteRequestItem
         fields = (
             "id", "product", "product_slug", "product_name", "sku", "quantity",
             "specifications", "quoted_unit_price", "quoted_line_total", "image_url",
+            "suggested_unit_price", "bulk_price_applied",
         )
 
     def get_image_url(self, obj) -> str:
         image = obj.product.images.order_by("-is_primary", "sort_order", "id").first() if obj.product else None
         return image.image_url if image else ""
+
+    def get_bulk_price_applied(self, obj) -> bool:
+        product = obj.product
+        return bool(
+            product
+            and product.bulk_minimum_quantity
+            and product.bulk_unit_price is not None
+            and obj.quantity >= product.bulk_minimum_quantity
+        )
+
+    def get_suggested_unit_price(self, obj):
+        product = obj.product
+        if not product:
+            return None
+        return product.price_for_quantity(obj.quantity)
 
 
 class QuoteMessageSerializer(serializers.ModelSerializer):

@@ -168,16 +168,6 @@ class QuoteService:
         locked = QuoteService._queryset().select_for_update().get(pk=quote_request.pk)
         if locked.status not in {QuoteRequest.Status.REVIEWING, QuoteRequest.Status.QUOTED}:
             raise ValidationError({"status": "Only a negotiated or pending invoice can be sent."})
-        roles = set(locked.messages.values_list("sender_role", flat=True))
-        required_roles = {
-            QuoteMessage.SenderRole.ADMIN,
-            QuoteMessage.SenderRole.CUSTOMER,
-        }
-        if not required_roles.issubset(roles):
-            raise ValidationError({
-                "status": "Admin and customer must each confirm the negotiation in messages before invoicing."
-            })
-
         from core.models import SiteSetting
         from orders.models import Order
         from payments.models import PaymentAttempt

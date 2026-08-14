@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from 'react'
 import { toast } from 'sonner'
+import { unitPriceForQuantity } from '../lib/pricing'
 import type { CartItem, Product } from '../types'
 
 interface CartContextValue {
@@ -40,7 +41,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     items,
     count: items.reduce((total, item) => total + item.quantity, 0),
     subtotal: items.reduce(
-      (total, item) => total + Number(item.product.current_price) * item.quantity,
+      (total, item) => total + unitPriceForQuantity(item.product, item.quantity) * item.quantity,
       0,
     ),
     add(product, quantity = 1) {

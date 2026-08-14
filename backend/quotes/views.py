@@ -48,8 +48,19 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         status_value = self.request.query_params.get("status")
-        if status_value:
+        display_status = self.request.query_params.get("display_status")
+        display_statuses = {
+            "pending": [QuoteRequest.Status.NEW],
+            "processing": [QuoteRequest.Status.REVIEWING, QuoteRequest.Status.QUOTED],
+            "completed": [QuoteRequest.Status.APPROVED],
+            "cancelled": [QuoteRequest.Status.CLOSED],
+        }
+        if display_status in display_statuses:
+            queryset = queryset.filter(status__in=display_statuses[display_status])
+        elif status_value:
             queryset = queryset.filter(status=status_value)
+        else:
+            queryset = queryset.exclude(status=QuoteRequest.Status.CLOSED)
 
         user = self.request.user
         if user and user.is_staff:

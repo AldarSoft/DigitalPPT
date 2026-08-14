@@ -23,6 +23,13 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "state",
             "country",
             "postal_code",
+            "use_different_shipping_address",
+            "shipping_address_line_1",
+            "shipping_address_line_2",
+            "shipping_city",
+            "shipping_state",
+            "shipping_country",
+            "shipping_postal_code",
         )
 
 

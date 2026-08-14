@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { BarChart3, Boxes, Download, Percent, Search, ShoppingCart } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { tw } from '../../../lib/tailwind-styles'
+import { orderStatusKey } from '../../../lib/status-labels'
 import { AdminSelect } from '../components/AdminSelect'
 import { AdminErrorState } from '../components/AdminErrorState'
 import { Metric } from '../components/Metric'
@@ -19,7 +20,7 @@ export function AdminAnalyticsPage() {
     const revenue = completed.reduce((total, order) => total + Number(order.total), 0);
     const average = completed.length ? revenue / completed.length : 0;
     const filtered = data.orderList.filter((order) => (!search || `${order.order_number} ${order.customer_first_name} ${order.customer_last_name}`.toLowerCase().includes(search.toLowerCase())) &&
-        (!status || order.status === status));
+        (!status || orderStatusKey(order.status) === status));
     const chartData = (() => {
         const months = Array.from({ length: 6 }, (_, offset) => {
             const date = new Date();
@@ -73,7 +74,7 @@ export function AdminAnalyticsPage() {
         </div>
       </section>
       <section className={tw("admin-panel analytics-orders")}>
-        <div className={tw("orders-toolbar")}><h2>Performance overview</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => setSearch(event.target.value)}/></div><AdminSelect aria-label="Filter analytics by order status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All status</option><option value="pending">Pending</option><option value="scheduled">Scheduled</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
+        <div className={tw("orders-toolbar")}><h2>Performance overview</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => setSearch(event.target.value)}/></div><AdminSelect aria-label="Filter analytics by order status" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All status</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
         <OrderRows orders={filtered.slice(0, 10)} compact/>
       </section>
     </main>);

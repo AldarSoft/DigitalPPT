@@ -8,8 +8,10 @@ import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
 import { useCart } from '../../../contexts/CartContext'
 import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api'
+import { unitPriceForQuantity } from '../../../lib/pricing'
+import { orderStatusLabel } from '../../../lib/status-labels'
 import { tw } from '../../../lib/tailwind-styles'
-import type { BillingDetails, Order, PaymentAttempt, PaymentProviderCode } from '../../../types'
+import type { BillingDetails, Order, PaymentAttempt, PaymentProviderCode, User } from '../../../types'
 
 const billingSchema = z.object({
   email: z.email('Enter a valid email address'),
@@ -25,6 +27,23 @@ const billingSchema = z.object({
 })
 
 type BillingForm = z.infer<typeof billingSchema>
+
+function billingDefaults(user: User | null): BillingForm {
+  const profile = user?.profile
+  const shipping = profile?.use_different_shipping_address
+  return {
+    email: user?.email ?? '',
+    first_name: user?.first_name ?? '',
+    last_name: user?.last_name ?? '',
+    phone: user?.phone_number ?? '',
+    company: profile?.company_name ?? '',
+    address: shipping ? profile?.shipping_address_line_1 ?? '' : profile?.address_line_1 ?? '',
+    city: shipping ? profile?.shipping_city ?? '' : profile?.city ?? '',
+    state: shipping ? profile?.shipping_state ?? '' : profile?.state ?? '',
+    postal_code: shipping ? profile?.shipping_postal_code ?? '' : profile?.postal_code ?? '',
+    country: shipping ? profile?.shipping_country ?? '' : profile?.country ?? '',
+  }
+}
 
 const providerContent = {
   stripe: { title: 'Credit or debit card', short: 'Stripe Checkout', icon: CreditCard, message: 'Continue to Stripe Checkout to enter card details securely.' },
@@ -80,16 +99,14 @@ export function PaymentPage() {
   const SelectedProviderIcon = selectedProvider.icon
 
   const { register, handleSubmit, reset, setError, formState: { errors } } = useForm<BillingForm>({
-    defaultValues: {
-      email: auth.user?.email ?? '', first_name: auth.user?.first_name ?? '', last_name: auth.user?.last_name ?? '',
-      phone: auth.user?.phone_number ?? '', company: auth.user?.profile.company_name ?? '', address: auth.user?.profile.address_line_1 ?? '',
-      city: auth.user?.profile.city ?? '', state: auth.user?.profile.state ?? '',
-      postal_code: auth.user?.profile.postal_code ?? '', country: auth.user?.profile.country ?? '',
-    },
+    defaultValues: billingDefaults(auth.user),
   })
 
   useEffect(() => {
-    if (!order) return
+    if (!order) {
+      reset(billingDefaults(auth.user))
+      return
+    }
     reset({
       email: order.customer_email || auth.user?.email || '', first_name: order.customer_first_name || auth.user?.first_name || '',
       last_name: order.customer_last_name || auth.user?.last_name || '', phone: order.customer_phone || auth.user?.phone_number || '', company: order.company_name || auth.user?.profile.company_name || '',
@@ -153,7 +170,7 @@ export function PaymentPage() {
   if (statusQuery.isError || returnedSessionQuery.isError || orderQuery.isError) return <main className={tw('route-message')}><AlertTriangle size={34} /><h1>Payment is unavailable</h1><p>Confirm the backend is running and your account session is active.</p></main>
   if (!statusQuery.data?.storefront_enabled) return <main className={tw('route-message')}><CreditCard size={34} /><h1>Online payment is coming soon</h1><p>Your quote and order history remain available in your account.</p><Link className={tw('primary-action')} to="/account">Return to account</Link></main>
 
-  if (activeSession?.status === 'succeeded') return <main className={tw('client-payment-complete')}><span><Check size={28} /></span><p className={tw('eyebrow')}>{activeSession.is_test ? 'TEST PAYMENT CONFIRMED' : 'PAYMENT CONFIRMED'}</p><h1>Payment received.</h1><p>Payment <strong>{activeSession.reference}</strong> was confirmed for order <strong>{activeSession.order_number}</strong>. The order is now {activeSession.order_status}.</p><div><Link to="/account?tab=orders">View your orders</Link></div></main>
+  if (activeSession?.status === 'succeeded') return <main className={tw('client-payment-complete')}><span><Check size={28} /></span><p className={tw('eyebrow')}>{activeSession.is_test ? 'TEST PAYMENT CONFIRMED' : 'PAYMENT CONFIRMED'}</p><h1>Payment received.</h1><p>Payment <strong>{activeSession.reference}</strong> was confirmed for order <strong>{activeSession.order_number}</strong>. The order is now {orderStatusLabel(activeSession.order_status)}.</p><div><Link to="/account?tab=orders">View your orders</Link></div></main>
 
   if (activeSession && ['failed', 'expired', 'cancelled'].includes(activeSession.status)) return <main className={tw('client-payment-complete client-payment-failed')}><span><X size={28} /></span><p className={tw('eyebrow')}>PAYMENT NOT COMPLETED</p><h1>{activeSession.status === 'expired' ? 'The payment session expired.' : 'The payment was declined.'}</h1><p>{activeSession.failure_message || 'No charge was made. You can return and start a new secure payment session.'}</p><div><button type="button" onClick={resetAttempt}>Try again</button><Link to="/account?tab=orders">View your orders</Link></div></main>
 
@@ -197,7 +214,7 @@ export function PaymentPage() {
         <aside className={tw('client-payment-summary')}>
           <h2>Your order</h2>
           <div className={tw('client-payment-order')}>
-            {order ? order.items.map((item) => <div key={item.id}><img src={mediaUrl(item.image_url)} alt="" /><span>{item.product_name}<small>{item.sku || 'Product'} - Qty {item.quantity}</small></span><strong>{money(item.line_total)}</strong></div>) : cart.items.map(({ product, quantity }) => <div key={product.id}><img src={mediaUrl(product.images?.[0]?.image_url)} alt="" /><span>{product.name}<small>{product.sku || 'Product'} - Qty {quantity}</small></span><strong>{money(Number(product.current_price) * quantity)}</strong></div>)}
+            {order ? order.items.map((item) => <div key={item.id}><img src={mediaUrl(item.image_url)} alt="" /><span>{item.product_name}<small>{item.sku || 'Product'} - Qty {item.quantity}</small></span><strong>{money(item.line_total)}</strong></div>) : cart.items.map(({ product, quantity }) => <div key={product.id}><img src={mediaUrl(product.images?.[0]?.image_url)} alt="" /><span>{product.name}<small>{product.sku || 'Product'} - Qty {quantity}</small></span><strong>{money(unitPriceForQuantity(product, quantity) * quantity)}</strong></div>)}
           </div>
           <dl className={tw('client-payment-totals')}><div><dt>Subtotal</dt><dd>{money(order?.subtotal ?? cart.subtotal)}</dd></div><div><dt>Shipping</dt><dd>{order ? money(order.shipping_fee) : money(0)}</dd></div><div><dt>Total</dt><dd>{money(order?.total ?? cart.subtotal)}</dd></div></dl>
           <button className={tw('client-payment-submit')} type="submit" disabled={createSession.isPending || !enabledProviders.length}><LockKeyhole size={16} />{createSession.isPending ? 'Creating order...' : `Place order with ${selectedProvider.title}`}</button>

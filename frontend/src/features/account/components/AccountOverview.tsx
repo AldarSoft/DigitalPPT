@@ -31,7 +31,7 @@ export function AccountOverview({
         <article>
           <Search size={23} />
           <strong>{inReview}</strong>
-          <span>In review</span>
+          <span>Processing</span>
         </article>
         <article>
           <Package size={23} />
@@ -60,8 +60,8 @@ export function AccountOverview({
               .filter(Boolean)
               .join(", ")}
           </p>
-          <button type="button" onClick={() => onTab("addresses")}>
-            Edit address
+          <button type="button" onClick={() => onTab("settings")}>
+            Edit account settings
           </button>
         </section>
         <section className={tw("account-panel")}>

@@ -75,6 +75,8 @@ class Product(ActiveModel):
     price = models.DecimalField(max_digits=12, decimal_places=2)
     cost_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     sale_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    bulk_minimum_quantity = models.PositiveIntegerField(null=True, blank=True)
+    bulk_unit_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     inventory_quantity = models.PositiveIntegerField(default=0)
     status = models.CharField(
         max_length=20,
@@ -111,6 +113,15 @@ class Product(ActiveModel):
     @property
     def current_price(self):
         return self.sale_price or self.price
+
+    def price_for_quantity(self, quantity):
+        if (
+            self.bulk_minimum_quantity
+            and self.bulk_unit_price is not None
+            and quantity >= self.bulk_minimum_quantity
+        ):
+            return self.bulk_unit_price
+        return self.current_price
 
     def __str__(self):
         return self.name

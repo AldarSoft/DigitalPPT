@@ -19,7 +19,7 @@ export function ProductCard({ product }: {
         <p>{product.category.name.toUpperCase()}</p>
         <h3>{product.name}</h3>
         <span className={tw(product.inventory_quantity > 0 ? 'stock-ok' : 'stock-out')}>
-          <i />{product.inventory_quantity > 0 ? 'In stock' : 'Out of stock'}
+          <i />{product.inventory_quantity > 0 ? `In stock - ${product.inventory_quantity}` : 'Out of stock'}
         </span>
         <div>
           <strong>${Number(product.current_price).toFixed(2)}</strong>

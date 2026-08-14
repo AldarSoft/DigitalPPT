@@ -11,7 +11,6 @@ import { AdminOrdersPage } from '../features/admin/pages/AdminOrdersPage'
 import { AdminPaymentsPage } from '../features/admin/pages/AdminPaymentsPage'
 import { AdminProductsPage } from '../features/admin/pages/AdminProductsPage'
 import { AdminQuotesPage } from '../features/admin/pages/AdminQuotesPage'
-import { AdminPromotionsPage } from '../features/admin/pages/AdminPromotionsPage'
 import { AdminSiteSettingsPage } from '../features/admin/pages/AdminSiteSettingsPage'
 import { LoginPage } from '../features/auth/pages/LoginPage'
 import { RegisterPage } from '../features/auth/pages/RegisterPage'
@@ -65,7 +64,6 @@ export function AppRouter() {
             <Route path="payments" element={<AdminPaymentsPage />} />
             <Route path="quotes" element={<AdminQuotesPage />} />
             <Route path="customers" element={<AdminCustomersPage />} />
-            <Route path="promotions" element={<AdminPromotionsPage />} />
             <Route path="inventory" element={<AdminInventoryPage />} />
             <Route path="analytics" element={<AdminAnalyticsPage />} />
             <Route path="site-settings" element={<AdminSiteSettingsPage />} />

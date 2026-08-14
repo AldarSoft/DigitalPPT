@@ -64,7 +64,9 @@ class OrderService:
         for item_data in items_data:
             product = item_data.get("product")
             unit_price = item_data.get("unit_price") or (
-                product.current_price if product else Decimal("0.00")
+                product.price_for_quantity(item_data["quantity"])
+                if product
+                else Decimal("0.00")
             )
             line_total = unit_price * item_data["quantity"]
             subtotal += line_total
@@ -130,14 +132,15 @@ class OrderService:
                     f"Only {product.inventory_quantity} units are available."
                 )
                 continue
-            line_total = product.current_price * quantity
+            unit_price = product.price_for_quantity(quantity)
+            line_total = unit_price * quantity
             subtotal += line_total
             prepared_items.append(
                 OrderItem(
                     product=product,
                     product_name=product.name,
                     sku=product.sku,
-                    unit_price=product.current_price,
+                    unit_price=unit_price,
                     quantity=quantity,
                     line_total=line_total,
                 )
@@ -177,6 +180,15 @@ class OrderService:
             return locked_order
 
         previous_status = locked_order.status
+
+        if new_status == Order.Status.CANCELLED:
+            from payments.models import PaymentAttempt
+
+            if PaymentAttempt.objects.filter(
+                order=locked_order,
+                status=PaymentAttempt.Status.SUCCEEDED,
+            ).exists():
+                raise ValidationError({"status": "Paid orders cannot be cancelled."})
 
         allowed = OrderService.ALLOWED_STATUS_TRANSITIONS.get(locked_order.status, set())
         if new_status not in allowed:

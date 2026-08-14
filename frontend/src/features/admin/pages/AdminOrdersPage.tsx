@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Boxes, Download, Package, Search, ShoppingCart, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api, ApiError, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
+import { orderStatusKey, orderStatusLabel } from '../../../lib/status-labels'
 import type { Order } from '../../../types'
 import { AdminSelect } from '../components/AdminSelect'
 import { AdminErrorState } from '../components/AdminErrorState'
@@ -17,7 +19,6 @@ import { exportAdminReport } from '../utils/exportAdminReport'
 const PAGE_SIZE = 10
 const ORDER_STEPS = [
     { value: 'pending', label: 'Pending' },
-    { value: 'scheduled', label: 'Scheduled' },
     { value: 'processing', label: 'Processing' },
     { value: 'completed', label: 'Completed' },
 ] as const
@@ -28,10 +29,6 @@ const ORDER_TRANSITIONS: Record<Order['status'], Order['status'][]> = {
     processing: ['completed', 'cancelled'],
     completed: [],
     cancelled: [],
-}
-
-const STATUS_LABELS: Record<Order['status'], string> = {
-    pending: 'Pending', scheduled: 'Scheduled', processing: 'Processing', completed: 'Completed', cancelled: 'Cancelled',
 }
 
 function orderUpdateError(error: Error) {
@@ -46,7 +43,11 @@ function orderUpdateError(error: Error) {
 
 function availableTransitions(order: Order) {
     const shortage = order.items.some((item) => item.available_stock !== null && item.quantity > item.available_stock)
-    return ORDER_TRANSITIONS[order.status].filter((status) => !shortage || !['processing', 'completed'].includes(status))
+    return ORDER_TRANSITIONS[order.status].filter((status) => (
+        (!shortage || !['processing', 'completed'].includes(status))
+        && (!order.is_paid || status !== 'cancelled')
+        && orderStatusKey(status) !== orderStatusKey(order.status)
+    ))
 }
 
 export function AdminOrdersPage() {
@@ -61,7 +62,7 @@ export function AdminOrdersPage() {
       queryFn: () => {
         const query = new URLSearchParams();
         if (search) query.set('search', search);
-        if (status) query.set('status', status);
+        if (status) query.set('display_status', status);
         query.set('ordering', '-created_at');
         query.set('page', String(page));
         query.set('page_size', String(PAGE_SIZE));
@@ -91,12 +92,12 @@ export function AdminOrdersPage() {
       <div className={tw("admin-title-row")}><div><p className={tw("admin-breadcrumb")}>Workspace / Orders</p><h1>Order management</h1><p>Track order status and customer fulfillment.</p></div><button type="button" onClick={() => void exportAdminReport({ kind: 'orders', rows: orders })}><Download size={18}/>Export page</button></div>
       <section className={tw("admin-stats order-stats")}>
         <Metric label="Total orders" value={String(orderTotal)} icon={ShoppingCart}/>
-        <Metric label="Pending on page" value={String(orders.filter((order) => order.status === 'pending').length)} icon={Package}/>
-        <Metric label="Completed on page" value={String(orders.filter((order) => order.status === 'completed').length)} icon={Boxes}/>
-        <Metric label="Cancelled on page" value={String(orders.filter((order) => order.status === 'cancelled').length)} icon={X}/>
+        <Metric label="Pending on page" value={String(orders.filter((order) => orderStatusKey(order.status) === 'pending').length)} icon={Package}/>
+        <Metric label="Completed on page" value={String(orders.filter((order) => orderStatusKey(order.status) === 'completed').length)} icon={Boxes}/>
+        <Metric label="Cancelled on page" value={String(orders.filter((order) => orderStatusKey(order.status) === 'cancelled').length)} icon={X}/>
       </section>
       <section className={tw("admin-panel admin-section-gap")}>
-        <div className={tw("orders-toolbar")}><h2>Recent orders</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }}/></div><AdminSelect aria-label="Filter by order status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">All status</option><option value="pending">Pending</option><option value="scheduled">Scheduled</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
+        <div className={tw("orders-toolbar")}><h2>Recent orders</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }}/></div><AdminSelect aria-label="Filter by order status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">All status</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
         <OrderRows orders={orders} onSelect={(order) => { setConfirmingCancel(false); setSelected(order); }}/>
       </section>
       <Pagination
@@ -111,11 +112,12 @@ export function AdminOrdersPage() {
           <aside className={tw("order-editor")} role="dialog" aria-modal="true" aria-labelledby="admin-order-details-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className={tw("panel-heading")}><div><p className={tw("eyebrow")}>ORDER DETAILS</p><h2 id="admin-order-details-title">{selected.order_number}</h2></div><button type="button" aria-label="Close order details" onClick={() => { setConfirmingCancel(false); setSelected(null); }}><X /></button></div>
             <p>{selected.customer_first_name} {selected.customer_last_name}<br />{selected.customer_email}<br />{selected.shipping_address}, {selected.shipping_city}</p>
+            {selected.quote_number ? <p className="mt-3 text-sm text-text-soft">Linked quote: <Link className={tw('view-order')} to={`/admin/quotes?quote=${encodeURIComponent(selected.quote_number)}`}>{selected.quote_number}</Link></p> : null}
             <div className={tw("order-editor-items")}>{selected.items.map((item) => <div key={item.id}><div className={tw('record-item-main')}><ProductThumbnail imageUrl={item.image_url} name={item.product_name} /><span>{item.product_name}<small>{item.sku || 'Product'} · Qty {item.quantity}</small></span></div><strong>${Number(item.line_total).toFixed(2)}</strong></div>)}</div>
             <div className={tw("order-editor-total")}><span>Total</span><strong>${Number(selected.total).toFixed(2)}</strong></div>
-            {selected.status === 'scheduled' && selected.items.some((item) => item.available_stock !== null && item.quantity > item.available_stock) ? <div className="mt-4 rounded-control border border-warning bg-warning-soft p-3 text-sm text-warning"><strong>Awaiting inventory</strong><p className="mt-1 text-xs">This paid quote order stays Scheduled until enough stock is available. Update inventory before moving it to Processing.</p></div> : null}
-            <StatusTimeline noun="Order" currentStatus={selected.status} initialStatus="pending" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={ORDER_STEPS} />
-            {availableTransitions(selected).length ? <label>Order status<AdminSelect value={selected.status} onChange={(event) => { const value = event.target.value as Order['status']; if (value === 'cancelled') setConfirmingCancel(true); else update.mutate({ orderNumber: selected.order_number, value }); }}><option value={selected.status}>{STATUS_LABELS[selected.status]}</option>{availableTransitions(selected).map((value) => <option value={value} key={value}>{STATUS_LABELS[value]}</option>)}</AdminSelect></label> : <p className="mt-4 text-sm text-text-soft">This order is {selected.status} and cannot be changed.</p>}
+            {selected.status === 'scheduled' && selected.items.some((item) => item.available_stock !== null && item.quantity > item.available_stock) ? <div className="mt-4 rounded-control border border-warning bg-warning-soft p-3 text-sm text-warning"><strong>Awaiting inventory</strong><p className="mt-1 text-xs">This paid quote order remains Processing until enough stock is available. Update inventory before moving it forward.</p></div> : null}
+            <StatusTimeline noun="Order" currentStatus={orderStatusKey(selected.status)} initialStatus="pending" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={ORDER_STEPS} />
+            {availableTransitions(selected).length ? <label>Order status<AdminSelect value={selected.status} onChange={(event) => { const value = event.target.value as Order['status']; if (value === 'cancelled') setConfirmingCancel(true); else update.mutate({ orderNumber: selected.order_number, value }); }}><option value={selected.status}>{orderStatusLabel(selected.status)}</option>{availableTransitions(selected).map((value) => <option value={value} key={value}>{orderStatusLabel(value)}</option>)}</AdminSelect></label> : <p className="mt-4 text-sm text-text-soft">This order is {orderStatusLabel(selected.status)} and cannot be changed.</p>}
             {confirmingCancel ? <div className={tw('quote-close-alert')} role="alertdialog" aria-labelledby="cancel-order-title" aria-describedby="cancel-order-description"><AlertTriangle size={20} /><div><strong id="cancel-order-title">Cancel this order?</strong><p id="cancel-order-description">This action is permanent. Any inventory already deducted for this order will be restored.</p></div><div><button type="button" onClick={() => setConfirmingCancel(false)}>Keep order</button><button type="button" disabled={update.isPending} onClick={() => update.mutate({ orderNumber: selected.order_number, value: 'cancelled' })}>{update.isPending ? 'Cancelling...' : 'Cancel order'}</button></div></div> : null}
           </aside>
         </div>) : null}

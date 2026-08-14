@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { useCart } from '../../../contexts/CartContext';
 import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api';
 import { fallbackProducts } from '../../../lib/fallback-data';
+import { unitPriceForQuantity } from '../../../lib/pricing';
 import type { Product } from '../../../types';
 import { orderedProductImages, primaryProductImage } from '../../../lib/product-images';
 const defaultGallery = [
@@ -103,6 +104,12 @@ export function ProductDetailsPage() {
     const quantity = quantityState.productId === product.id
         ? (isOutOfStock ? 0 : Math.min(Math.max(quantityState.value, 1), availableStock))
         : (isOutOfStock ? 0 : 1);
+    const unitPrice = unitPriceForQuantity(product, quantity);
+    const bulkPriceActive = Boolean(
+        product.bulk_minimum_quantity
+        && product.bulk_unit_price !== null
+        && quantity >= product.bulk_minimum_quantity,
+    );
     const updateQuantity = (value: number) => {
         setQuantityState({
             productId: product.id,
@@ -172,7 +179,8 @@ export function ProductDetailsPage() {
             <p className={tw("product-lead")}>
               {product.short_description || product.description}
             </p>
-            <strong className={tw("product-price")}>${Number(product.current_price).toFixed(2)}</strong>
+            <strong className={tw("product-price")}>${unitPrice.toFixed(2)}</strong>
+            {product.bulk_minimum_quantity && product.bulk_unit_price ? <p className={tw(`product-bulk-price ${bulkPriceActive ? 'active' : ''}`)}>{bulkPriceActive ? `Bulk price active - $${unitPrice.toFixed(2)} each` : `Buy ${product.bulk_minimum_quantity}+ for $${Number(product.bulk_unit_price).toFixed(2)} each`}</p> : null}
             <p className={tw(`product-stock ${isOutOfStock ? 'out' : ''}`)}><span /> {isOutOfStock ? 'Currently out of stock' : `In stock - ${availableStock} ready to ship`}</p>
 
             <div className={tw("product-purchase-row")}>

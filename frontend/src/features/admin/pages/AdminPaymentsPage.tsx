@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
 import { api, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
+import { paymentStatusKey, paymentStatusLabel } from '../../../lib/status-labels'
 import type { PaymentAttempt, PaymentProviderCode } from '../../../types'
 import { AdminErrorState } from '../components/AdminErrorState'
 import { AdminSelect } from '../components/AdminSelect'
@@ -119,7 +120,7 @@ export function AdminPaymentsPage() {
           <div className={tw('payment-table-head')}><h2>Recent attempts</h2><span>TEST DATA ONLY</span></div>
           <div className={tw('admin-table-wrap')}>
             <table className={tw('admin-table admin-table-compact')}><thead><tr><th>Reference</th><th>Order</th><th>Provider</th><th>Amount</th><th>Status</th><th>Created</th></tr></thead><tbody>
-              {attempts.map((attempt) => <tr key={attempt.id}><td><strong>{attempt.reference}</strong></td><td>{attempt.order_number}</td><td>{attempt.provider_name}</td><td>{money(attempt.amount, attempt.currency)}</td><td><span className={tw(`status status-${attempt.status}`)}>{attempt.status}</span></td><td>{new Date(attempt.created_at).toLocaleString()}</td></tr>)}
+              {attempts.map((attempt) => <tr key={attempt.id}><td><strong>{attempt.reference}</strong></td><td>{attempt.order_number}</td><td>{attempt.provider_name}</td><td>{money(attempt.amount, attempt.currency)}</td><td><span className={tw(`status status-${paymentStatusKey(attempt.status)}`)}>{paymentStatusLabel(attempt.status)}</span></td><td>{new Date(attempt.created_at).toLocaleString()}</td></tr>)}
               {!attempts.length ? <tr><td colSpan={6}>No test payment attempts yet.</td></tr> : null}
             </tbody></table>
           </div>

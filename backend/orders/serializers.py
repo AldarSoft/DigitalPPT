@@ -41,6 +41,7 @@ class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     user_id = serializers.IntegerField(read_only=True)
     quote_number = serializers.CharField(source="quote_request.quote_number", read_only=True)
+    is_paid = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -48,6 +49,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "id",
             "order_number",
             "quote_number",
+            "is_paid",
             "source",
             "user_id",
             "status",
@@ -72,6 +74,13 @@ class OrderSerializer(serializers.ModelSerializer):
             "updated_at",
         )
         read_only_fields = ("stock_deducted",)
+
+    def get_is_paid(self, obj) -> bool:
+        from payments.models import PaymentAttempt
+
+        return obj.payment_attempts.filter(
+            status=PaymentAttempt.Status.SUCCEEDED
+        ).exists()
 
 
 class OrderCreateItemSerializer(serializers.ModelSerializer):

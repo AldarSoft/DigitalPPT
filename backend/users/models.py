@@ -77,6 +77,13 @@ class UserProfile(TimeStampedModel):
     state = models.CharField(max_length=120, blank=True)
     country = models.CharField(max_length=120, blank=True)
     postal_code = models.CharField(max_length=20, blank=True)
+    use_different_shipping_address = models.BooleanField(default=False)
+    shipping_address_line_1 = models.CharField(max_length=255, blank=True)
+    shipping_address_line_2 = models.CharField(max_length=255, blank=True)
+    shipping_city = models.CharField(max_length=120, blank=True)
+    shipping_state = models.CharField(max_length=120, blank=True)
+    shipping_country = models.CharField(max_length=120, blank=True)
+    shipping_postal_code = models.CharField(max_length=20, blank=True)
 
     class Meta:
         verbose_name = "User Profile"

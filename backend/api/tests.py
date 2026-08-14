@@ -18,6 +18,7 @@ from rest_framework.test import APITestCase
 from products.models import Category, Product, ProductImage, ProductSpecification
 from quotes.models import QuoteRequest
 from orders.models import Order
+from payments.models import PaymentAttempt, PaymentProvider
 from common.integrations.power_automate import send_power_automate_event
 from core.models import NotificationJob, Promotion, UserNotification
 
@@ -72,6 +73,19 @@ class ActiveApiPermissionTests(APITestCase):
             "requester_phone": "+1 555 000 0000",
             "items": [{"product": self.product.id, "quantity": 1}],
         }
+
+    def test_quote_item_suggests_configured_bulk_unit_price(self):
+        self.product.bulk_minimum_quantity = 3
+        self.product.bulk_unit_price = Decimal("850.00")
+        self.product.save(update_fields=["bulk_minimum_quantity", "bulk_unit_price", "updated_at"])
+        payload = self.quote_payload()
+        payload["items"][0]["quantity"] = 3
+
+        response = self.client.post("/api/v1/quotes/", payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["items"][0]["suggested_unit_price"], Decimal("850.00"))
+        self.assertTrue(response.data["items"][0]["bulk_price_applied"])
 
     def test_anonymous_user_cannot_create_order(self):
         response = self.client.post("/api/v1/orders/", self.order_payload(), format="json")
@@ -139,6 +153,20 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(response.data["total"], Decimal("1000.00"))
         self.assertEqual(response.data["items"][0]["unit_price"], Decimal("1000.00"))
         self.assertEqual(response.data["source"], Order.Source.DIRECT)
+
+    def test_customer_direct_checkout_uses_bulk_price_at_threshold(self):
+        self.product.bulk_minimum_quantity = 3
+        self.product.bulk_unit_price = Decimal("850.00")
+        self.product.save(update_fields=["bulk_minimum_quantity", "bulk_unit_price", "updated_at"])
+        payload = self.order_payload()
+        payload["items"][0]["quantity"] = 3
+        self.client.force_authenticate(self.customer)
+
+        response = self.client.post("/api/v1/orders/checkout/", payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["items"][0]["unit_price"], Decimal("850.00"))
+        self.assertEqual(response.data["subtotal"], Decimal("2550.00"))
 
     def test_direct_checkout_is_idempotent(self):
         payload = self.order_payload()
@@ -285,27 +313,7 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertIsNone(hidden_draft.data["quoted_total"])
         self.assertIsNone(hidden_draft.data["items"][0]["quoted_unit_price"])
 
-        self.client.force_authenticate(self.admin)
-        admin_message = self.client.post(
-            f"{quote_url}messages/", {"body": "Delivery is estimated at two weeks."}, format="json"
-        )
-        self.assertEqual(admin_message.status_code, status.HTTP_200_OK)
-        self.assertEqual(Order.objects.count(), 0)
-        before_customer_confirmation = self.client.post(
-            f"{quote_url}invoice/", invoice_payload, format="json"
-        )
-        self.assertEqual(before_customer_confirmation.status_code, status.HTTP_400_BAD_REQUEST)
-
         self.client.force_authenticate(self.customer)
-        hidden_invoice = self.client.get(quote_url)
-        self.assertIsNone(hidden_invoice.data["quoted_total"])
-        self.assertIsNone(hidden_invoice.data["items"][0]["quoted_unit_price"])
-        customer_message = self.client.post(
-            f"{quote_url}messages/", {"body": "That schedule works for us."}, format="json"
-        )
-        self.assertEqual(customer_message.status_code, status.HTTP_200_OK)
-        self.assertEqual(Order.objects.count(), 0)
-
         customer_invoice = self.client.post(
             f"{quote_url}invoice/", invoice_payload, format="json"
         )
@@ -487,6 +495,15 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(cancelled.data["status"], QuoteRequest.Status.CLOSED)
         self.assertEqual(Order.objects.count(), 0)
 
+        customer_quotes = self.client.get("/api/v1/quotes/")
+        self.assertEqual(customer_quotes.status_code, status.HTTP_200_OK)
+        self.assertEqual(customer_quotes.data["count"], 0)
+
+        self.client.force_authenticate(self.admin)
+        admin_quotes = self.client.get("/api/v1/quotes/")
+        self.assertEqual(admin_quotes.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_quotes.data["count"], 0)
+
     def test_public_quote_rejects_arbitrary_or_hidden_products(self):
         arbitrary_payload = self.quote_payload()
         arbitrary_payload["items"] = [{"product_name": "Invented product", "quantity": 1}]
@@ -556,6 +573,15 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(self.product.inventory_quantity, 5)
         self.assertFalse(Order.objects.get(pk=created.data["id"]).stock_deducted)
 
+        admin_orders = self.client.get("/api/v1/orders/")
+        self.assertEqual(admin_orders.status_code, status.HTTP_200_OK)
+        self.assertEqual(admin_orders.data["count"], 0)
+
+        self.client.force_authenticate(self.customer)
+        customer_orders = self.client.get("/api/v1/orders/")
+        self.assertEqual(customer_orders.status_code, status.HTTP_200_OK)
+        self.assertEqual(customer_orders.data["count"], 0)
+
     def test_completed_order_is_terminal(self):
         self.client.force_authenticate(self.admin)
         created = self.client.post("/api/v1/orders/", self.order_payload(), format="json")
@@ -565,6 +591,32 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(completed.status_code, status.HTTP_200_OK)
         rejected = self.client.patch(order_url, {"status": "cancelled"}, format="json")
         self.assertEqual(rejected.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_paid_order_cannot_be_cancelled(self):
+        self.client.force_authenticate(self.admin)
+        created = self.client.post("/api/v1/orders/", self.order_payload(), format="json")
+        order = Order.objects.get(pk=created.data["id"])
+        provider, _ = PaymentProvider.objects.get_or_create(
+            code=PaymentProvider.Code.STRIPE,
+            defaults={"display_name": "Stripe"},
+        )
+        PaymentAttempt.objects.create(
+            order=order,
+            provider=provider,
+            amount=order.total,
+            status=PaymentAttempt.Status.SUCCEEDED,
+        )
+
+        detail = self.client.get(f"/api/v1/orders/{order.order_number}/")
+        self.assertTrue(detail.data["is_paid"])
+        rejected = self.client.patch(
+            f"/api/v1/orders/{order.order_number}/",
+            {"status": "cancelled"},
+            format="json",
+        )
+
+        self.assertEqual(rejected.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(rejected.data["status"], "Paid orders cannot be cancelled.")
 
     @override_settings(
         NOTIFICATIONS_ASYNC=True,

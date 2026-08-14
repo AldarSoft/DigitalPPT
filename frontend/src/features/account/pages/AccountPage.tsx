@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, LayoutDashboard, LogOut, MapPin, Package, Settings, UserRound } from 'lucide-react'
+import { FileText, LayoutDashboard, LogOut, Package, Settings, UserRound } from 'lucide-react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { Pagination } from '../../../components/Pagination'
@@ -17,27 +17,30 @@ import type { AccountTab } from '../types'
 
 const ORDER_PAGE_SIZE = 8
 const QUOTE_PAGE_SIZE = 10
-const ACCOUNT_TABS: AccountTab[] = ['overview', 'quotes', 'orders', 'addresses', 'settings']
+const ACCOUNT_TABS: AccountTab[] = ['overview', 'quotes', 'orders', 'settings']
+const STAFF_ACCOUNT_TABS: AccountTab[] = ['settings']
 
 export function AccountPage() {
   const auth = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedTab = searchParams.get('tab') as AccountTab | null;
   const linkedQuoteNumber = searchParams.get('quote');
-  const tab: AccountTab = requestedTab && ACCOUNT_TABS.includes(requestedTab) ? requestedTab : 'overview';
+  const isStaff = Boolean(auth.user?.is_staff);
+  const availableTabs = isStaff ? STAFF_ACCOUNT_TABS : ACCOUNT_TABS;
+  const tab: AccountTab = requestedTab && availableTabs.includes(requestedTab) ? requestedTab : isStaff ? 'settings' : 'overview';
   const [orderPage, setOrderPage] = useState(1);
   const [quotePage, setQuotePage] = useState(1);
   const [selectedRecordState, setSelectedRecordState] = useState<AccountRecord | null>(null);
   const ordersQuery = useQuery({
     queryKey: ["orders", "mine", orderPage],
     queryFn: () => api.orders(`ordering=-created_at&page=${orderPage}&page_size=${ORDER_PAGE_SIZE}`),
-    enabled: Boolean(auth.user),
+    enabled: Boolean(auth.user && !isStaff),
     placeholderData: (previous) => previous,
   });
   const quotesQuery = useQuery({
     queryKey: ['quotes', 'mine', quotePage],
     queryFn: () => api.quotes(`ordering=-created_at&page=${quotePage}&page_size=${QUOTE_PAGE_SIZE}`),
-    enabled: Boolean(auth.user),
+    enabled: Boolean(auth.user && !isStaff),
     staleTime: 0,
     refetchOnMount: 'always',
     placeholderData: (previous) => previous,
@@ -45,11 +48,12 @@ export function AccountPage() {
   const linkedQuoteQuery = useQuery({
     queryKey: ['quotes', 'mine', 'detail', linkedQuoteNumber],
     queryFn: () => api.quote(linkedQuoteNumber!),
-    enabled: Boolean(auth.user && linkedQuoteNumber),
+    enabled: Boolean(auth.user && !isStaff && linkedQuoteNumber),
   });
   const paymentStatusQuery = useQuery({
     queryKey: ['storefront-payment-status'],
     queryFn: api.storefrontPaymentStatus,
+    enabled: Boolean(auth.user && !isStaff),
   });
   if (!auth.ready)
     return <main className={tw("route-loading")}>Loading account...</main>;
@@ -85,7 +89,7 @@ export function AccountPage() {
       <section className={tw("account-welcome shell")}>
         <p className={tw("eyebrow")}>MY ACCOUNT</p>
         <h1>Welcome back, {auth.user.first_name || "there"}</h1>
-        <p>Manage quote requests, past orders, account details and your saved address.</p>
+        <p>{isStaff ? 'Manage your account details.' : 'Manage quote requests, past orders, account details and your saved address.'}</p>
       </section>
       <section className={tw("account-body")}>
         <div className={tw("shell account-grid")}>
@@ -98,13 +102,14 @@ export function AccountPage() {
               </div>
             </div>
             {(
-              [
-                ["overview", LayoutDashboard, "Overview"],
-                ["quotes", FileText, "Quote requests"],
-                ["orders", Package, "Past orders"],
-                ["addresses", MapPin, "Address"],
-                ["settings", Settings, "Account settings"],
-              ] as const
+              isStaff
+                ? [["settings", Settings, "Account settings"]]
+                : [
+                    ["overview", LayoutDashboard, "Overview"],
+                    ["quotes", FileText, "Quote requests"],
+                    ["orders", Package, "Past orders"],
+                    ["settings", Settings, "Account settings"],
+                  ]
             ).map(([value, Icon, label]) => (
               <button
                 className={tw(tab === value ? "active" : "")}
@@ -126,7 +131,7 @@ export function AccountPage() {
             </button>
           </aside>
           <div className={tw("account-content")}>
-            {tab === "overview" ? (
+            {!isStaff && tab === "overview" ? (
               <AccountOverview
                 user={auth.user}
                 quotes={quotes}
@@ -136,24 +141,21 @@ export function AccountPage() {
                 onQuoteSelect={(quote) => selectQuote({ kind: 'quote', value: quote })}
               />
             ) : null}
-            {tab === 'quotes' ? <>
+            {!isStaff && tab === 'quotes' ? <>
               <QuotesTable quotes={quotes} loading={quotesQuery.isLoading} onSelect={(quote) => selectQuote({ kind: 'quote', value: quote })} />
               <Pagination page={quotePage} pageSize={QUOTE_PAGE_SIZE} total={quoteCount} loading={quotesQuery.isFetching} className="mt-3" onPageChange={setQuotePage} />
             </> : null}
-            {tab === "orders" ? (
+            {!isStaff && tab === "orders" ? (
               <>
                 <OrdersTable orders={orders} loading={ordersQuery.isLoading} paymentsEnabled={paymentStatusQuery.data?.storefront_enabled} onSelect={(order) => setSelectedRecordState({ kind: 'order', value: order })} />
                 <Pagination page={orderPage} pageSize={ORDER_PAGE_SIZE} total={orderCount} loading={ordersQuery.isFetching} className="mt-3" onPageChange={setOrderPage} />
               </>
             ) : null}
-            {tab === "addresses" ? (
-              <ProfileForm user={auth.user} addressOnly />
-            ) : null}
             {tab === "settings" ? <ProfileForm user={auth.user} /> : null}
           </div>
         </div>
       </section>
-      {selectedRecord ? <AccountRecordDialog record={selectedRecord} paymentsEnabled={paymentStatusQuery.data?.storefront_enabled} onClose={closeRecord} /> : null}
+      {selectedRecord ? <AccountRecordDialog record={selectedRecord} paymentsEnabled={paymentStatusQuery.data?.storefront_enabled} onClose={closeRecord} onLinkedQuoteSelect={(quoteNumber) => { setSelectedRecordState(null); setSearchParams({ tab: 'quotes', quote: quoteNumber }, { replace: true }); }} /> : null}
     </main>
   );
 }

@@ -41,6 +41,8 @@ export interface Product {
   price: string
   cost_price?: string | null
   sale_price: string | null
+  bulk_minimum_quantity: number | null
+  bulk_unit_price: string | null
   current_price: string
   inventory_quantity: number
   status: 'draft' | 'published' | 'archived'
@@ -63,6 +65,13 @@ export interface UserProfile {
   state: string
   country: string
   postal_code: string
+  use_different_shipping_address: boolean
+  shipping_address_line_1: string
+  shipping_address_line_2: string
+  shipping_city: string
+  shipping_state: string
+  shipping_country: string
+  shipping_postal_code: string
 }
 
 export interface User {
@@ -185,6 +194,7 @@ export interface Order {
   quote_number: string | null
   source: 'direct' | 'quote' | 'admin'
   user_id: number | null
+  is_paid: boolean
   status: 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
   customer_first_name: string
   customer_last_name: string
@@ -217,6 +227,8 @@ export interface QuoteRequestItem {
   specifications: Record<string, unknown>
   quoted_unit_price: string | null
   quoted_line_total: string | null
+  suggested_unit_price: string | null
+  bulk_price_applied: boolean
   image_url: string
 }
 

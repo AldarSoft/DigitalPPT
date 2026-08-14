@@ -89,6 +89,8 @@ type ProductForm = {
     price: string;
     cost_price: string;
     sale_price: string;
+    bulk_minimum_quantity: string;
+    bulk_unit_price: string;
     inventory_quantity: number;
     status: Product['status'];
     is_featured: boolean;
@@ -137,6 +139,8 @@ function ProductEditor({ product, categories, onClose }: {
             price: product.price,
             cost_price: product.cost_price ?? '',
             sale_price: product.sale_price ?? '',
+            bulk_minimum_quantity: product.bulk_minimum_quantity?.toString() ?? '',
+            bulk_unit_price: product.bulk_unit_price ?? '',
             inventory_quantity: product.inventory_quantity,
             status: product.status,
             is_featured: product.is_featured,
@@ -162,6 +166,8 @@ function ProductEditor({ product, categories, onClose }: {
                 ...data,
                 cost_price: data.cost_price || null,
                 sale_price: data.sale_price || null,
+                bulk_minimum_quantity: data.bulk_minimum_quantity ? Number(data.bulk_minimum_quantity) : null,
+                bulk_unit_price: data.bulk_unit_price || null,
                 images: uploadedImages.map((image, index) => ({
                     image_url: image.imageUrl,
                     alt_text: image.altText || data.name,
@@ -231,6 +237,7 @@ function ProductEditor({ product, categories, onClose }: {
           <div className={tw("editor-row")}><label>SKU<input required {...register('sku')}/></label><label>Brand<input {...register('brand')}/></label></div>
           <label>Category<AdminSelect {...register('category', { valueAsNumber: true })}>{categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</AdminSelect></label>
           <div className={tw("editor-row")}><label>Price<input type="number" min="0" step="0.01" required {...register('price')}/></label><label>Sale price<input type="number" min="0" step="0.01" {...register('sale_price')}/></label></div>
+          <div className={tw("editor-row")}><label>Bulk from quantity<input type="number" min="2" step="1" {...register('bulk_minimum_quantity')}/></label><label>Bulk unit price<input type="number" min="0.01" step="0.01" {...register('bulk_unit_price')}/></label></div>
           <div className={tw("editor-row")}><label>Cost price<input type="number" min="0" step="0.01" {...register('cost_price')}/></label><label>Stock quantity<input type="number" min="0" {...register('inventory_quantity', { valueAsNumber: true })}/></label></div>
           <label>Short description<input {...register('short_description')}/></label>
           <label>Description<textarea rows={4} {...register('description')}/></label>

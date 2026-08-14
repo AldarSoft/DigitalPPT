@@ -60,6 +60,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "sale_price",
+            "bulk_minimum_quantity",
+            "bulk_unit_price",
             "current_price",
             "inventory_quantity",
             "status",
@@ -123,6 +125,8 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             "price",
             "cost_price",
             "sale_price",
+            "bulk_minimum_quantity",
+            "bulk_unit_price",
             "inventory_quantity",
             "status",
             "is_featured",
@@ -142,6 +146,21 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             errors["cost_price"] = "Cost price cannot be negative."
         if sale_price is not None and sale_price < 0:
             errors["sale_price"] = "Sale price cannot be negative."
+        bulk_minimum_quantity = attrs.get(
+            "bulk_minimum_quantity", getattr(self.instance, "bulk_minimum_quantity", None)
+        )
+        bulk_unit_price = attrs.get(
+            "bulk_unit_price", getattr(self.instance, "bulk_unit_price", None)
+        )
+        if (bulk_minimum_quantity is None) != (bulk_unit_price is None):
+            errors["bulk_unit_price"] = "Set both a bulk quantity and bulk unit price."
+        if bulk_minimum_quantity is not None and bulk_minimum_quantity < 2:
+            errors["bulk_minimum_quantity"] = "Bulk quantity must be at least 2."
+        effective_price = sale_price if sale_price is not None else price
+        if bulk_unit_price is not None and bulk_unit_price <= 0:
+            errors["bulk_unit_price"] = "Bulk unit price must be greater than zero."
+        if effective_price is not None and bulk_unit_price is not None and bulk_unit_price > effective_price:
+            errors["bulk_unit_price"] = "Bulk unit price cannot exceed the current unit price."
         if price is not None and sale_price is not None and sale_price > price:
             errors["sale_price"] = "Sale price cannot be greater than the regular price."
         images = attrs.get("images")
