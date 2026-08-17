@@ -12,7 +12,7 @@ class QuoteRequest(TimeStampedModel):
         REVIEWING = "reviewing", "Reviewing"
         QUOTED = "quoted", "Invoice sent"
         APPROVED = "approved", "Converted"
-        CLOSED = "closed", "Closed"
+        CANCELLED = "cancelled", "Cancelled"
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

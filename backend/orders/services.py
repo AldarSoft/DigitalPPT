@@ -242,6 +242,14 @@ class OrderService:
         locked_order.status = new_status
         locked_order.save(update_fields=["status", "stock_deducted", "updated_at"])
 
+        if new_status in {Order.Status.COMPLETED, Order.Status.CANCELLED}:
+            from payments.services import PaymentService
+
+            PaymentService.close_pending_attempts(
+                order=locked_order,
+                reason=f"Order changed to {new_status}.",
+            )
+
         from core.notifications import publish_order_status_changed
 
         transaction.on_commit(

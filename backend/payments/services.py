@@ -16,6 +16,20 @@ from payments.providers import provider_is_available
 
 class PaymentService:
     @staticmethod
+    def close_pending_attempts(*, order, exclude_attempt_id=None, reason):
+        attempts = PaymentAttempt.objects.filter(
+            order=order,
+            status=PaymentAttempt.Status.PENDING,
+        )
+        if exclude_attempt_id is not None:
+            attempts = attempts.exclude(pk=exclude_attempt_id)
+        return attempts.update(
+            status=PaymentAttempt.Status.CANCELLED,
+            failure_message=reason,
+            updated_at=timezone.now(),
+        )
+
+    @staticmethod
     @transaction.atomic
     def start_checkout(*, user, order, provider, idempotency_key, billing):
         existing = (
@@ -47,6 +61,11 @@ class PaymentService:
             raise ValidationError({"order_number": "This order is already paid."})
         if not provider_is_available(provider):
             raise ValidationError({"provider": "This payment provider is unavailable."})
+
+        PaymentService.close_pending_attempts(
+            order=locked_order,
+            reason="Replaced by a newer checkout session.",
+        )
 
         if not user.is_staff:
             locked_order.customer_email = billing["email"]
@@ -82,6 +101,57 @@ class PaymentService:
 
     @staticmethod
     @transaction.atomic
+    def create_admin_simulation(*, user, order, provider, outcome):
+        locked_order = Order.objects.select_for_update().get(pk=order.pk)
+        if locked_order.status != Order.Status.PENDING:
+            raise ValidationError({"order_number": "Only pending orders can be paid."})
+        if locked_order.total <= 0:
+            raise ValidationError({"order_number": "The order total must be greater than zero."})
+        if PaymentAttempt.objects.filter(
+            order=locked_order,
+            status=PaymentAttempt.Status.SUCCEEDED,
+        ).exists():
+            raise ValidationError({"order_number": "This order is already paid."})
+
+        PaymentService.close_pending_attempts(
+            order=locked_order,
+            reason="Replaced by an admin payment simulation.",
+        )
+        attempt = PaymentAttempt.objects.create(
+            order=locked_order,
+            provider=provider,
+            amount=locked_order.total,
+            currency="USD",
+            status=PaymentAttempt.Status.PENDING,
+            is_test=True,
+            expires_at=timezone.now() + timedelta(minutes=settings.PAYMENT_SESSION_TTL_MINUTES),
+            metadata={"source": "admin_simulation"},
+            created_by=user,
+        )
+        if outcome == PaymentAttempt.Status.PENDING:
+            return attempt
+        return PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=user,
+            outcome=outcome,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def refresh_attempt(*, attempt):
+        locked = PaymentAttempt.objects.select_for_update().get(pk=attempt.pk)
+        if (
+            locked.status == PaymentAttempt.Status.PENDING
+            and locked.expires_at
+            and locked.expires_at <= timezone.now()
+        ):
+            locked.status = PaymentAttempt.Status.EXPIRED
+            locked.failure_message = "The checkout session expired."
+            locked.save(update_fields=["status", "failure_message", "updated_at"])
+        return locked
+
+    @staticmethod
+    @transaction.atomic
     def simulate_checkout(*, attempt, user, outcome):
         locked = (
             PaymentAttempt.objects.select_for_update()
@@ -105,16 +175,34 @@ class PaymentService:
             locked.save(update_fields=["status", "failure_message", "external_reference", "updated_at"])
             return locked
 
+        locked_order = Order.objects.select_for_update().get(pk=locked.order_id)
+        another_success = PaymentAttempt.objects.filter(
+            order=locked_order,
+            status=PaymentAttempt.Status.SUCCEEDED,
+        ).exclude(pk=locked.pk).exists()
+        if another_success or locked_order.status != Order.Status.PENDING:
+            locked.status = PaymentAttempt.Status.CANCELLED
+            locked.failure_message = (
+                "The order was already paid or is no longer awaiting payment."
+            )
+            locked.save(update_fields=["status", "failure_message", "updated_at"])
+            return locked
+
         next_status = (
             Order.Status.SCHEDULED
-            if locked.order.source == Order.Source.QUOTE
+            if locked_order.source == Order.Source.QUOTE
             else Order.Status.PROCESSING
         )
-        OrderService.update_status(order=locked.order, new_status=next_status)
-        locked.order.refresh_from_db(fields=["status"])
+        OrderService.update_status(order=locked_order, new_status=next_status)
         locked.status = PaymentAttempt.Status.SUCCEEDED
         locked.failure_message = ""
         locked.external_reference = f"dev_paid_{locked.pk}"
         locked.paid_at = timezone.now()
         locked.save(update_fields=["status", "failure_message", "external_reference", "paid_at", "updated_at"])
+        PaymentService.close_pending_attempts(
+            order=locked_order,
+            exclude_attempt_id=locked.pk,
+            reason="Closed after another payment succeeded.",
+        )
+        locked.order.refresh_from_db(fields=["status"])
         return locked

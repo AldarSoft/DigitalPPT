@@ -15,7 +15,7 @@ const QUOTE_STATUS: Record<QuoteRequest['status'], SimpleStatus> = {
   reviewing: 'processing',
   quoted: 'processing',
   approved: 'completed',
-  closed: 'cancelled',
+  cancelled: 'cancelled',
 }
 
 const PAYMENT_STATUS: Record<PaymentAttempt['status'], SimpleStatus> = {

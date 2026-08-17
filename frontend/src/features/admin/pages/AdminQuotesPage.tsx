@@ -17,14 +17,6 @@ import { exportAdminReport } from '../utils/exportAdminReport'
 
 const PAGE_SIZE = 10
 
-const statusTransitions: Record<QuoteRequest['status'], QuoteRequest['status'][]> = {
-  new: ['new', 'reviewing'],
-  reviewing: ['reviewing'],
-  quoted: ['quoted'],
-  approved: ['approved'],
-  closed: ['closed'],
-}
-
 const QUOTE_STEPS = [
   { value: 'new', label: 'Pending' },
   { value: 'reviewing', label: 'Processing' },
@@ -105,7 +97,11 @@ export function AdminQuotesPage() {
   const mutationError = (error: Error) => toast.error(error instanceof ApiError ? error.message : 'Could not update the quote')
   const update = useMutation({
     mutationFn: ({ quoteNumber, data }: { quoteNumber: string; data: Parameters<typeof api.updateQuote>[1] }) => api.updateQuote(quoteNumber, data),
-    onSuccess: (value) => applyQuote(value, value.status === 'closed' ? 'Quote closed' : 'Quote request updated'),
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status >= 400 && error.status < 500)
+      && failureCount < 3,
+    retryDelay: (attemptIndex) => 500 * (attemptIndex + 1),
+    onSuccess: (value) => applyQuote(value, value.status === 'cancelled' ? 'Quote cancelled' : 'Quote request updated'),
     onError: mutationError,
   })
   const invoice = useMutation({
@@ -178,7 +174,7 @@ export function AdminQuotesPage() {
           <h2>Recent requests</h2>
           <div><Search size={18} /><input placeholder="Search quote or customer" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} /></div>
           <AdminSelect aria-label="Filter by quote status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1) }}>
-            <option value="">All status</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
+            <option value="">All status</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option>
           </AdminSelect>
         </div>
         <div className={tw('admin-table-wrap')}>
@@ -214,15 +210,14 @@ export function AdminQuotesPage() {
             {selected.status === 'new' ? <button className={tw('record-payment-link')} type="button" disabled={update.isPending} onClick={() => update.mutate({ quoteNumber: selected.quote_number, data: { status: 'reviewing' } })}>Start review</button> : null}
             <div className={tw('order-editor-items')}>{selected.items.map((item) => <div key={item.id}><div className={tw('record-item-main')}><ProductThumbnail imageUrl={item.image_url} name={item.product_name} /><span>{item.product_name}<small>{item.sku || 'Product'} · Qty {item.quantity}</small></span></div>{canEditInvoice ? <label className={tw('quote-price-input')}>Unit price{item.bulk_price_applied ? <small>Bulk price</small> : null}<input type="number" min="0.01" step="0.01" value={itemPrices[item.id] ?? item.quoted_unit_price ?? item.suggested_unit_price ?? ''} onChange={(event) => setItemPrices((current) => ({ ...current, [item.id]: event.target.value }))} /></label> : <strong>{invoiceSent && item.quoted_line_total ? `$${Number(item.quoted_line_total).toFixed(2)}` : `Qty ${item.quantity}`}</strong>}</div>)}</div>
             {selected.notes ? <p className={tw('quote-notes')}>{selected.notes}</p> : null}
-            {canEditInvoice ? <label className="mt-5 flex items-center gap-2.5 text-sm font-bold"><input className="size-4 accent-brand" type="checkbox" checked={requestAdditionalInformation} onChange={(event) => setRequestAdditionalInformation(event.target.checked)} />Request additional information before sending an invoice</label> : null}
+            {canEditInvoice ? <div className="mt-5 flex w-full flex-row flex-nowrap items-center gap-2.5"><input id="request-additional-information" className="m-0 size-4 shrink-0 accent-brand" type="checkbox" checked={requestAdditionalInformation} onChange={(event) => setRequestAdditionalInformation(event.target.checked)} /><label htmlFor="request-additional-information" className="m-0 inline text-sm font-bold leading-5">Request additional information before sending an invoice</label></div> : null}
             {requestAdditionalInformation && (selected.status === 'reviewing' || (selected.status === 'quoted' && selected.order_status === 'pending')) ? <section className="mt-5 border-t border-border-soft pt-5"><h3 className="mb-3 flex items-center gap-2 text-sm font-extrabold"><MessageSquare size={17} />Review messages</h3><div ref={messagesRef} className="grid max-h-60 gap-2 overflow-y-auto rounded-control bg-surface-raised p-3" aria-live="polite">{selected.messages.length ? selected.messages.map((item) => <div className={item.sender_role === 'admin' ? 'ml-8 rounded-control bg-brand-soft p-3 text-sm' : 'mr-8 rounded-control border border-border bg-white p-3 text-sm'} key={item.id}><strong className="block text-xs">{item.author_name}</strong><p className="mt-1 whitespace-pre-wrap break-words text-text-subtle">{item.body}</p><small className="mt-1 block text-[10px] text-text-soft">{new Date(item.created_at).toLocaleString()}</small></div>) : <p className="text-sm text-text-soft">No messages yet. Send a message only if you need more information.</p>}</div><label className="mt-3 grid w-full gap-2 text-xs font-bold">Message<textarea ref={messageInputRef} rows={3} className="min-h-20 w-full resize-y overflow-y-auto rounded-control border border-border-input p-3 text-sm font-normal" value={message} onChange={(event) => setMessage(event.target.value)} /></label><button className={tw('record-payment-link')} type="button" disabled={!message.trim() || sendMessage.isPending} onClick={() => sendMessage.mutate()}><Send size={16} />Send message</button></section> : null}
             {canEditInvoice ? <div className={tw('quote-pricing-form')}><h3>{invoiceSent ? 'Revise invoice' : 'Invoice'}</h3><label>Shipping<input type="number" min="0" step="0.01" value={quotedShipping ?? selected.quoted_shipping ?? '0.00'} onChange={(event) => setQuotedShipping(event.target.value)} /></label><label>Invoice terms<textarea rows={3} value={adminMessage ?? selected.admin_message ?? ''} onChange={(event) => setAdminMessage(event.target.value)} placeholder="Validity, delivery timing and terms" /></label><button type="button" disabled={!canSendInvoice || invoice.isPending} onClick={sendInvoice}><FileText size={17} />{invoice.isPending ? 'Sending...' : invoiceSent ? 'Update and resend invoice' : 'Send invoice'}</button></div> : null}
             {invoiceSent ? <dl className={tw('record-totals')}><div><dt>Subtotal</dt><dd>${Number(selected.quoted_subtotal).toFixed(2)}</dd></div><div><dt>Shipping</dt><dd>${Number(selected.quoted_shipping).toFixed(2)}</dd></div><div><dt>Invoice total</dt><dd>${Number(selected.quoted_total).toFixed(2)}</dd></div></dl> : null}
             {selected.invoice_pdf_url ? <a className={`${tw('record-payment-link')} !text-white [&>svg]:text-white`} href={mediaUrl(selected.invoice_pdf_url)} target="_blank" rel="noreferrer"><Download size={17} />Download {selected.invoice_number}</a> : null}
             {selected.order_number ? <p>Invoice order: <strong>{selected.order_number}</strong></p> : <p>No order has been created from this quote.</p>}
             <StatusTimeline noun="Quote request" currentStatus={selected.status} initialStatus="new" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={QUOTE_STEPS} />
-            {selected.status === 'new' ? <label>Quote status<AdminSelect value={selected.status} onChange={(event) => update.mutate({ quoteNumber: selected.quote_number, data: { status: event.target.value as QuoteRequest['status'] } })}>{statusTransitions[selected.status].map((value) => <option value={value} key={value}>{quoteStatusLabel(value)}</option>)}</AdminSelect></label> : null}
-            {selected.status !== 'approved' && selected.status !== 'quoted' && selected.status !== 'closed' ? (
+            {selected.status !== 'approved' && selected.status !== 'quoted' && selected.status !== 'cancelled' ? (
               <div className={tw('quote-close-section')}>
                 {!confirmingClose ? (
                   <button className={tw('quote-close-button')} type="button" onClick={() => setConfirmingClose(true)}><AlertTriangle size={17} />Cancel quote</button>
@@ -230,11 +225,11 @@ export function AdminQuotesPage() {
                   <div className={tw('quote-close-alert')} role="alertdialog" aria-labelledby="close-quote-title" aria-describedby="close-quote-description">
                     <AlertTriangle size={20} />
                     <div><strong id="close-quote-title">Cancel this quote?</strong><p id="close-quote-description">This ends the negotiation permanently. The quote cannot be reopened and no order will be created.</p></div>
-                    <div><button type="button" onClick={() => setConfirmingClose(false)}>Keep negotiating</button><button type="button" onClick={() => update.mutate({ quoteNumber: selected.quote_number, data: { status: 'closed' } })} disabled={update.isPending}>Cancel quote</button></div>
+                    <div><button type="button" onClick={() => setConfirmingClose(false)}>Keep negotiating</button><button type="button" onClick={() => update.mutate({ quoteNumber: selected.quote_number, data: { status: 'cancelled' } })} disabled={update.isPending}>Cancel quote</button></div>
                   </div>
                 )}
               </div>
-            ) : selected.status === 'closed' ? <p className={tw('quote-closed-note')}>This quote is closed and cannot be reopened.</p> : null}
+            ) : selected.status === 'cancelled' ? <p className={tw('quote-closed-note')}>This quote is cancelled and cannot be reopened.</p> : null}
           </aside>
         </div>
       ) : null}

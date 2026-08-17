@@ -17,14 +17,21 @@ export class ApiError extends Error {
   data: unknown
 
   constructor(status: number, data: unknown) {
-    const detail =
-      typeof data === 'object' && data && 'detail' in data
-        ? String((data as { detail: unknown }).detail)
-        : `Request failed with status ${status}`
+    const detail = getErrorDetail(data) ?? `Request failed with status ${status}`
     super(detail)
     this.status = status
     this.data = data
   }
+}
+
+function getErrorDetail(data: unknown): string | null {
+  if (!data || typeof data !== 'object') return null
+  if ('detail' in data) return String((data as { detail: unknown }).detail)
+
+  const [field, value] = Object.entries(data)[0] ?? []
+  if (!field) return null
+  const message = Array.isArray(value) ? value[0] : value
+  return message ? String(message) : null
 }
 
 export function setAccessToken(token: string | null) {
@@ -47,11 +54,16 @@ async function request<T>(
   if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers,
-    credentials: 'include',
-  })
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+      credentials: 'include',
+    })
+  } catch {
+    throw new ApiError(0, { detail: 'Cannot connect to the API server.' })
+  }
 
   if (response.status === 401 && accessToken && retry) {
     const refreshed = await fetch(`${API_BASE}/users/auth/refresh/`, {

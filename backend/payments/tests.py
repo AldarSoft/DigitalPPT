@@ -1,13 +1,17 @@
+from datetime import timedelta
 from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.test import override_settings
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from orders.models import Order
+from orders.models import Order, OrderItem
+from orders.services import OrderService
 from payments.models import PaymentAttempt, PaymentProvider
+from products.models import Category, Product
 from quotes.models import QuoteRequest
 
 
@@ -49,7 +53,25 @@ class PaymentFoundationTests(APITestCase):
         self.assertFalse(response.data["live_processing_available"])
         self.assertEqual(len(response.data["providers"]), 4)
 
-    def test_admin_can_simulate_payment_without_changing_order(self):
+    def test_admin_successful_payment_processes_order_and_deducts_inventory(self):
+        category = Category.objects.create(name="Payment products")
+        product = Product.objects.create(
+            category=category,
+            name="Payment radio",
+            sku="PAY-RADIO",
+            price="340.00",
+            inventory_quantity=5,
+            status=Product.Status.PUBLISHED,
+        )
+        OrderItem.objects.create(
+            order=self.order,
+            product=product,
+            product_name=product.name,
+            sku=product.sku,
+            unit_price="340.00",
+            quantity=2,
+            line_total="680.00",
+        )
         self.client.force_authenticate(self.admin)
         response = self.client.post(
             "/api/v1/payments/attempts/",
@@ -62,7 +84,10 @@ class PaymentFoundationTests(APITestCase):
         self.assertTrue(response.data["is_test"])
         self.assertEqual(response.data["status"], PaymentAttempt.Status.SUCCEEDED)
         self.order.refresh_from_db()
-        self.assertEqual(self.order.status, Order.Status.PENDING)
+        product.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PROCESSING)
+        self.assertTrue(self.order.stock_deducted)
+        self.assertEqual(product.inventory_quantity, 3)
 
     def test_customer_cannot_list_or_simulate_payments(self):
         self.client.force_authenticate(self.customer)
@@ -121,6 +146,65 @@ class PaymentFoundationTests(APITestCase):
         self.assertEqual(PaymentAttempt.objects.filter(idempotency_key=key).count(), 1)
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.PENDING)
+
+    @override_settings(DEBUG=True, PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
+    def test_new_checkout_session_cancels_the_previous_pending_session(self):
+        self.client.force_authenticate(self.customer)
+        first = self.client.post(
+            "/api/v1/payments/checkout-sessions/",
+            self.checkout_payload(),
+            format="json",
+        )
+        second = self.client.post(
+            "/api/v1/payments/checkout-sessions/",
+            self.checkout_payload(),
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        first_attempt = PaymentAttempt.objects.get(idempotency_key=first.data["session_id"])
+        self.assertEqual(first_attempt.status, PaymentAttempt.Status.CANCELLED)
+
+        stale_confirmation = self.client.post(
+            f"/api/v1/payments/checkout-sessions/{first.data['session_id']}/simulate/",
+            {"outcome": "succeeded"},
+            format="json",
+        )
+        successful_confirmation = self.client.post(
+            f"/api/v1/payments/checkout-sessions/{second.data['session_id']}/simulate/",
+            {"outcome": "succeeded"},
+            format="json",
+        )
+
+        self.assertEqual(stale_confirmation.data["status"], PaymentAttempt.Status.CANCELLED)
+        self.assertEqual(successful_confirmation.data["status"], PaymentAttempt.Status.SUCCEEDED)
+        self.assertEqual(
+            PaymentAttempt.objects.filter(
+                order=self.order,
+                status=PaymentAttempt.Status.SUCCEEDED,
+            ).count(),
+            1,
+        )
+
+    @override_settings(DEBUG=True, PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
+    def test_expired_session_is_reconciled_when_loaded(self):
+        self.client.force_authenticate(self.customer)
+        created = self.client.post(
+            "/api/v1/payments/checkout-sessions/",
+            self.checkout_payload(),
+            format="json",
+        )
+        PaymentAttempt.objects.filter(idempotency_key=created.data["session_id"]).update(
+            expires_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        response = self.client.get(
+            f"/api/v1/payments/checkout-sessions/{created.data['session_id']}/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], PaymentAttempt.Status.EXPIRED)
 
     @override_settings(PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
     def test_customer_cannot_create_session_for_another_users_order(self):
@@ -210,6 +294,23 @@ class PaymentFoundationTests(APITestCase):
         quote.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.SCHEDULED)
         self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
+
+        OrderService.update_status(order=self.order, new_status=Order.Status.COMPLETED)
+        quote.refresh_from_db()
+        self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
+
+    def test_terminal_order_closes_pending_payment_attempts(self):
+        attempt = PaymentAttempt.objects.create(
+            order=self.order,
+            provider=PaymentProvider.objects.get(code="stripe"),
+            amount=self.order.total,
+            created_by=self.customer,
+        )
+
+        OrderService.update_status(order=self.order, new_status=Order.Status.COMPLETED)
+
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, PaymentAttempt.Status.CANCELLED)
 
     @override_settings(
         DEBUG=False,

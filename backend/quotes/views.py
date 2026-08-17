@@ -46,21 +46,19 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         return super().get_throttles()
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().exclude(status=QuoteRequest.Status.CANCELLED)
         status_value = self.request.query_params.get("status")
         display_status = self.request.query_params.get("display_status")
         display_statuses = {
             "pending": [QuoteRequest.Status.NEW],
             "processing": [QuoteRequest.Status.REVIEWING, QuoteRequest.Status.QUOTED],
             "completed": [QuoteRequest.Status.APPROVED],
-            "cancelled": [QuoteRequest.Status.CLOSED],
+            "cancelled": [QuoteRequest.Status.CANCELLED],
         }
         if display_status in display_statuses:
             queryset = queryset.filter(status__in=display_statuses[display_status])
         elif status_value:
             queryset = queryset.filter(status=status_value)
-        else:
-            queryset = queryset.exclude(status=QuoteRequest.Status.CLOSED)
 
         user = self.request.user
         if user and user.is_staff:
@@ -125,7 +123,7 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
     def cancel(self, request, quote_number=None):
         quote_request = QuoteService.update_status(
             quote_request=self.get_object(),
-            new_status=QuoteRequest.Status.CLOSED,
+            new_status=QuoteRequest.Status.CANCELLED,
             user=request.user,
         )
         return self._serialize(quote_request)

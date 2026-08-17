@@ -94,7 +94,9 @@ class PaymentSessionDetailView(APIView):
     def get(self, request, session_id):
         if not settings.PAYMENTS_STOREFRONT_ENABLED:
             raise NotFound()
-        attempt = self.get_attempt(request, session_id)
+        attempt = PaymentService.refresh_attempt(
+            attempt=self.get_attempt(request, session_id),
+        )
         return Response(PaymentAttemptSerializer(attempt, context={"request": request}).data)
 
 

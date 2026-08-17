@@ -74,6 +74,13 @@ class PaymentAttempt(TimeStampedModel):
             models.Index(fields=["order", "status"]),
             models.Index(fields=["provider", "created_at"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["order"],
+                condition=models.Q(status="succeeded"),
+                name="payments_one_success_per_order",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)

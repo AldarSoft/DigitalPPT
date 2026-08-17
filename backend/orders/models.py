@@ -89,8 +89,8 @@ class Order(TimeStampedModel):
 
         from quotes.models import QuoteRequest
 
-        if self.status in {self.Status.COMPLETED, self.Status.CANCELLED}:
-            target_status = QuoteRequest.Status.CLOSED
+        if self.status == self.Status.CANCELLED:
+            target_status = QuoteRequest.Status.CANCELLED
         elif self.status == self.Status.PENDING:
             target_status = QuoteRequest.Status.QUOTED
         else:

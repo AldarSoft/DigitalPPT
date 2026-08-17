@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from uuid import uuid4
-
 from django.conf import settings
 from django.db import models
 from rest_framework import serializers
@@ -9,6 +7,7 @@ from rest_framework import serializers
 from orders.models import Order
 from payments.models import PaymentAttempt, PaymentProvider
 from payments.providers import provider_is_configured
+from payments.services import PaymentService
 
 
 class PaymentProviderSerializer(serializers.ModelSerializer):
@@ -102,19 +101,10 @@ class PaymentSimulationSerializer(serializers.Serializer):
     outcome = serializers.ChoiceField(choices=Outcome.choices, default=Outcome.SUCCEEDED)
 
     def create(self, validated_data):
-        order = validated_data["order"]
-        provider = validated_data["provider"]
-        outcome = validated_data["outcome"]
         request = self.context["request"]
-        return PaymentAttempt.objects.create(
-            order=order,
-            provider=provider,
-            amount=order.total,
-            currency="USD",
-            status=outcome,
-            is_test=True,
-            external_reference=f"test_{provider.code}_{uuid4().hex}",
-            failure_message="Simulated provider decline." if outcome == self.Outcome.FAILED else "",
-            metadata={"simulation": True},
-            created_by=request.user,
+        return PaymentService.create_admin_simulation(
+            user=request.user,
+            order=validated_data["order"],
+            provider=validated_data["provider"],
+            outcome=validated_data["outcome"],
         )

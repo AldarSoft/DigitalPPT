@@ -243,7 +243,7 @@ export interface QuoteMessage {
 export interface QuoteRequest {
   id: number
   quote_number: string
-  status: 'new' | 'reviewing' | 'quoted' | 'approved' | 'closed'
+  status: 'new' | 'reviewing' | 'quoted' | 'approved' | 'cancelled'
   order_number: string
   order_status: '' | 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
   requester_company_name: string

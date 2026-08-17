@@ -37,6 +37,16 @@ class OrderViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        successful_payment = PaymentAttempt.objects.filter(
+            order_id=OuterRef("pk"),
+            status=PaymentAttempt.Status.SUCCEEDED,
+        )
+        queryset = queryset.annotate(
+            has_successful_payment=Exists(successful_payment)
+        ).exclude(
+            status=Order.Status.CANCELLED,
+            has_successful_payment=False,
+        )
         status_value = self.request.query_params.get("status")
         display_status = self.request.query_params.get("display_status")
         display_statuses = {
@@ -49,18 +59,6 @@ class OrderViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(status__in=display_statuses[display_status])
         elif status_value:
             queryset = queryset.filter(status=status_value)
-        else:
-            successful_payment = PaymentAttempt.objects.filter(
-                order_id=OuterRef("pk"),
-                status=PaymentAttempt.Status.SUCCEEDED,
-            )
-            queryset = queryset.annotate(
-                has_successful_payment=Exists(successful_payment)
-            ).exclude(
-                status=Order.Status.CANCELLED,
-                has_successful_payment=False,
-            )
-
         if self.request.user and self.request.user.is_staff:
             return queryset
         if not self.request.user or not self.request.user.is_authenticated:

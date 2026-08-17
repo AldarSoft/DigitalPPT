@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 class QuoteService:
     ALLOWED_STATUS_TRANSITIONS = {
-        QuoteRequest.Status.NEW: {QuoteRequest.Status.REVIEWING, QuoteRequest.Status.CLOSED},
-        QuoteRequest.Status.REVIEWING: {QuoteRequest.Status.CLOSED},
+        QuoteRequest.Status.NEW: {QuoteRequest.Status.REVIEWING, QuoteRequest.Status.CANCELLED},
+        QuoteRequest.Status.REVIEWING: {QuoteRequest.Status.CANCELLED},
         QuoteRequest.Status.QUOTED: set(),
         QuoteRequest.Status.APPROVED: set(),
-        QuoteRequest.Status.CLOSED: set(),
+        QuoteRequest.Status.CANCELLED: set(),
     }
 
     @staticmethod

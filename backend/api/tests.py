@@ -372,7 +372,7 @@ class ActiveApiPermissionTests(APITestCase):
 
         self.client.force_authenticate(self.admin)
         close_after_approval = self.client.patch(
-            quote_url, {"status": "closed"}, format="json"
+            quote_url, {"status": "cancelled"}, format="json"
         )
         self.assertEqual(close_after_approval.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Order.objects.count(), 1)
@@ -492,17 +492,25 @@ class ActiveApiPermissionTests(APITestCase):
         self.client.force_authenticate(self.customer)
         cancelled = self.client.post(f"{quote_url}cancel/", format="json")
         self.assertEqual(cancelled.status_code, status.HTTP_200_OK)
-        self.assertEqual(cancelled.data["status"], QuoteRequest.Status.CLOSED)
+        self.assertEqual(cancelled.data["status"], QuoteRequest.Status.CANCELLED)
         self.assertEqual(Order.objects.count(), 0)
 
         customer_quotes = self.client.get("/api/v1/quotes/")
         self.assertEqual(customer_quotes.status_code, status.HTTP_200_OK)
         self.assertEqual(customer_quotes.data["count"], 0)
+        customer_cancelled_quotes = self.client.get(
+            "/api/v1/quotes/?display_status=cancelled"
+        )
+        self.assertEqual(customer_cancelled_quotes.data["count"], 0)
 
         self.client.force_authenticate(self.admin)
         admin_quotes = self.client.get("/api/v1/quotes/")
         self.assertEqual(admin_quotes.status_code, status.HTTP_200_OK)
         self.assertEqual(admin_quotes.data["count"], 0)
+        admin_cancelled_quotes = self.client.get(
+            "/api/v1/quotes/?status=cancelled"
+        )
+        self.assertEqual(admin_cancelled_quotes.data["count"], 0)
 
     def test_public_quote_rejects_arbitrary_or_hidden_products(self):
         arbitrary_payload = self.quote_payload()
@@ -576,11 +584,19 @@ class ActiveApiPermissionTests(APITestCase):
         admin_orders = self.client.get("/api/v1/orders/")
         self.assertEqual(admin_orders.status_code, status.HTTP_200_OK)
         self.assertEqual(admin_orders.data["count"], 0)
+        admin_cancelled_orders = self.client.get(
+            "/api/v1/orders/?display_status=cancelled"
+        )
+        self.assertEqual(admin_cancelled_orders.data["count"], 0)
 
         self.client.force_authenticate(self.customer)
         customer_orders = self.client.get("/api/v1/orders/")
         self.assertEqual(customer_orders.status_code, status.HTTP_200_OK)
         self.assertEqual(customer_orders.data["count"], 0)
+        customer_cancelled_orders = self.client.get(
+            "/api/v1/orders/?status=cancelled"
+        )
+        self.assertEqual(customer_cancelled_orders.data["count"], 0)
 
     def test_completed_order_is_terminal(self):
         self.client.force_authenticate(self.admin)
