@@ -5,13 +5,61 @@ from html import escape
 from urllib.parse import quote
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils import timezone
 
 from common.email_delivery import send_application_email
 from common.integrations.power_automate import send_power_automate_event
-from core.models import NotificationJob
+from core.models import NotificationJob, UserNotification
 
 logger = logging.getLogger(__name__)
+
+
+ORDER_STATUS_LABELS = {
+    "pending": "Pending",
+    "scheduled": "Processing",
+    "processing": "Processing",
+    "completed": "Completed",
+    "cancelled": "Cancelled",
+}
+
+QUOTE_STATUS_LABELS = {
+    "new": "Pending",
+    "reviewing": "Processing",
+    "quoted": "Invoice ready",
+    "approved": "Completed",
+    "cancelled": "Cancelled",
+}
+
+
+def _status_label(status: str, labels: dict[str, str]) -> str:
+    return labels.get(status, status.replace("_", " ").title())
+
+
+def _customer_recipients(*, user_id: int | None, email: str):
+    User = get_user_model()
+    recipient_filter = Q(email__iexact=email)
+    if user_id:
+        recipient_filter |= Q(pk=user_id)
+    return User.objects.filter(recipient_filter, is_active=True).distinct()
+
+
+def _staff_recipients():
+    User = get_user_model()
+    return User.objects.filter(is_staff=True, is_active=True)
+
+
+def _create_portal_notifications(*, recipients, title: str, message: str, url: str) -> None:
+    UserNotification.objects.bulk_create([
+        UserNotification(
+            recipient=recipient,
+            title=title,
+            message=message,
+            url=url,
+        )
+        for recipient in recipients
+    ])
 
 
 def _quote_context(payload: dict):
@@ -329,11 +377,64 @@ def publish_quote_message(message_id: int) -> None:
     _dispatch(NotificationJob.Kind.QUOTE_MESSAGE_EMAIL, {"message_id": message_id})
 
 
+def publish_quote_status_changed(
+    quote_id: int,
+    previous_status: str,
+    new_status: str,
+) -> None:
+    quote_request = _quote_context({"quote_id": quote_id})
+    status_label = _status_label(new_status, QUOTE_STATUS_LABELS)
+    previous_label = _status_label(previous_status, QUOTE_STATUS_LABELS)
+    quote_number = quote_request.quote_number
+
+    _create_portal_notifications(
+        recipients=_customer_recipients(
+            user_id=quote_request.user_id,
+            email=quote_request.requester_email,
+        ),
+        title=f"Quote {quote_number} is {status_label}",
+        message=f"Your quote changed from {previous_label} to {status_label}.",
+        url=f"/account?tab=quotes&quote={quote_number}",
+    )
+    _create_portal_notifications(
+        recipients=_staff_recipients(),
+        title=f"Quote {quote_number} is {status_label}",
+        message=(
+            f"{quote_request.requester_contact_person}'s quote changed from "
+            f"{previous_label} to {status_label}."
+        ),
+        url=f"/admin/quotes?quote={quote_number}",
+    )
+
+
 def publish_order_status_changed(
     order_id: int,
     previous_status: str,
     new_status: str,
 ) -> None:
+    from orders.models import Order
+
+    order = Order.objects.select_related("user").get(pk=order_id)
+    status_label = _status_label(new_status, ORDER_STATUS_LABELS)
+    previous_label = _status_label(previous_status, ORDER_STATUS_LABELS)
+    order_number = order.order_number
+
+    _create_portal_notifications(
+        recipients=_customer_recipients(user_id=order.user_id, email=order.customer_email),
+        title=f"Order {order_number} is {status_label}",
+        message=f"Your order changed from {previous_label} to {status_label}.",
+        url="/account?tab=orders",
+    )
+    _create_portal_notifications(
+        recipients=_staff_recipients(),
+        title=f"Order {order_number} is {status_label}",
+        message=(
+            f"{order.customer_first_name} {order.customer_last_name}'s order changed "
+            f"from {previous_label} to {status_label}."
+        ),
+        url=f"/admin/orders?order={order_number}",
+    )
+
     payload = {
         "order_id": order_id,
         "previous_status": previous_status,

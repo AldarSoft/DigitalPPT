@@ -68,6 +68,7 @@ class QuoteService:
         if quote_request.status == new_status:
             return quote_request
 
+        previous_status = quote_request.status
         allowed = QuoteService.ALLOWED_STATUS_TRANSITIONS[quote_request.status]
         if new_status not in allowed:
             raise ValidationError(
@@ -76,6 +77,12 @@ class QuoteService:
 
         quote_request.status = new_status
         quote_request.save(update_fields=["status", "updated_at"])
+        from core.notifications import publish_quote_status_changed
+
+        transaction.on_commit(
+            lambda quote_id=quote_request.pk, old=previous_status, new=new_status:
+            publish_quote_status_changed(quote_id, old, new)
+        )
         return quote_request
 
     @staticmethod
@@ -174,6 +181,7 @@ class QuoteService:
         from quotes.invoice_pdf import build_invoice_pdf
 
         now = timezone.now()
+        previous_status = locked.status
         existing_order = locked.orders.select_for_update().order_by("created_at", "id").first()
         if existing_order:
             if existing_order.status != Order.Status.PENDING or existing_order.stock_deducted:
@@ -222,6 +230,12 @@ class QuoteService:
         from core.notifications import publish_quote_ready
 
         transaction.on_commit(lambda quote_id=locked.pk: publish_quote_ready(quote_id))
+        from core.notifications import publish_quote_status_changed
+
+        transaction.on_commit(
+            lambda quote_id=locked.pk, old=previous_status:
+            publish_quote_status_changed(quote_id, old, QuoteRequest.Status.QUOTED)
+        )
         return QuoteService._queryset().get(pk=locked.pk)
 
     @staticmethod

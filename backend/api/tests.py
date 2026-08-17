@@ -598,6 +598,38 @@ class ActiveApiPermissionTests(APITestCase):
         )
         self.assertEqual(customer_cancelled_orders.data["count"], 0)
 
+    def test_order_and_quote_status_changes_create_portal_notifications(self):
+        self.client.force_authenticate(self.admin)
+        created_order = self.client.post("/api/v1/orders/", self.order_payload(), format="json")
+        order_url = f"/api/v1/orders/{created_order.data['order_number']}/"
+
+        with self.captureOnCommitCallbacks(execute=True):
+            updated_order = self.client.patch(order_url, {"status": "processing"}, format="json")
+
+        self.assertEqual(updated_order.status_code, status.HTTP_200_OK)
+        order_notification = UserNotification.objects.get(
+            recipient=self.customer,
+            url="/account?tab=orders",
+        )
+        self.assertIn(created_order.data["order_number"], order_notification.title)
+        self.assertIn("Processing", order_notification.message)
+
+        self.client.force_authenticate(self.customer)
+        created_quote = self.client.post("/api/v1/quotes/", self.quote_payload(), format="json")
+        quote_url = f"/api/v1/quotes/{created_quote.data['quote_number']}/"
+
+        self.client.force_authenticate(self.admin)
+        with self.captureOnCommitCallbacks(execute=True):
+            updated_quote = self.client.patch(quote_url, {"status": "reviewing"}, format="json")
+
+        self.assertEqual(updated_quote.status_code, status.HTTP_200_OK)
+        quote_notification = UserNotification.objects.get(
+            recipient=self.customer,
+            url=f"/account?tab=quotes&quote={created_quote.data['quote_number']}",
+        )
+        self.assertIn(created_quote.data["quote_number"], quote_notification.title)
+        self.assertIn("Processing", quote_notification.message)
+
     def test_completed_order_is_terminal(self):
         self.client.force_authenticate(self.admin)
         created = self.client.post("/api/v1/orders/", self.order_payload(), format="json")

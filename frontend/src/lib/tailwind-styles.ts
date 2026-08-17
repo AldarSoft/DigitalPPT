@@ -8,6 +8,7 @@ const componentStyles = {
   "account-menu-link": "flex min-h-10 items-center gap-2.5 rounded-control px-3 text-sm font-semibold text-ink hover:bg-surface-muted",
   "account-menu-wrap": "relative inline-flex",
   "account-order-actions": "flex items-center gap-3 [&_a]:font-bold [&_a]:text-brand",
+  "account-pay-now": "inline-flex min-h-9 shrink-0 items-center justify-center gap-1.5 rounded-control bg-brand px-3 text-xs font-extrabold !text-white hover:bg-brand-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand",
   "account-body": "bg-canvas [padding-block:22px_64px] max-[900px]:[padding-block:20px_56px] max-[650px]:[padding-block:16px_48px]",
   "account-content": "[min-width:0] [display:grid] [gap:18px]",
   "account-detail-grid": "[display:grid] [grid-template-columns:repeat(2,_minmax(0,_1fr))] [gap:18px] max-[650px]:[grid-template-columns:1fr]",

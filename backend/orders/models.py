@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 
 from common.models import TimeStampedModel
 
@@ -97,8 +97,15 @@ class Order(TimeStampedModel):
             target_status = QuoteRequest.Status.APPROVED
 
         if self.quote_request.status != target_status:
+            previous_status = self.quote_request.status
             self.quote_request.status = target_status
             self.quote_request.save(update_fields=["status", "updated_at"])
+            from core.notifications import publish_quote_status_changed
+
+            transaction.on_commit(
+                lambda quote_id=self.quote_request_id, old=previous_status, new=target_status:
+                publish_quote_status_changed(quote_id, old, new)
+            )
 
     def __str__(self):
         return self.order_number or f"Order {self.pk}"

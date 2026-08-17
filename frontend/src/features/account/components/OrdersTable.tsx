@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { CreditCard } from 'lucide-react'
 import { tw } from '../../../lib/tailwind-styles'
 import { orderSourceLabel, orderStatusKey, orderStatusLabel } from '../../../lib/status-labels'
 import type { Order } from '../../../types'
@@ -44,7 +45,7 @@ export function OrdersTable({
                   </span>
                 </td>
                 <td>${Number(order.total).toFixed(2)}</td>
-                <td><div className={tw('account-order-actions')}><button className={tw('view-order')} type="button" onClick={() => onSelect?.(order)}>View</button>{paymentsEnabled && order.status === 'pending' ? <Link to={`/payment?order=${encodeURIComponent(order.order_number)}`}>Pay now</Link> : null}</div></td>
+                <td><div className={tw('account-order-actions')}><button className={tw('view-order')} type="button" onClick={() => onSelect?.(order)}>View</button>{paymentsEnabled && order.status === 'pending' ? <Link className={tw('account-pay-now')} to={`/payment?order=${encodeURIComponent(order.order_number)}`}><CreditCard size={15} />Pay now</Link> : null}</div></td>
               </tr>
             ))
           ) : (

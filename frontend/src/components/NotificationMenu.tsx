@@ -47,6 +47,8 @@ export function NotificationMenu({ userId, variant }: { userId: number; variant:
       queryClient.invalidateQueries({ queryKey: ['quotes', 'mine'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-quotes', 'detail'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-quotes', 'list'] }),
+      queryClient.invalidateQueries({ queryKey: ['orders', 'mine'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] }),
     ])
     setOpen(false)
     navigate(notification.url)
