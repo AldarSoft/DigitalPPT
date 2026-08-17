@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { RadioTower } from 'lucide-react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -47,7 +46,7 @@ export function RegisterPage() {
         }
     });
     return (<main className={tw("register-page")}>
-      <Link className={tw("auth-brand dark")} to="/"><span><RadioTower size={23}/></span>Digital PTT</Link>
+      <Link className={tw("auth-brand dark")} to="/" aria-label="Digital PTT home"><img src="/digital-ptt-logo.svg" alt="Digital PTT" /></Link>
       <form onSubmit={submit}>
         <p className={tw("eyebrow")}>CREATE ACCOUNT</p>
         <h1>Set up your customer workspace</h1>
@@ -65,4 +64,3 @@ export function RegisterPage() {
       </form>
     </main>);
 }
-

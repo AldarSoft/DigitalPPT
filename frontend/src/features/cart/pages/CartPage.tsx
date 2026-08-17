@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, FileText, LockKeyhole, Minus, Plus, ShoppingBag } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
+import { useAuth } from '../../../contexts/AuthContext'
 import { useCart } from '../../../contexts/CartContext'
 import { api, mediaUrl } from '../../../lib/api'
 import { unitPriceForQuantity } from '../../../lib/pricing'
@@ -9,7 +10,9 @@ import { primaryProductImage } from '../../../lib/product-images'
 
 export function CartPage() {
     const cart = useCart();
+    const auth = useAuth();
     const paymentStatus = useQuery({ queryKey: ['storefront-payment-status'], queryFn: api.storefrontPaymentStatus });
+    if (auth.user?.is_staff) return <Navigate to="/admin" replace />
     const canContinue = cart.items.length > 0;
     const canPurchase = canContinue && cart.items.every(({ product, quantity }) => product.inventory_quantity >= quantity);
     const paymentsEnabled = paymentStatus.data?.storefront_enabled === true;

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Box, CreditCard, FileText, LayoutDashboard, LogOut, Menu, PanelsTopLeft, RadioTower, Search, Settings, ShoppingCart, Users, Warehouse, X } from 'lucide-react'
+import { BarChart3, Box, CreditCard, FileText, LayoutDashboard, LogOut, Menu, PanelsTopLeft, Search, Settings, ShoppingCart, Users, Warehouse, X } from 'lucide-react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { NotificationMenu } from '../components/NotificationMenu'
 import { OverflowTooltipText } from '../components/OverflowTooltipText'
@@ -42,7 +42,7 @@ export function AdminLayout() {
     ] as const;
     return (<div className={tw("admin-shell")}>
       <aside className={tw(`admin-sidebar ${open ? 'open' : ''}`)}>
-        <NavLink className={tw("admin-brand")} to="/"><span><RadioTower size={21}/></span>Digital PTT</NavLink>
+        <NavLink className={tw("admin-brand")} to="/" aria-label="Digital PTT home"><img src="/digital-ptt-logo.svg" alt="Digital PTT" /></NavLink>
         <button className={tw("admin-close")} type="button" aria-label="Close menu" onClick={() => setOpen(false)}><X /></button>
         <p>OPERATIONS</p>
         <nav>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 410 107" role="img" aria-labelledby="title">
+  <title id="title">Digital PTT</title>
+  <path fill="#586DF6" d="M46.9875 0 0 26.625v51.75l46.68751 27.7125L93.9 78.375V26.4375L46.9875 0Zm0 3.75 41.85 23.625-41.925 24.675-41.7-24.4875L46.9875 3.75ZM3.2625 30.675l41.7 24.45.075 46.12501L3.2625 76.2V30.675Z"/>
+  <text x="111" y="72" fill="#586DF6" font-family="Funnel Sans, Manrope, Arial, sans-serif" font-size="58" font-weight="700" letter-spacing="-1.8">Digital PTT</text>
+</svg>

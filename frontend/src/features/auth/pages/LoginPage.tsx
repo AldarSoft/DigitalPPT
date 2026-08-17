@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { CheckCircle2, Eye, EyeOff, LockKeyhole, Mail, RadioTower } from 'lucide-react'
+import { CheckCircle2, Eye, EyeOff, LockKeyhole, Mail } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -48,7 +48,7 @@ export function LoginPage() {
     });
     return (<main className={tw("auth-page")}>
       <section className={tw("auth-intro")}>
-        <Link className={tw("auth-brand")} to="/"><span><RadioTower size={23}/></span>Digital PTT</Link>
+        <Link className={tw("auth-brand")} to="/" aria-label="Digital PTT home"><img src="/digital-ptt-logo.svg" alt="Digital PTT" /></Link>
         <div>
           <p className={tw("eyebrow lime")}>YOUR COMMUNICATION HUB</p>
           <h1>Manage orders, radios and support in one place.</h1>
@@ -73,4 +73,3 @@ export function LoginPage() {
       {forgotOpen ? <ForgotPasswordPage onClose={() => setForgotOpen(false)}/> : null}
     </main>);
 }
-

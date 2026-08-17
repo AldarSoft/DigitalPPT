@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { LayoutDashboard, LogIn, LogOut, Menu, RadioTower, Search, ShoppingBag, UserPlus, UserRound, X } from 'lucide-react'
+import { LayoutDashboard, LogIn, LogOut, Menu, Search, ShoppingBag, UserPlus, UserRound, X } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { NotificationMenu } from '../components/NotificationMenu'
 import { useAuth } from '../contexts/AuthContext'
@@ -9,17 +9,13 @@ import { api } from '../lib/api'
 import { tw } from '../lib/tailwind-styles'
 import type { User } from '../types'
 
-function Logo({ siteName = 'Digital PTT' }: { siteName?: string }) {
+function Logo() {
     return (<Link className={tw("brand")} to="/" aria-label="Digital PTT home">
-      <span className={tw("brand-mark")}>
-        <RadioTower size={22} strokeWidth={2.2}/>
-      </span>
-      <span>{siteName}</span>
+      <img src="/digital-ptt-logo.svg" alt="Digital PTT" />
     </Link>);
 }
-function Header({ cartCount, siteName, user, authReady, onLogout }: {
+function Header({ cartCount, user, authReady, onLogout }: {
     cartCount: number;
-    siteName?: string;
     user: User | null;
     authReady: boolean;
     onLogout: () => Promise<void>;
@@ -68,7 +64,7 @@ function Header({ cartCount, siteName, user, authReady, onLogout }: {
     return (<>
       <header className={tw("site-header")}>
         <div className={tw("shell nav-shell")}>
-          <Logo siteName={siteName} />
+          <Logo />
           <nav className={tw(`main-nav ${menuOpen ? 'is-open' : ''}`)} aria-label="Main navigation">
             <Link to="/shop" onClick={() => setMenuOpen(false)}>Shop</Link>
             <Link to="/shop?category=poc-radios" onClick={() => setMenuOpen(false)}>POC Radios</Link>
@@ -113,10 +109,10 @@ function Header({ cartCount, siteName, user, authReady, onLogout }: {
                 </>}
               </div> : null}
             </div>
-            <Link className={tw("icon-button cart-button")} to="/cart" aria-label={`Open cart with ${cartCount} items`}>
+            {!user?.is_staff ? <Link className={tw("icon-button cart-button")} to="/cart" aria-label={`Open cart with ${cartCount} items`}>
               <ShoppingBag size={21}/>
               {cartCount > 0 ? <span className={tw("cart-count")}>{cartCount}</span> : null}
-            </Link>
+            </Link> : null}
             <button className={tw("icon-button menu-button")} type="button" aria-label={menuOpen ? 'Close menu' : 'Open menu'} onClick={() => setMenuOpen((open) => !open)}>
               {menuOpen ? <X size={22}/> : <Menu size={22}/>}
             </button>
@@ -130,17 +126,17 @@ function Header({ cartCount, siteName, user, authReady, onLogout }: {
       </header>
     </>);
 }
-function Footer({ siteName, tagline, supportEmail }: { siteName?: string; tagline?: string; supportEmail?: string }) {
+function Footer({ siteName, tagline, supportEmail, user }: { siteName?: string; tagline?: string; supportEmail?: string; user: User | null }) {
     return (<footer className={tw("site-footer")}>
       <div className={tw("shell footer-grid")}>
         <div className={tw("footer-brand")}>
-          <Logo siteName={siteName} />
+          <Logo />
           <p>{tagline || 'Your communication solutions, professional radios, connected systems and field-ready accessories.'}</p>
         </div>
         <div className={tw("footer-links")}>
           <div><strong>Shop</strong><Link to="/shop?category=poc-radios">POC radios</Link><Link to="/shop?category=radio-holsters">Radio holsters</Link><Link to="/shop?stock=true">In-stock products</Link><Link to="/shop">All products</Link></div>
           <div><strong>Explore</strong><Link to="/#solutions">Fleet solutions</Link><Link to="/#comparison">Compare radios</Link><Link to="/#resources">Radio guides</Link><a href={`mailto:${supportEmail || 'sales@digitalptt.com'}`}>Contact a specialist</a></div>
-          <div><strong>Account</strong><Link to="/account">My account</Link><Link to="/cart">Cart</Link><Link to="/login">Sign in</Link><Link to="/register">Create account</Link></div>
+          <div><strong>Account</strong><Link to="/account">My account</Link>{!user?.is_staff ? <Link to="/cart">Cart</Link> : null}<Link to="/login">Sign in</Link><Link to="/register">Create account</Link></div>
         </div>
       </div>
       <div className={tw("footer-bottom")}>
@@ -165,9 +161,9 @@ export function PublicLayout() {
 
   return (
     <>
-      {isAuthRoute ? null : <Header cartCount={cart.count} siteName={settings?.site_name} user={auth.user} authReady={auth.ready} onLogout={auth.logout} />}
+      {isAuthRoute ? null : <Header cartCount={cart.count} user={auth.user} authReady={auth.ready} onLogout={auth.logout} />}
       <Outlet />
-      {isAuthRoute ? null : <Footer siteName={settings?.site_name} tagline={settings?.tagline} supportEmail={settings?.support_email} />}
+      {isAuthRoute ? null : <Footer siteName={settings?.site_name} tagline={settings?.tagline} supportEmail={settings?.support_email} user={auth.user} />}
     </>
   )
 }
