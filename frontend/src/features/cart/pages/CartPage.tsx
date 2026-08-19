@@ -13,8 +13,8 @@ export function CartPage() {
     const auth = useAuth();
     const paymentStatus = useQuery({ queryKey: ['storefront-payment-status'], queryFn: api.storefrontPaymentStatus });
     if (auth.user?.is_staff) return <Navigate to="/admin" replace />
-    const canContinue = cart.items.length > 0;
-    const canPurchase = canContinue && cart.items.every(({ product, quantity }) => product.inventory_quantity >= quantity);
+    const canContinue = cart.items.length > 0 && !cart.isLicenseCalculating && !cart.licenseCalculationError;
+    const canPurchase = canContinue && cart.items.every(({ product, quantity }) => product.is_stock_tracked === false || product.inventory_quantity >= quantity);
     const paymentsEnabled = paymentStatus.data?.storefront_enabled === true;
     return (<main className={tw("cart-page")}>
       <section className={tw("page-title")}>
@@ -32,15 +32,18 @@ export function CartPage() {
                   <span>Product</span>
                   <span>Subtotal</span>
                 </div>
-                {cart.items.map(({ product, quantity }) => {
+                {cart.items.map((item) => {
+                const { product, quantity } = item;
                 const image = primaryProductImage(product);
-                const availableForPayment = product.inventory_quantity >= quantity;
+                const availableForPayment = product.is_stock_tracked === false || product.inventory_quantity >= quantity;
                 const unitPrice = unitPriceForQuantity(product, quantity);
                 const bulkPriceActive = Boolean(product.bulk_minimum_quantity && product.bulk_unit_price !== null && quantity >= product.bulk_minimum_quantity);
-                const availabilityLabel = availableForPayment
+                const availabilityLabel = item.is_automatic
+                  ? `Required license - covers up to ${product.license_capacity ?? 0} products`
+                  : availableForPayment
                   ? `In stock - ${product.inventory_quantity} ready`
                   : `${product.inventory_quantity} in stock - quote required`;
-                return (<article className={tw("cart-item")} key={product.id}>
+                return (<article className={tw("cart-item")} key={`${product.id}-${item.is_automatic ? 'automatic' : 'manual'}`}>
                       <Link className={tw("cart-item-image")} to={`/products/${product.slug}`} aria-label={`View ${product.name}`}>
                         <img src={mediaUrl(image?.image_url)} alt={image?.alt_text || product.name}/>
                       </Link>
@@ -48,8 +51,12 @@ export function CartPage() {
                         <Link to={`/products/${product.slug}`}><h2>{product.name}</h2></Link>
                         <p>SKU&nbsp;&nbsp;{product.sku}</p>
                         <span className={tw(availableForPayment ? '' : 'out')}><i />{availabilityLabel}</span>
+                        {item.is_automatic ? <small className={tw("automatic-license-label")}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}
                       </div>
-                      <div className={tw("quantity-control")} aria-label={`Quantity for ${product.name}`}>
+                      {item.is_automatic ? <div className={tw("quantity-control")} aria-label={`Required quantity for ${product.name}`}>
+                        <LockKeyhole size={15}/>
+                        <strong aria-live="polite">{quantity}</strong>
+                      </div> : <div className={tw("quantity-control")} aria-label={`Quantity for ${product.name}`}>
                         <button type="button" aria-label={`Decrease ${product.name} quantity`} disabled={quantity <= 1} onClick={() => cart.setQuantity(product.id, quantity - 1)}>
                           <Minus size={16}/>
                         </button>
@@ -57,11 +64,11 @@ export function CartPage() {
                         <button type="button" aria-label={`Increase ${product.name} quantity`} disabled={quantity >= 1000} onClick={() => cart.setQuantity(product.id, quantity + 1)}>
                           <Plus size={16}/>
                         </button>
-                      </div>
+                      </div>}
                       <div className={tw("cart-item-price")}>
                         <small className={tw(`cart-item-unit-price ${bulkPriceActive ? 'bulk' : ''}`)}>${unitPrice.toFixed(2)} each{bulkPriceActive ? ' - Bulk price' : ''}</small>
                         <strong>${(unitPrice * quantity).toFixed(2)}</strong>
-                        <button type="button" onClick={() => cart.remove(product.id)}>Remove</button>
+                        {item.is_automatic ? null : <button type="button" onClick={() => cart.remove(product.id)}>Remove</button>}
                       </div>
                     </article>);
             })}
@@ -79,6 +86,8 @@ export function CartPage() {
               <div><dt>Shipping</dt><dd>Calculated later</dd></div>
               <div className={tw("summary-total")}><dt>Estimated total</dt><dd>${cart.subtotal.toFixed(2)}</dd></div>
             </dl>
+            {cart.isLicenseCalculating ? <p>Calculating required license capacity...</p> : null}
+            {cart.licenseCalculationError ? <p role="alert">Required license capacity could not be calculated.</p> : null}
             {paymentsEnabled && canPurchase ? <Link className={tw("primary-action")} to="/payment">
               <LockKeyhole size={17}/>Proceed to payment <ArrowRight size={18}/>
             </Link> : paymentsEnabled ? <button className={tw("primary-action disabled")} type="button" disabled title={canContinue ? 'Requested quantity exceeds available stock. Request a quote instead.' : undefined}>

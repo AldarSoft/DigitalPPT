@@ -33,10 +33,13 @@ class ProductAdmin(admin.ModelAdmin):
         "cost_price",
         "sale_price",
         "inventory_quantity",
+        "licensing_role",
+        "license_capacity",
+        "license_term_days",
         "is_featured",
         "is_active",
     )
-    list_filter = ("status", "is_featured", "is_active", "category")
+    list_filter = ("status", "licensing_role", "is_featured", "is_active", "category")
     search_fields = ("name", "slug", "sku", "brand")
-    list_select_related = ("category",)
+    list_select_related = ("category", "required_license_product")
     prepopulated_fields = {"slug": ("name",)}

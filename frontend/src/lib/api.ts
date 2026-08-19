@@ -1,4 +1,4 @@
-import type { Banner, BillingDetails, Category, NotificationInbox, Order, Paginated, PaymentAttempt, PaymentProvider, PaymentProviderCode, PaymentStatus, Product, Promotion, QuoteRequest, SiteSettings, StorefrontPaymentStatus, User, UserNotification } from '../types'
+import type { Banner, BillingDetails, CartCapacityResponse, Category, NotificationInbox, Order, Paginated, PaymentAttempt, PaymentProvider, PaymentProviderCode, PaymentStatus, Product, Promotion, QuoteRequest, SiteSettings, StorefrontPaymentStatus, User, UserNotification } from '../types'
 
 const localApiHost =
   typeof window !== 'undefined' &&
@@ -85,6 +85,11 @@ async function request<T>(
 
 export const api = {
   categories: () => request<Paginated<Category> | Category[]>('/products/categories/'),
+  cartCapacity: (items: Array<{ product: number; quantity: number }>) =>
+    request<CartCapacityResponse>('/licensing/cart-capacity/', {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    }),
   products: (query = '') =>
     request<Paginated<Product> | Product[]>(`/products/catalog/${query ? `?${query}` : ''}`),
   product: (slug: string) => request<Product>(`/products/catalog/${slug}/`),

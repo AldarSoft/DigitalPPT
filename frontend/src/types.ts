@@ -30,6 +30,16 @@ export interface ProductSpecification {
   sort_order: number
 }
 
+export interface LicenseProductSummary {
+  id: number
+  name: string
+  slug: string
+  sku: string
+  current_price: string
+  license_capacity: number
+  license_term_days: number
+}
+
 export interface Product {
   id: number
   name: string
@@ -45,6 +55,11 @@ export interface Product {
   bulk_unit_price: string | null
   current_price: string
   inventory_quantity: number
+  licensing_role: 'standard' | 'licensed_product' | 'license_product'
+  required_license_product: LicenseProductSummary | null
+  license_capacity: number | null
+  license_term_days: number | null
+  is_stock_tracked: boolean
   status: 'draft' | 'published' | 'archived'
   is_featured: boolean
   is_active: boolean
@@ -268,6 +283,31 @@ export interface QuoteRequest {
 export interface CartItem {
   product: Product
   quantity: number
+  is_automatic?: boolean
+  covered_quantity?: number
+  uncovered_quantity?: number
+  required_for_product_names?: string[]
+}
+
+export interface CartCapacityRequirement {
+  license_product: Product
+  product_quantities: Array<{
+    product_id: number
+    product_name: string
+    quantity: number
+  }>
+  requested_quantity: number
+  covered_quantity: number
+  uncovered_quantity: number
+  available_capacity: number
+  required_license_units: number
+  provided_license_units: number
+  automatic_license_units: number
+}
+
+export interface CartCapacityResponse {
+  organization: { public_id: string; name: string } | null
+  requirements: CartCapacityRequirement[]
 }
 
 export type PaymentProviderCode = 'stripe' | 'paypal' | 'qpay' | 'bank_transfer'

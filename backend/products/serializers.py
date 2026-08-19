@@ -42,11 +42,32 @@ class ProductSpecificationSerializer(serializers.ModelSerializer):
         fields = ("id", "key", "value", "sort_order")
 
 
+class LicenseProductSummarySerializer(serializers.ModelSerializer):
+    current_price = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = (
+            "id",
+            "name",
+            "slug",
+            "sku",
+            "current_price",
+            "license_capacity",
+            "license_term_days",
+        )
+
+    def get_current_price(self, obj) -> Decimal:
+        return obj.current_price
+
+
 class ProductSerializer(serializers.ModelSerializer):
     category = CategorySerializer(read_only=True)
     images = ProductImageSerializer(many=True, read_only=True)
     specifications = ProductSpecificationSerializer(many=True, read_only=True)
     current_price = serializers.SerializerMethodField()
+    required_license_product = LicenseProductSummarySerializer(read_only=True)
+    is_stock_tracked = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Product
@@ -64,6 +85,11 @@ class ProductSerializer(serializers.ModelSerializer):
             "bulk_unit_price",
             "current_price",
             "inventory_quantity",
+            "licensing_role",
+            "required_license_product",
+            "license_capacity",
+            "license_term_days",
+            "is_stock_tracked",
             "status",
             "is_featured",
             "is_active",
@@ -111,6 +137,13 @@ class CategoryWriteSerializer(serializers.ModelSerializer):
 class ProductWriteSerializer(serializers.ModelSerializer):
     images = ProductImageSerializer(many=True, required=False)
     specifications = ProductSpecificationSerializer(many=True, required=False)
+    required_license_product_id = serializers.PrimaryKeyRelatedField(
+        source="required_license_product",
+        queryset=Product.objects.all(),
+        allow_null=True,
+        required=False,
+        write_only=True,
+    )
 
     class Meta:
         model = Product
@@ -128,6 +161,10 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             "bulk_minimum_quantity",
             "bulk_unit_price",
             "inventory_quantity",
+            "licensing_role",
+            "required_license_product_id",
+            "license_capacity",
+            "license_term_days",
             "status",
             "is_featured",
             "is_active",
@@ -163,6 +200,48 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             errors["bulk_unit_price"] = "Bulk unit price cannot exceed the current unit price."
         if price is not None and sale_price is not None and sale_price > price:
             errors["sale_price"] = "Sale price cannot be greater than the regular price."
+        licensing_role = attrs.get(
+            "licensing_role", getattr(self.instance, "licensing_role", Product.LicensingRole.STANDARD)
+        )
+        required_license_product = attrs.get(
+            "required_license_product",
+            getattr(self.instance, "required_license_product", None),
+        )
+        license_capacity = attrs.get(
+            "license_capacity", getattr(self.instance, "license_capacity", None)
+        )
+        license_term_days = attrs.get(
+            "license_term_days", getattr(self.instance, "license_term_days", None)
+        )
+        if licensing_role == Product.LicensingRole.STANDARD:
+            if required_license_product or license_capacity or license_term_days:
+                errors["licensing_role"] = (
+                    "Standard products cannot contain license compatibility metadata."
+                )
+        elif licensing_role == Product.LicensingRole.LICENSED_PRODUCT:
+            if not required_license_product:
+                errors["required_license_product_id"] = (
+                    "Select the license product consumed by this product."
+                )
+            elif required_license_product.licensing_role != Product.LicensingRole.LICENSE_PRODUCT:
+                errors["required_license_product_id"] = (
+                    "The compatible product must be a license product."
+                )
+            if license_capacity or license_term_days:
+                errors["licensing_role"] = (
+                    "Licensed products consume capacity; they do not supply it."
+                )
+        elif licensing_role == Product.LicensingRole.LICENSE_PRODUCT:
+            if required_license_product:
+                errors["required_license_product_id"] = (
+                    "A license product cannot require another license product."
+                )
+            if not license_capacity:
+                errors["license_capacity"] = "License capacity must be greater than zero."
+            if not license_term_days:
+                errors["license_term_days"] = "License term must be greater than zero."
+        if self.instance and required_license_product == self.instance:
+            errors["required_license_product_id"] = "A product cannot require itself."
         images = attrs.get("images")
         if images is not None and sum(bool(image.get("is_primary")) for image in images) > 1:
             errors["images"] = "Only one product image can be primary."

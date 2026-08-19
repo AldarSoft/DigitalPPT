@@ -98,11 +98,13 @@ export function ProductDetailsPage() {
         queryFn: () => api.products(`category=${encodeURIComponent(product.category.slug)}`),
         enabled: Boolean(resolvedProduct),
     });
+    const isLicenseProduct = product.licensing_role === 'license_product';
     const availableStock = Math.max(0, product.inventory_quantity);
-    const isOutOfStock = availableStock === 0;
+    const maximumQuantity = product.is_stock_tracked === false ? 1000 : availableStock;
+    const isOutOfStock = product.is_stock_tracked !== false && availableStock === 0;
     const [quantityState, setQuantityState] = useState({ productId: product.id, value: 1 });
     const quantity = quantityState.productId === product.id
-        ? (isOutOfStock ? 0 : Math.min(Math.max(quantityState.value, 1), availableStock))
+        ? (isOutOfStock ? 0 : Math.min(Math.max(quantityState.value, 1), maximumQuantity))
         : (isOutOfStock ? 0 : 1);
     const unitPrice = unitPriceForQuantity(product, quantity);
     const bulkPriceActive = Boolean(
@@ -113,7 +115,7 @@ export function ProductDetailsPage() {
     const updateQuantity = (value: number) => {
         setQuantityState({
             productId: product.id,
-            value: isOutOfStock ? 0 : Math.min(Math.max(value, 1), availableStock),
+            value: isOutOfStock ? 0 : Math.min(Math.max(value, 1), maximumQuantity),
         });
     };
     const gallery = product.images.length
@@ -165,7 +167,7 @@ export function ProductDetailsPage() {
                   <img src={image.src} alt=""/>
                 </button>))}
             </div>
-            <div className={tw("product-main-image")}>
+            <div className={tw(`product-main-image ${isLicenseProduct ? 'license' : ''}`)}>
               <img src={gallery[activeImage].src} alt={gallery[activeImage].alt}/>
             </div>
           </div>
@@ -181,7 +183,7 @@ export function ProductDetailsPage() {
             </p>
             <strong className={tw("product-price")}>${unitPrice.toFixed(2)}</strong>
             {product.bulk_minimum_quantity && product.bulk_unit_price ? <p className={tw(`product-bulk-price ${bulkPriceActive ? 'active' : ''}`)}>{bulkPriceActive ? `Bulk price active - $${unitPrice.toFixed(2)} each` : `Buy ${product.bulk_minimum_quantity}+ for $${Number(product.bulk_unit_price).toFixed(2)} each`}</p> : null}
-            <p className={tw(`product-stock ${isOutOfStock ? 'out' : ''}`)}><span /> {isOutOfStock ? 'Currently out of stock' : `In stock - ${availableStock} ready to ship`}</p>
+            <p className={tw(`product-stock ${isOutOfStock ? 'out' : ''}`)}><span /> {isOutOfStock ? 'Currently out of stock' : isLicenseProduct ? `${product.license_term_days ?? 365}-day digital license - activates after payment approval` : `In stock - ${availableStock} ready to ship`}</p>
 
             <div className={tw("product-purchase-row")}>
               <div className={tw(`quantity-control ${isOutOfStock ? 'disabled' : ''}`)} aria-label="Quantity selector" aria-disabled={isOutOfStock}>
@@ -189,7 +191,7 @@ export function ProductDetailsPage() {
                   <Minus size={17}/>
                 </button>
                 <strong aria-live="polite">{quantity}</strong>
-                <button type="button" aria-label="Increase quantity" disabled={isOutOfStock || quantity >= availableStock} onClick={() => updateQuantity(quantity + 1)}>
+                <button type="button" aria-label="Increase quantity" disabled={isOutOfStock || quantity >= maximumQuantity} onClick={() => updateQuantity(quantity + 1)}>
                   <Plus size={17}/>
                 </button>
               </div>
@@ -254,10 +256,10 @@ export function ProductDetailsPage() {
       </section> : (<section className={tw("product-features")}>
           <div className={tw("shell product-feature-grid")}>
             <div className={tw("product-feature-copy")}>
-              <p className={tw("eyebrow")}>FIELD-READY ACCESSORY</p>
-              <h2>Designed for dependable daily carry</h2>
+              <p className={tw("eyebrow")}>{isLicenseProduct ? 'RADIOADMIN SERVICE' : 'FIELD-READY ACCESSORY'}</p>
+              <h2>{isLicenseProduct ? 'Annual capacity for your connected radio products' : 'Designed for dependable daily carry'}</h2>
               <p>{product.description || product.short_description}</p>
-              <div className={tw("product-notice")}><Info size={21}/><span>Confirm radio fit and carry preference before placing a larger fleet order.</span></div>
+              <div className={tw("product-notice")}><Info size={21}/><span>{isLicenseProduct ? `Each license supports up to ${product.license_capacity ?? 0} compatible products and can extend an existing license or prepare capacity for future radio orders.` : 'Confirm radio fit and carry preference before placing a larger fleet order.'}</span></div>
             </div>
             <div className={tw("product-feature-list")}>
               {product.specifications.map((spec) => (<div className={tw("product-feature-item")} key={spec.key}>

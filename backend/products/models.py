@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 from django.utils.text import slugify
 
 from common.models import ActiveModel, TimeStampedModel
@@ -45,7 +47,9 @@ class Category(ActiveModel):
 
 class ProductQuerySet(models.QuerySet):
     def with_catalog_relations(self):
-        return self.select_related("category").prefetch_related("images", "specifications")
+        return self.select_related("category", "required_license_product").prefetch_related(
+            "images", "specifications"
+        )
 
     def public(self):
         return self.filter(
@@ -60,6 +64,11 @@ class Product(ActiveModel):
         DRAFT = "draft", "Draft"
         PUBLISHED = "published", "Published"
         ARCHIVED = "archived", "Archived"
+
+    class LicensingRole(models.TextChoices):
+        STANDARD = "standard", "Standard product"
+        LICENSED_PRODUCT = "licensed_product", "Licensed product"
+        LICENSE_PRODUCT = "license_product", "License product"
 
     category = models.ForeignKey(
         Category,
@@ -78,6 +87,21 @@ class Product(ActiveModel):
     bulk_minimum_quantity = models.PositiveIntegerField(null=True, blank=True)
     bulk_unit_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     inventory_quantity = models.PositiveIntegerField(default=0)
+    licensing_role = models.CharField(
+        max_length=24,
+        choices=LicensingRole.choices,
+        default=LicensingRole.STANDARD,
+        db_index=True,
+    )
+    required_license_product = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="compatible_products",
+    )
+    license_capacity = models.PositiveIntegerField(null=True, blank=True)
+    license_term_days = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -97,7 +121,61 @@ class Product(ActiveModel):
             models.Index(fields=["sku"]),
             models.Index(fields=["is_featured", "status"]),
             models.Index(fields=["brand"]),
+            models.Index(fields=["licensing_role", "status", "is_active"]),
         ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        licensing_role="standard",
+                        required_license_product__isnull=True,
+                        license_capacity__isnull=True,
+                        license_term_days__isnull=True,
+                    )
+                    | Q(
+                        licensing_role="licensed_product",
+                        required_license_product__isnull=False,
+                        license_capacity__isnull=True,
+                        license_term_days__isnull=True,
+                    )
+                    | Q(
+                        licensing_role="license_product",
+                        required_license_product__isnull=True,
+                        license_capacity__isnull=False,
+                        license_term_days__isnull=False,
+                    )
+                ),
+                name="products_licensing_metadata_by_role",
+            ),
+        ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.required_license_product_id == self.pk and self.pk is not None:
+            errors["required_license_product"] = "A product cannot require itself."
+
+        if self.licensing_role == self.LicensingRole.LICENSED_PRODUCT:
+            if not self.required_license_product_id:
+                errors["required_license_product"] = (
+                    "Select the license product consumed by this product."
+                )
+            elif (
+                self.required_license_product
+                and self.required_license_product.licensing_role
+                != self.LicensingRole.LICENSE_PRODUCT
+            ):
+                errors["required_license_product"] = (
+                    "The compatible product must be a license product."
+                )
+        elif self.licensing_role == self.LicensingRole.LICENSE_PRODUCT:
+            if not self.license_capacity:
+                errors["license_capacity"] = "License capacity must be greater than zero."
+            if not self.license_term_days:
+                errors["license_term_days"] = "License term must be greater than zero."
+
+        if errors:
+            raise ValidationError(errors)
 
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -122,6 +200,10 @@ class Product(ActiveModel):
         ):
             return self.bulk_unit_price
         return self.current_price
+
+    @property
+    def is_stock_tracked(self):
+        return self.licensing_role != self.LicensingRole.LICENSE_PRODUCT
 
     def __str__(self):
         return self.name

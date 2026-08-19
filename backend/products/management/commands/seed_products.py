@@ -38,6 +38,11 @@ class Command(BaseCommand):
         created_count = 0
         updated_count = 0
 
+        payload.sort(
+            key=lambda entry: entry.get("licensingRole")
+            != Product.LicensingRole.LICENSE_PRODUCT
+        )
+
         with transaction.atomic():
             for entry in payload:
                 product, created = self._upsert_product(entry)
@@ -56,6 +61,19 @@ class Command(BaseCommand):
         category = self._resolve_category(entry)
         images = entry.get("images", [])
         specifications = entry.get("specifications", [])
+        licensing_role = entry.get("licensingRole", Product.LicensingRole.STANDARD)
+        required_license_product = self._resolve_required_license_product(
+            entry, licensing_role
+        )
+        license_capacity = self._to_optional_int(entry.get("licenseCapacity"))
+        license_term_days = self._to_optional_int(entry.get("licenseTermDays"))
+        self._validate_licensing_metadata(
+            entry,
+            licensing_role,
+            required_license_product,
+            license_capacity,
+            license_term_days,
+        )
 
         defaults = {
             "category": category,
@@ -67,7 +85,15 @@ class Command(BaseCommand):
             "price": self._to_decimal(entry.get("price"), default="0"),
             "cost_price": self._to_optional_decimal(entry.get("costPrice")),
             "sale_price": self._to_optional_decimal(entry.get("salePrice")),
-            "inventory_quantity": int(entry.get("stock", 0) or 0),
+            "inventory_quantity": (
+                0
+                if licensing_role == Product.LicensingRole.LICENSE_PRODUCT
+                else int(entry.get("stock", 0) or 0)
+            ),
+            "licensing_role": licensing_role,
+            "required_license_product": required_license_product,
+            "license_capacity": license_capacity,
+            "license_term_days": license_term_days,
             "status": Product.Status.PUBLISHED,
             "is_featured": bool(entry.get("isFeatured", False)),
             "is_active": True,
@@ -115,6 +141,63 @@ class Command(BaseCommand):
 
         return product, created
 
+    def _validate_licensing_metadata(
+        self,
+        entry: dict,
+        licensing_role: str,
+        required_license_product: Product | None,
+        license_capacity: int | None,
+        license_term_days: int | None,
+    ) -> None:
+        valid_roles = {value for value, _label in Product.LicensingRole.choices}
+        if licensing_role not in valid_roles:
+            raise CommandError(
+                f"Product '{entry.get('name')}' has invalid licensingRole "
+                f"'{licensing_role}'."
+            )
+        if licensing_role == Product.LicensingRole.STANDARD:
+            if required_license_product or license_capacity or license_term_days:
+                raise CommandError(
+                    f"Standard product '{entry.get('name')}' cannot set license metadata."
+                )
+        elif licensing_role == Product.LicensingRole.LICENSED_PRODUCT:
+            if license_capacity or license_term_days:
+                raise CommandError(
+                    f"Licensed product '{entry.get('name')}' consumes capacity and "
+                    "cannot supply capacity or a term."
+                )
+        elif not license_capacity or not license_term_days:
+            raise CommandError(
+                f"License product '{entry.get('name')}' requires positive "
+                "licenseCapacity and licenseTermDays."
+            )
+
+    def _resolve_required_license_product(
+        self, entry: dict, licensing_role: str
+    ) -> Product | None:
+        required_sku = entry.get("requiredLicenseSku")
+        if licensing_role != Product.LicensingRole.LICENSED_PRODUCT:
+            if required_sku:
+                raise CommandError(
+                    f"Product '{entry.get('name')}' cannot set requiredLicenseSku "
+                    f"with licensingRole '{licensing_role}'."
+                )
+            return None
+        if not required_sku:
+            raise CommandError(
+                f"Licensed product '{entry.get('name')}' requires requiredLicenseSku."
+            )
+        try:
+            license_product = Product.objects.get(sku=required_sku)
+        except Product.DoesNotExist as exc:
+            raise CommandError(
+                f"License product '{required_sku}' must appear before "
+                f"'{entry.get('name')}' or already exist."
+            ) from exc
+        if license_product.licensing_role != Product.LicensingRole.LICENSE_PRODUCT:
+            raise CommandError(f"Product '{required_sku}' is not a license product.")
+        return license_product
+
     def _resolve_category(self, entry: dict) -> Category:
         category_id = entry.get("categoryId")
         if category_id:
@@ -144,6 +227,11 @@ class Command(BaseCommand):
         if value in (None, ""):
             return None
         return Decimal(str(value))
+
+    def _to_optional_int(self, value) -> int | None:
+        if value in (None, ""):
+            return None
+        return int(value)
 
     @staticmethod
     def _portable_media_url(value: str) -> str:

@@ -106,6 +106,7 @@ class CheckoutItemSerializer(serializers.Serializer):
         queryset=Product.objects.public()
     )
     quantity = serializers.IntegerField(min_value=1, max_value=999)
+    automatic = serializers.BooleanField(default=False, write_only=True)
 
 
 class OrderCreateSerializer(serializers.ModelSerializer):
@@ -193,7 +194,7 @@ class CheckoutSerializer(serializers.ModelSerializer):
         inventory_errors = {}
         for item in value:
             product = item["product"]
-            if product.inventory_quantity < item["quantity"]:
+            if product.is_stock_tracked and product.inventory_quantity < item["quantity"]:
                 inventory_errors[str(product.pk)] = (
                     f"Only {product.inventory_quantity} units are available."
                 )

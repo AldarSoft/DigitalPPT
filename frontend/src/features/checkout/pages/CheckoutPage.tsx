@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { ArrowRight, Check, Clock3, FileText, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Check, Clock3, FileText, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -116,9 +116,9 @@ export function CheckoutPage() {
           </div>
           <aside className={tw('checkout-summary')}>
             <h2>Your quote request</h2>
-            {cart.items.map(({ product, quantity }) => (
-              <div className={tw('checkout-line')} key={product.id}>
-                <span>{product.name} x {quantity}</span>
+            {cart.items.map(({ product, quantity, is_automatic }) => (
+              <div className={tw('checkout-line')} key={`${product.id}-${is_automatic ? 'automatic' : 'manual'}`}>
+                <span>{product.name} x {quantity}{is_automatic ? <small className={tw('automatic-license-label')}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}</span>
                 <strong>${(Number(product.current_price) * quantity).toFixed(2)}</strong>
               </div>
             ))}

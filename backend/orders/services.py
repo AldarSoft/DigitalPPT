@@ -116,18 +116,24 @@ class OrderService:
             if existing.user_id != authenticated_user.id:
                 raise ValidationError({"idempotency_key": "This checkout key is already in use."})
             return existing
-        product_ids = [item["product"].pk for item in items_data]
+        from licensing.services import CartLicenseService
+
+        _, normalized_items, _ = CartLicenseService.normalize_checkout_items(
+            user=authenticated_user,
+            items=items_data,
+            lock=True,
+        )
+        product_ids = [product.pk for product, _ in normalized_items]
         products = Product.objects.select_for_update().public().in_bulk(product_ids)
 
         subtotal = Decimal("0.00")
         prepared_items = []
         inventory_errors = {}
-        for item in items_data:
-            product = products.get(item["product"].pk)
-            quantity = item["quantity"]
+        for requested_product, quantity in normalized_items:
+            product = products.get(requested_product.pk)
             if not product:
                 raise ValidationError({"items": "A product is no longer available."})
-            if product.inventory_quantity < quantity:
+            if product.is_stock_tracked and product.inventory_quantity < quantity:
                 inventory_errors[str(product.pk)] = (
                     f"Only {product.inventory_quantity} units are available."
                 )
@@ -198,7 +204,7 @@ class OrderService:
 
         item_quantities = {}
         for item in locked_order.items.all():
-            if item.product_id:
+            if item.product_id and item.product.is_stock_tracked:
                 item_quantities[item.product_id] = (
                     item_quantities.get(item.product_id, 0) + item.quantity
                 )

@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "orders",
     "quotes",
     "payments",
+    "licensing",
     "core",
     'drf_spectacular',
 ]
@@ -284,6 +285,85 @@ SPECTACULAR_SETTINGS = {
         "orders, quotes, promotions, site content, and administration."
     ),
     "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "POSTPROCESSING_HOOKS": [
+        "config.schema.categorize_operations",
+        "drf_spectacular.hooks.postprocess_schema_enums",
+    ],
+    "TAGS": [
+        {
+            "name": "Authentication",
+            "description": (
+                "Login, registration, session refresh, and password recovery."
+            ),
+        },
+        {
+            "name": "User Administration",
+            "description": "Staff management of customer and administrator accounts.",
+        },
+        {
+            "name": "Product Catalog",
+            "description": (
+                "Products, categories, inventory-facing catalog data, and "
+                "product media."
+            ),
+        },
+        {
+            "name": "Checkout",
+            "description": "Cart checkout and order creation.",
+        },
+        {
+            "name": "Orders",
+            "description": "Customer and staff order workflows.",
+        },
+        {
+            "name": "Quotes",
+            "description": (
+                "Quote requests, review, pricing, messages, and invoicing."
+            ),
+        },
+        {
+            "name": "Payments",
+            "description": (
+                "Payment providers, checkout sessions, attempts, and payment "
+                "status."
+            ),
+        },
+        {
+            "name": "Licensing",
+            "description": (
+                "Organization licenses, capacity, allocations, teams, and "
+                "invitations."
+            ),
+        },
+        {
+            "name": "Notifications",
+            "description": "Customer status and account notifications.",
+        },
+        {
+            "name": "Support",
+            "description": "Customer contact and support requests.",
+        },
+        {
+            "name": "Site Content",
+            "description": "Storefront settings, banners, and promotions.",
+        },
+        {
+            "name": "Other",
+            "description": "API operations not yet assigned to a domain.",
+        },
+    ],
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "displayOperationId": False,
+        "displayRequestDuration": True,
+        "docExpansion": "none",
+        "filter": True,
+        "operationsSorter": "method",
+        "persistAuthorization": True,
+        "tagsSorter": "alpha",
+        "defaultModelsExpandDepth": 1,
+    },
     "ENUM_NAME_OVERRIDES": {
         "ProductStatusEnum": "products.models.Product.Status",
         "OrderStatusEnum": "orders.models.Order.Status",

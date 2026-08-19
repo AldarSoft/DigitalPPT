@@ -114,6 +114,69 @@ class Command(BaseCommand):
         created = 0
         updated = 0
 
+        license_category, _ = Category.objects.get_or_create(
+            name="Licenses",
+            defaults={
+                "description": "Annual product-capacity licenses for Digital PTT services.",
+                "is_active": True,
+            },
+        )
+        license_product, _ = Product.objects.update_or_create(
+            sku="LIC-RA-BUS-200",
+            defaults={
+                "category": license_category,
+                "name": "RadioAdmin Business License",
+                "slug": "radioadmin-business-license",
+                "brand": "Digital PTT",
+                "short_description": "Annual capacity for up to 200 compatible products.",
+                "description": (
+                    "Annual RadioAdmin Business service license with capacity for up to "
+                    "200 compatible Digital PTT radio products."
+                ),
+                "price": Decimal("250.00"),
+                "inventory_quantity": 0,
+                "licensing_role": Product.LicensingRole.LICENSE_PRODUCT,
+                "required_license_product": None,
+                "license_capacity": 200,
+                "license_term_days": 365,
+                "status": Product.Status.PUBLISHED,
+                "is_featured": False,
+                "is_active": True,
+            },
+        )
+        ProductImage.objects.update_or_create(
+            product=license_product,
+            is_primary=True,
+            defaults={
+                "image_url": "/images/radioadmin-business-license-v2.png",
+                "alt_text": "Digital PTT RadioAdmin Business License",
+                "sort_order": 0,
+            },
+        )
+        license_product.specifications.all().delete()
+        ProductSpecification.objects.bulk_create(
+            [
+                ProductSpecification(
+                    product=license_product,
+                    key="Product capacity",
+                    value="Up to 200 compatible radio products",
+                    sort_order=0,
+                ),
+                ProductSpecification(
+                    product=license_product,
+                    key="Term",
+                    value="365 days",
+                    sort_order=1,
+                ),
+                ProductSpecification(
+                    product=license_product,
+                    key="Delivery",
+                    value="Digital activation after payment approval",
+                    sort_order=2,
+                ),
+            ]
+        )
+
         for entry in CATALOG:
             category, _ = Category.objects.get_or_create(
                 name=entry["category"],
@@ -137,6 +200,16 @@ class Command(BaseCommand):
                     "description": entry["short"],
                     "price": Decimal(entry["price"]),
                     "inventory_quantity": entry["stock"],
+                    "licensing_role": (
+                        Product.LicensingRole.LICENSED_PRODUCT
+                        if entry["category"] == "POC Radios"
+                        else Product.LicensingRole.STANDARD
+                    ),
+                    "required_license_product": (
+                        license_product if entry["category"] == "POC Radios" else None
+                    ),
+                    "license_capacity": None,
+                    "license_term_days": None,
                     "status": Product.Status.PUBLISHED,
                     "is_featured": entry["featured"],
                     "is_active": True,

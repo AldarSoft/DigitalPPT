@@ -133,7 +133,11 @@ export function PaymentPage() {
           shipping_postal_code: billing.postal_code,
           shipping_country: billing.country,
           notes: '',
-          items: cart.items.map(({ product, quantity }) => ({ product: product.id, quantity })),
+          items: cart.items.map(({ product, quantity, is_automatic }) => ({
+            product: product.id,
+            quantity,
+            automatic: Boolean(is_automatic),
+          })),
         })
         setCreatedOrder(payableOrder)
       }
@@ -214,7 +218,7 @@ export function PaymentPage() {
         <aside className={tw('client-payment-summary')}>
           <h2>Your order</h2>
           <div className={tw('client-payment-order')}>
-            {order ? order.items.map((item) => <div key={item.id}><img src={mediaUrl(item.image_url)} alt="" /><span>{item.product_name}<small>{item.sku || 'Product'} - Qty {item.quantity}</small></span><strong>{money(item.line_total)}</strong></div>) : cart.items.map(({ product, quantity }) => <div key={product.id}><img src={mediaUrl(product.images?.[0]?.image_url)} alt="" /><span>{product.name}<small>{product.sku || 'Product'} - Qty {quantity}</small></span><strong>{money(unitPriceForQuantity(product, quantity) * quantity)}</strong></div>)}
+            {order ? order.items.map((item) => <div key={item.id}><img src={mediaUrl(item.image_url)} alt="" /><span>{item.product_name}<small>{item.sku || 'Product'} - Qty {item.quantity}</small></span><strong>{money(item.line_total)}</strong></div>) : cart.items.map(({ product, quantity, is_automatic }) => <div key={`${product.id}-${is_automatic ? 'automatic' : 'manual'}`}><img src={mediaUrl(product.images?.[0]?.image_url)} alt="" /><span>{product.name}<small>{product.sku || 'Product'} - Qty {quantity}</small>{is_automatic ? <small className={tw('automatic-license-label')}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}</span><strong>{money(unitPriceForQuantity(product, quantity) * quantity)}</strong></div>)}
           </div>
           <dl className={tw('client-payment-totals')}><div><dt>Subtotal</dt><dd>{money(order?.subtotal ?? cart.subtotal)}</dd></div><div><dt>Shipping</dt><dd>{order ? money(order.shipping_fee) : money(0)}</dd></div><div><dt>Total</dt><dd>{money(order?.total ?? cart.subtotal)}</dd></div></dl>
           <button className={tw('client-payment-submit')} type="submit" disabled={createSession.isPending || !enabledProviders.length}><LockKeyhole size={16} />{createSession.isPending ? 'Creating order...' : `Place order with ${selectedProvider.title}`}</button>

@@ -152,27 +152,22 @@ class PaymentService:
 
     @staticmethod
     @transaction.atomic
-    def simulate_checkout(*, attempt, user, outcome):
+    def complete_success(*, attempt, actor, external_reference):
+        from licensing.services import PaymentSuccessProvisioningService
+
         locked = (
             PaymentAttempt.objects.select_for_update()
             .select_related("order", "provider", "created_by")
             .get(pk=attempt.pk)
         )
-        if not user.is_staff and locked.created_by_id != user.id:
-            raise ValidationError({"session": "This payment session is not available."})
+        if locked.status == PaymentAttempt.Status.SUCCEEDED:
+            PaymentSuccessProvisioningService.provision(
+                payment_attempt=locked,
+                actor=actor,
+            )
+            locked.refresh_from_db()
+            return locked
         if locked.status != PaymentAttempt.Status.PENDING:
-            return locked
-        if locked.expires_at and locked.expires_at <= timezone.now():
-            locked.status = PaymentAttempt.Status.EXPIRED
-            locked.failure_message = "The development checkout session expired."
-            locked.save(update_fields=["status", "failure_message", "updated_at"])
-            return locked
-
-        if outcome == PaymentAttempt.Status.FAILED:
-            locked.status = PaymentAttempt.Status.FAILED
-            locked.failure_message = "Simulated provider decline."
-            locked.external_reference = f"dev_failed_{locked.pk}"
-            locked.save(update_fields=["status", "failure_message", "external_reference", "updated_at"])
             return locked
 
         locked_order = Order.objects.select_for_update().get(pk=locked.order_id)
@@ -196,13 +191,62 @@ class PaymentService:
         OrderService.update_status(order=locked_order, new_status=next_status)
         locked.status = PaymentAttempt.Status.SUCCEEDED
         locked.failure_message = ""
-        locked.external_reference = f"dev_paid_{locked.pk}"
+        locked.external_reference = external_reference
         locked.paid_at = timezone.now()
-        locked.save(update_fields=["status", "failure_message", "external_reference", "paid_at", "updated_at"])
+        locked.save(
+            update_fields=[
+                "status",
+                "failure_message",
+                "external_reference",
+                "paid_at",
+                "updated_at",
+            ]
+        )
+        PaymentSuccessProvisioningService.provision(
+            payment_attempt=locked,
+            actor=actor,
+        )
         PaymentService.close_pending_attempts(
             order=locked_order,
             exclude_attempt_id=locked.pk,
             reason="Closed after another payment succeeded.",
         )
-        locked.order.refresh_from_db(fields=["status"])
+        locked.refresh_from_db()
         return locked
+
+    @staticmethod
+    @transaction.atomic
+    def simulate_checkout(*, attempt, user, outcome):
+        locked = (
+            PaymentAttempt.objects.select_for_update()
+            .select_related("order", "provider", "created_by")
+            .get(pk=attempt.pk)
+        )
+        if not user.is_staff and locked.created_by_id != user.id:
+            raise ValidationError({"session": "This payment session is not available."})
+        if locked.status == PaymentAttempt.Status.SUCCEEDED:
+            return PaymentService.complete_success(
+                attempt=locked,
+                actor=user,
+                external_reference=locked.external_reference,
+            )
+        if locked.status != PaymentAttempt.Status.PENDING:
+            return locked
+        if locked.expires_at and locked.expires_at <= timezone.now():
+            locked.status = PaymentAttempt.Status.EXPIRED
+            locked.failure_message = "The development checkout session expired."
+            locked.save(update_fields=["status", "failure_message", "updated_at"])
+            return locked
+
+        if outcome == PaymentAttempt.Status.FAILED:
+            locked.status = PaymentAttempt.Status.FAILED
+            locked.failure_message = "Simulated provider decline."
+            locked.external_reference = f"dev_failed_{locked.pk}"
+            locked.save(update_fields=["status", "failure_message", "external_reference", "updated_at"])
+            return locked
+
+        return PaymentService.complete_success(
+            attempt=locked,
+            actor=user,
+            external_reference=f"dev_paid_{locked.pk}",
+        )

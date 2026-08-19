@@ -1,5 +1,7 @@
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import mixins, status, viewsets
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -23,6 +25,10 @@ from payments.providers import provider_is_available, provider_is_configured
 class PaymentStatusView(APIView):
     permission_classes = [IsAdminUser]
 
+    @extend_schema(
+        summary="Get administrative payment availability",
+        responses={200: OpenApiTypes.OBJECT},
+    )
     def get(self, request):
         providers = PaymentProvider.objects.all()
         live_processing_available = any(
@@ -40,6 +46,10 @@ class PaymentStatusView(APIView):
 class StorefrontPaymentStatusView(APIView):
     permission_classes = [AllowAny]
 
+    @extend_schema(
+        summary="Get storefront payment availability",
+        responses={200: OpenApiTypes.OBJECT},
+    )
     def get(self, request):
         providers = [
             provider for provider in PaymentProvider.objects.filter(is_enabled=True)
@@ -57,6 +67,11 @@ class CheckoutSessionCreateView(APIView):
     permission_classes = [IsAuthenticated]
     throttle_scope = "payment_test"
 
+    @extend_schema(
+        summary="Create or reuse a payment checkout session",
+        request=CheckoutSessionCreateSerializer,
+        responses={200: PaymentAttemptSerializer, 201: PaymentAttemptSerializer},
+    )
     def post(self, request):
         if not settings.PAYMENTS_STOREFRONT_ENABLED:
             raise NotFound()
@@ -91,6 +106,10 @@ class PaymentSessionDetailView(APIView):
             queryset = queryset.filter(created_by=request.user, order__user=request.user)
         return get_object_or_404(queryset, idempotency_key=session_id)
 
+    @extend_schema(
+        summary="Get a payment checkout session",
+        responses=PaymentAttemptSerializer,
+    )
     def get(self, request, session_id):
         if not settings.PAYMENTS_STOREFRONT_ENABLED:
             raise NotFound()
@@ -103,6 +122,11 @@ class PaymentSessionDetailView(APIView):
 class PaymentSessionSimulateView(PaymentSessionDetailView):
     throttle_scope = "payment_test"
 
+    @extend_schema(
+        summary="Simulate a development payment result",
+        request=DevelopmentConfirmationSerializer,
+        responses=PaymentAttemptSerializer,
+    )
     def post(self, request, session_id):
         if not (
             settings.DEBUG

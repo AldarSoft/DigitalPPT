@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.core.files.storage import default_storage
-from django.db.models import DecimalField, IntegerField, OuterRef, Subquery, Sum, Value
+from django.db.models import DecimalField, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from rest_framework import parsers, status, viewsets
 from rest_framework.decorators import action
@@ -123,15 +123,25 @@ class ProductViewSet(viewsets.ModelViewSet):
         min_price = self.request.query_params.get("min_price")
         max_price = self.request.query_params.get("max_price")
         status_value = self.request.query_params.get("status")
+        licensing_role = self.request.query_params.get("licensing_role")
 
         if category_slug:
             queryset = queryset.filter(category__slug=category_slug)
         if featured in {"true", "1"}:
             queryset = queryset.filter(is_featured=True)
         if stock in {"true", "1"}:
-            queryset = queryset.filter(inventory_quantity__gt=0)
+            queryset = queryset.filter(
+                Q(inventory_quantity__gt=0)
+                | Q(licensing_role=Product.LicensingRole.LICENSE_PRODUCT)
+            )
         if stock == "out":
-            queryset = queryset.filter(inventory_quantity=0)
+            queryset = queryset.filter(
+                inventory_quantity=0,
+                licensing_role__in=(
+                    Product.LicensingRole.STANDARD,
+                    Product.LicensingRole.LICENSED_PRODUCT,
+                ),
+            )
         if stock == "low":
             queryset = queryset.filter(inventory_quantity__gt=0, inventory_quantity__lte=5)
         if stock == "healthy":
@@ -158,6 +168,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(current_price_value__lte=max_price)
         if status_value and self.request.user and self.request.user.is_staff:
             queryset = queryset.filter(status=status_value)
+        if licensing_role and self.request.user and self.request.user.is_staff:
+            queryset = queryset.filter(licensing_role=licensing_role)
         return queryset
 
     def get_permissions(self):

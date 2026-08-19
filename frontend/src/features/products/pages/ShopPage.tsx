@@ -130,7 +130,7 @@ export function ShopPage() {
             list = list.filter((product) => product.category.slug === category);
         }
         if (inStock) {
-            list = list.filter((product) => product.inventory_quantity > 0);
+            list = list.filter((product) => product.is_stock_tracked === false || product.inventory_quantity > 0);
         }
         list = list.filter((product) => {
             const price = Number(product.current_price);

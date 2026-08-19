@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { ChevronRight, Download, Image as ImageIcon, Plus, Search, Star, Trash2, Upload, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, mediaUrl, unwrap } from '../../../lib/api'
@@ -39,13 +39,18 @@ export function AdminProductsPage() {
     const totalProducts = productsQuery.data && !Array.isArray(productsQuery.data) ? productsQuery.data.count : products.length;
     const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: api.categories });
     const categories = categoriesQuery.data ? unwrap(categoriesQuery.data) : [];
+    const licenseProductsQuery = useQuery({
+      queryKey: ['admin-license-products'],
+      queryFn: () => api.products('licensing_role=license_product&page_size=100'),
+    });
+    const licenseProducts = licenseProductsQuery.data ? unwrap(licenseProductsQuery.data) : [];
 
     const remove = useMutation({
         mutationFn: (product: Product) => api.deleteProduct(product.slug),
         onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-products'] }); toast.success('Product deleted'); },
         onError: () => toast.error('Could not delete product'),
     });
-    if (productsQuery.isError || categoriesQuery.isError)
+    if (productsQuery.isError || categoriesQuery.isError || licenseProductsQuery.isError)
         return <AdminErrorState resource="products" />;
     return (<main className={tw("admin-page")}>
       <div className={tw("admin-title-row")}><div><h1>Products</h1><p>Manage catalog, pricing and inventory across {totalProducts} products.</p></div><button className={tw("admin-primary")} type="button" onClick={() => setEditing('new')}><Plus size={19}/>Add product</button></div>
@@ -76,7 +81,7 @@ export function AdminProductsPage() {
         className="mt-3"
         onPageChange={setPage}
       />
-      {editing ? <ProductEditor product={editing === 'new' ? null : editing} categories={categories} onClose={() => setEditing(null)}/> : null}
+      {editing ? <ProductEditor product={editing === 'new' ? null : editing} categories={categories} licenseProducts={licenseProducts} onClose={() => setEditing(null)}/> : null}
     </main>);
 }
 type ProductForm = {
@@ -92,6 +97,10 @@ type ProductForm = {
     bulk_minimum_quantity: string;
     bulk_unit_price: string;
     inventory_quantity: number;
+    licensing_role: Product['licensing_role'];
+    required_license_product_id: number | null;
+    license_capacity: string;
+    license_term_days: string;
     status: Product['status'];
     is_featured: boolean;
     is_active: boolean;
@@ -106,9 +115,10 @@ type EditableProductImage = {
     file?: File;
 };
 
-function ProductEditor({ product, categories, onClose }: {
+function ProductEditor({ product, categories, licenseProducts, onClose }: {
     product: Product | null;
     categories: Category[];
+    licenseProducts: Product[];
     onClose: () => void;
 }) {
     const queryClient = useQueryClient();
@@ -128,7 +138,7 @@ function ProductEditor({ product, categories, onClose }: {
         objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
         objectUrls.current.clear();
     }, []);
-    const { register, handleSubmit } = useForm<ProductForm>({
+    const { register, handleSubmit, control } = useForm<ProductForm>({
         defaultValues: product ? {
             category: product.category.id,
             name: product.name,
@@ -142,6 +152,10 @@ function ProductEditor({ product, categories, onClose }: {
             bulk_minimum_quantity: product.bulk_minimum_quantity?.toString() ?? '',
             bulk_unit_price: product.bulk_unit_price ?? '',
             inventory_quantity: product.inventory_quantity,
+            licensing_role: product.licensing_role,
+            required_license_product_id: product.required_license_product?.id ?? null,
+            license_capacity: product.license_capacity?.toString() ?? '',
+            license_term_days: product.license_term_days?.toString() ?? '',
             status: product.status,
             is_featured: product.is_featured,
             is_active: product.is_active,
@@ -152,8 +166,13 @@ function ProductEditor({ product, categories, onClose }: {
             is_active: true,
             is_featured: false,
             inventory_quantity: 0,
+            licensing_role: 'standard',
+            required_license_product_id: null,
+            license_capacity: '',
+            license_term_days: '',
         },
     });
+    const licensingRole = useWatch({ control, name: 'licensing_role' });
     const save = useMutation({
         mutationFn: async (data: ProductForm) => {
             const uploadedImages = await Promise.all(images.map(async (image) => ({
@@ -168,6 +187,18 @@ function ProductEditor({ product, categories, onClose }: {
                 sale_price: data.sale_price || null,
                 bulk_minimum_quantity: data.bulk_minimum_quantity ? Number(data.bulk_minimum_quantity) : null,
                 bulk_unit_price: data.bulk_unit_price || null,
+                required_license_product_id: data.licensing_role === 'licensed_product'
+                    ? data.required_license_product_id
+                    : null,
+                license_capacity: data.licensing_role === 'license_product'
+                    ? Number(data.license_capacity)
+                    : null,
+                license_term_days: data.licensing_role === 'license_product'
+                    ? Number(data.license_term_days)
+                    : null,
+                inventory_quantity: data.licensing_role === 'license_product'
+                    ? 0
+                    : data.inventory_quantity,
                 images: uploadedImages.map((image, index) => ({
                     image_url: image.imageUrl,
                     alt_text: image.altText || data.name,
@@ -236,6 +267,9 @@ function ProductEditor({ product, categories, onClose }: {
           <label>Product name<input required {...register('name')}/></label>
           <div className={tw("editor-row")}><label>SKU<input required {...register('sku')}/></label><label>Brand<input {...register('brand')}/></label></div>
           <label>Category<AdminSelect {...register('category', { valueAsNumber: true })}>{categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</AdminSelect></label>
+          <label>Licensing role<AdminSelect {...register('licensing_role')}><option value="standard">Standard product</option><option value="licensed_product">Licensed product</option><option value="license_product">License product</option></AdminSelect></label>
+          {licensingRole === 'licensed_product' ? <label>Required license product<AdminSelect required {...register('required_license_product_id', { valueAsNumber: true })}><option value="">Select license product</option>{licenseProducts.filter((item) => item.id !== product?.id).map((item) => <option value={item.id} key={item.id}>{item.name} ({item.sku})</option>)}</AdminSelect></label> : null}
+          {licensingRole === 'license_product' ? <div className={tw("editor-row")}><label>Capacity supplied<input type="number" min="1" required {...register('license_capacity')}/></label><label>Term in days<input type="number" min="1" required {...register('license_term_days')}/></label></div> : null}
           <div className={tw("editor-row")}><label>Price<input type="number" min="0" step="0.01" required {...register('price')}/></label><label>Sale price<input type="number" min="0" step="0.01" {...register('sale_price')}/></label></div>
           <div className={tw("editor-row")}><label>Bulk from quantity<input type="number" min="2" step="1" {...register('bulk_minimum_quantity')}/></label><label>Bulk unit price<input type="number" min="0.01" step="0.01" {...register('bulk_unit_price')}/></label></div>
           <div className={tw("editor-row")}><label>Cost price<input type="number" min="0" step="0.01" {...register('cost_price')}/></label><label>Stock quantity<input type="number" min="0" {...register('inventory_quantity', { valueAsNumber: true })}/></label></div>
