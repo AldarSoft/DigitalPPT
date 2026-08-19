@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, LayoutDashboard, LogOut, Package, Settings, UserRound } from 'lucide-react'
+import { FileText, KeyRound, LayoutDashboard, LogOut, Package, Settings, UserRound, Users } from 'lucide-react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { Pagination } from '../../../components/Pagination'
@@ -14,10 +14,12 @@ import { OrdersTable } from '../components/OrdersTable'
 import { ProfileForm } from '../components/ProfileForm'
 import { QuotesTable } from '../components/QuotesTable'
 import type { AccountTab } from '../types'
+import { OrganizationLicensesPanel } from '../../licensing/pages/OrganizationLicensesPanel'
+import { OrganizationTeamPanel } from '../../licensing/pages/OrganizationTeamPanel'
 
 const ORDER_PAGE_SIZE = 8
 const QUOTE_PAGE_SIZE = 10
-const ACCOUNT_TABS: AccountTab[] = ['overview', 'quotes', 'orders', 'settings']
+const ACCOUNT_TABS: AccountTab[] = ['overview', 'quotes', 'orders', 'licenses', 'team', 'settings']
 const STAFF_ACCOUNT_TABS: AccountTab[] = ['settings']
 
 export function AccountPage() {
@@ -108,6 +110,8 @@ export function AccountPage() {
                     ["overview", LayoutDashboard, "Overview"],
                     ["quotes", FileText, "Quote requests"],
                     ["orders", Package, "Past orders"],
+                    ["licenses", KeyRound, "Organization licenses"],
+                    ["team", Users, "Organization Team"],
                     ["settings", Settings, "Account settings"],
                   ]
             ).map(([value, Icon, label]) => (
@@ -151,6 +155,8 @@ export function AccountPage() {
                 <Pagination page={orderPage} pageSize={ORDER_PAGE_SIZE} total={orderCount} loading={ordersQuery.isFetching} className="mt-3" onPageChange={setOrderPage} />
               </>
             ) : null}
+            {!isStaff && tab === 'licenses' ? <OrganizationLicensesPanel /> : null}
+            {!isStaff && tab === 'team' ? <OrganizationTeamPanel /> : null}
             {tab === "settings" ? <ProfileForm user={auth.user} /> : null}
           </div>
         </div>

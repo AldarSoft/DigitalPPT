@@ -337,6 +337,13 @@ SPECTACULAR_SETTINGS = {
             ),
         },
         {
+            "name": "License Administration",
+            "description": (
+                "Staff organization search, license history, notifications, "
+                "and audited adjustments."
+            ),
+        },
+        {
             "name": "Notifications",
             "description": "Customer status and account notifications.",
         },

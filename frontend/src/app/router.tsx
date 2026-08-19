@@ -19,6 +19,8 @@ import { CheckoutPage } from '../features/checkout/pages/CheckoutPage'
 import { PaymentPage } from '../features/payments/pages/PaymentPage'
 import { ProductDetailsPage } from '../features/products/pages/ProductDetailsPage'
 import { ShopPage } from '../features/products/pages/ShopPage'
+import { AdminLicenseDetailPage } from '../features/licensing/pages/AdminLicenseDetailPage'
+import { AdminLicensesPage } from '../features/licensing/pages/AdminLicensesPage'
 import { AdminLayout } from '../layouts/AdminLayout'
 import { PublicLayout } from '../layouts/PublicLayout'
 import { HomePage } from '../pages/HomePage'
@@ -64,6 +66,8 @@ export function AppRouter() {
             <Route path="payments" element={<AdminPaymentsPage />} />
             <Route path="quotes" element={<AdminQuotesPage />} />
             <Route path="customers" element={<AdminCustomersPage />} />
+            <Route path="licenses" element={<AdminLicensesPage />} />
+            <Route path="licenses/:organizationId" element={<AdminLicenseDetailPage />} />
             <Route path="inventory" element={<AdminInventoryPage />} />
             <Route path="analytics" element={<AdminAnalyticsPage />} />
             <Route path="site-settings" element={<AdminSiteSettingsPage />} />

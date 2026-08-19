@@ -3,7 +3,7 @@ from rest_framework import serializers
 from products.models import Product
 from products.serializers import ProductSerializer
 
-from licensing.models import License
+from licensing.models import License, LicenseEvent
 
 
 class CartCapacityItemSerializer(serializers.Serializer):
@@ -227,3 +227,108 @@ class OrganizationTeamSerializer(serializers.Serializer):
 
 class OrganizationInvitationCreateSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=254)
+
+
+class AdminOrganizationLicenseQuerySerializer(serializers.Serializer):
+    search = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    status = serializers.ChoiceField(
+        choices=License.Status.choices,
+        required=False,
+        allow_blank=True,
+    )
+    product = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    page = serializers.IntegerField(required=False, min_value=1)
+    page_size = serializers.IntegerField(required=False, min_value=1, max_value=100)
+
+
+class AdminLicenseManagementSummarySerializer(serializers.Serializer):
+    organizations_with_licenses = serializers.IntegerField()
+    active_licenses = serializers.IntegerField()
+    licenses_expiring_in_60_days = serializers.IntegerField()
+    payments_in_review = serializers.IntegerField()
+
+
+class AdminOrganizationOwnerSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    email = serializers.EmailField()
+
+
+class AdminOrganizationLicenseRowSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    owner = AdminOrganizationOwnerSerializer(allow_null=True)
+    license_count = serializers.IntegerField()
+    used_capacity = serializers.IntegerField()
+    total_capacity = serializers.IntegerField()
+    next_expiry = serializers.DateField(allow_null=True)
+    status = serializers.ChoiceField(choices=License.Status.choices)
+
+
+class AdminOrganizationLicenseListSerializer(serializers.Serializer):
+    summary = AdminLicenseManagementSummarySerializer()
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = AdminOrganizationLicenseRowSerializer(many=True)
+
+
+class AdminOrganizationDetailIdentitySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    owner = AdminOrganizationOwnerSerializer(allow_null=True)
+    license_manager_count = serializers.IntegerField()
+
+
+class AdminOrganizationDetailSummarySerializer(serializers.Serializer):
+    subscription_starts_on = serializers.DateField(allow_null=True)
+    subscription_expires_on = serializers.DateField(allow_null=True)
+    licensed_product_count = serializers.IntegerField()
+    active_quantity = serializers.IntegerField()
+    status = serializers.ChoiceField(choices=License.Status.choices)
+
+
+class AdminOrganizationNotificationSummarySerializer(serializers.Serializer):
+    renewal_reminder_scheduled_for = serializers.DateField(allow_null=True)
+    renewal_invoice_status = serializers.CharField()
+
+
+class AdminLicenseEventSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    kind = serializers.ChoiceField(choices=LicenseEvent.Type.choices)
+    message = serializers.CharField()
+    actor_name = serializers.CharField()
+    license_number = serializers.CharField(allow_null=True)
+    metadata = serializers.JSONField()
+    created_at = serializers.DateTimeField()
+
+
+class AdminOrganizationPermissionsSerializer(serializers.Serializer):
+    can_adjust = serializers.BooleanField()
+    can_send_renewal_invoice = serializers.BooleanField()
+    can_send_notification = serializers.BooleanField()
+
+
+class AdminOrganizationLicenseDetailSerializer(serializers.Serializer):
+    organization = AdminOrganizationDetailIdentitySerializer()
+    summary = AdminOrganizationDetailSummarySerializer()
+    licenses = ClientLicenseDetailSerializer(many=True)
+    notifications = AdminOrganizationNotificationSummarySerializer()
+    events = AdminLicenseEventSerializer(many=True)
+    permissions = AdminOrganizationPermissionsSerializer()
+
+
+class AdminLicenseEventListSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = AdminLicenseEventSerializer(many=True)
+
+
+class AdminOrganizationNotificationCreateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=255, trim_whitespace=True)
+    message = serializers.CharField(max_length=2000, trim_whitespace=True)
+    license_number = serializers.CharField(
+        max_length=40,
+        required=False,
+        allow_blank=True,
+    )

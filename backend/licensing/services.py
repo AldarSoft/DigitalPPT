@@ -566,25 +566,7 @@ class ClientLicenseDetailService:
         }
 
     @classmethod
-    def for_user(cls, *, user, license_number):
-        membership = OrganizationSummaryService.membership_for_user(user)
-        if membership is None:
-            return None
-
-        license = (
-            License.objects.select_related(
-                "license_product",
-                "source_order_item__order",
-            )
-            .filter(
-                organization=membership.organization,
-                license_number=license_number,
-            )
-            .first()
-        )
-        if license is None:
-            return None
-
+    def serialize_license(cls, license):
         allocations = (
             ProductLicenseAllocation.objects.select_related(
                 "product",
@@ -631,6 +613,28 @@ class ClientLicenseDetailService:
                 for allocation in allocations
             ],
         }
+
+    @classmethod
+    def for_user(cls, *, user, license_number):
+        membership = OrganizationSummaryService.membership_for_user(user)
+        if membership is None:
+            return None
+
+        license = (
+            License.objects.select_related(
+                "license_product",
+                "source_order_item__order",
+            )
+            .filter(
+                organization=membership.organization,
+                license_number=license_number,
+            )
+            .first()
+        )
+        if license is None:
+            return None
+
+        return cls.serialize_license(license)
 
 
 class OrganizationTeamService:

@@ -1008,6 +1008,186 @@ class LicenseLifecycleTests(TestCase):
             other_organization.pk,
         )
 
+    def test_admin_can_search_and_filter_organization_licenses(self):
+        active_license = self.provision(name="Searchable Radio License")
+        LicenseLifecycleService.allocate(
+            license=active_license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=1,
+        )
+        other_organization = OrganizationService.create(
+            name="Filtered Mining Organization",
+            owner=self.outsider,
+        )
+        expired_license = LicenseLifecycleService.provision(
+            organization=other_organization,
+            license_product=self.license_product,
+            name="Expired Mining License",
+        )
+        License.objects.filter(pk=expired_license.pk).update(
+            status=License.Status.EXPIRED,
+            expires_on=timezone.localdate() - timedelta(days=1),
+        )
+        api_client = APIClient()
+
+        anonymous = api_client.get("/api/v1/admin/licensing/organizations/")
+        api_client.force_authenticate(user=self.manager)
+        forbidden = api_client.get("/api/v1/admin/licensing/organizations/")
+        api_client.force_authenticate(user=self.staff)
+        searched = api_client.get(
+            "/api/v1/admin/licensing/organizations/",
+            {"search": "Mining", "status": License.Status.EXPIRED},
+        )
+        product_filtered = api_client.get(
+            "/api/v1/admin/licensing/organizations/",
+            {"product": self.license_product.sku},
+        )
+
+        self.assertEqual(anonymous.status_code, 401)
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(searched.status_code, 200)
+        self.assertEqual(searched.data["count"], 1)
+        self.assertEqual(
+            searched.data["results"][0]["id"],
+            other_organization.pk,
+        )
+        self.assertEqual(
+            searched.data["results"][0]["status"],
+            License.Status.EXPIRED,
+        )
+        self.assertEqual(product_filtered.status_code, 200)
+        self.assertEqual(product_filtered.data["count"], 2)
+        self.assertEqual(
+            product_filtered.data["summary"]["organizations_with_licenses"],
+            2,
+        )
+        self.assertEqual(
+            product_filtered.data["summary"]["active_licenses"],
+            1,
+        )
+        self.assertEqual(active_license.organization, self.organization)
+
+    def test_admin_organization_detail_reuses_license_allocations_and_history(self):
+        license = self.provision(name="Admin Detail License")
+        LicenseLifecycleService.allocate(
+            license=license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=2,
+            actor=self.staff,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+
+        detail = api_client.get(
+            f"/api/v1/admin/licensing/organizations/{self.organization.pk}/"
+        )
+        history = api_client.get(
+            f"/api/v1/admin/licensing/organizations/"
+            f"{self.organization.pk}/history/"
+        )
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["organization"]["id"], self.organization.pk)
+        self.assertEqual(detail.data["organization"]["license_manager_count"], 1)
+        self.assertEqual(detail.data["summary"]["licensed_product_count"], 1)
+        self.assertEqual(detail.data["summary"]["active_quantity"], 2)
+        self.assertEqual(len(detail.data["licenses"]), 1)
+        self.assertEqual(
+            detail.data["licenses"][0]["license_number"],
+            license.license_number,
+        )
+        self.assertEqual(
+            detail.data["licenses"][0]["allocations"][0]["source_order"][
+                "order_number"
+            ],
+            self.order.order_number,
+        )
+        self.assertTrue(detail.data["permissions"]["can_adjust"])
+        self.assertEqual(history.status_code, 200)
+        self.assertEqual(history.data["count"], 2)
+        self.assertEqual(
+            {event["kind"] for event in history.data["results"]},
+            {LicenseEvent.Type.PROVISIONED, LicenseEvent.Type.ALLOCATED},
+        )
+
+    def test_admin_can_send_and_list_audited_organization_notification(self):
+        license = self.provision(name="Notification License")
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+        url = (
+            f"/api/v1/admin/licensing/organizations/"
+            f"{self.organization.pk}/notifications/"
+        )
+
+        sent = api_client.post(
+            url,
+            {
+                "title": "Renewal review required",
+                "message": "Please review the upcoming annual renewal.",
+                "license_number": license.license_number,
+            },
+        )
+        listed = api_client.get(url)
+        api_client.force_authenticate(user=self.manager)
+        forbidden = api_client.post(
+            url,
+            {"title": "Blocked", "message": "Not allowed"},
+        )
+
+        self.assertEqual(sent.status_code, 201)
+        self.assertEqual(sent.data["kind"], LicenseEvent.Type.NOTIFICATION_SENT)
+        self.assertEqual(sent.data["actor_name"], self.staff.email)
+        self.assertEqual(sent.data["license_number"], license.license_number)
+        self.assertEqual(UserNotification.objects.count(), 2)
+        self.assertSetEqual(
+            set(UserNotification.objects.values_list("recipient_id", flat=True)),
+            {self.owner.pk, self.manager.pk},
+        )
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data["count"], 1)
+        self.assertEqual(
+            listed.data["results"][0]["message"],
+            "Please review the upcoming annual renewal.",
+        )
+        self.assertEqual(forbidden.status_code, 403)
+
+    def test_admin_adjustment_is_audited_and_scoped_to_organization(self):
+        license = self.provision(name="Adjustable License")
+        other_organization = OrganizationService.create(
+            name="Other Adjustment Organization",
+            owner=self.outsider,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+        adjustment_url = (
+            f"/api/v1/admin/licensing/organizations/{self.organization.pk}/"
+            f"licenses/{license.license_number}/adjust/"
+        )
+
+        adjusted = api_client.post(
+            adjustment_url,
+            {"capacity": 5, "reason": "Approved support increase"},
+        )
+        wrong_organization = api_client.post(
+            f"/api/v1/admin/licensing/organizations/{other_organization.pk}/"
+            f"licenses/{license.license_number}/adjust/",
+            {"capacity": 6, "reason": "Must remain scoped"},
+        )
+
+        license.refresh_from_db()
+        event = LicenseEvent.objects.get(
+            license=license,
+            event_type=LicenseEvent.Type.ADJUSTED,
+        )
+        self.assertEqual(adjusted.status_code, 200)
+        self.assertEqual(adjusted.data["capacity"], 5)
+        self.assertEqual(license.capacity, 5)
+        self.assertEqual(event.actor, self.staff)
+        self.assertEqual(event.metadata["reason"], "Approved support increase")
+        self.assertEqual(wrong_organization.status_code, 404)
+
 
 class LicenseCompatibilityCapacityTests(TestCase):
     def setUp(self):

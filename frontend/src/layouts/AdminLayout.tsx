@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, Box, CreditCard, FileText, LayoutDashboard, LogOut, Menu, PanelsTopLeft, Search, Settings, ShoppingCart, Users, Warehouse, X } from 'lucide-react'
+import { BarChart3, Box, CreditCard, FileText, KeyRound, LayoutDashboard, LogOut, Menu, PanelsTopLeft, Search, Settings, ShoppingCart, Users, Warehouse, X } from 'lucide-react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { NotificationMenu } from '../components/NotificationMenu'
 import { OverflowTooltipText } from '../components/OverflowTooltipText'
@@ -38,6 +38,7 @@ export function AdminLayout() {
         ['/admin/orders', ShoppingCart, 'Orders', false, 'orders'],
         ['/admin/payments', CreditCard, 'Payments', false, null],
         ['/admin/customers', Users, 'Customers', false, null],
+        ['/admin/licenses', KeyRound, 'License Management', false, null],
         ['/admin/inventory', Warehouse, 'Inventory', false, null],
     ] as const;
     return (<div className={tw("admin-shell")}>

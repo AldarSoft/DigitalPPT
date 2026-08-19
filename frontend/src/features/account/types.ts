@@ -1,1 +1,1 @@
-export type AccountTab = 'overview' | 'quotes' | 'orders' | 'settings'
+export type AccountTab = 'overview' | 'quotes' | 'orders' | 'licenses' | 'team' | 'settings'

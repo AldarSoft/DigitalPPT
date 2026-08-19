@@ -1,4 +1,5 @@
 TAG_RULES = (
+    ("/api/v1/admin/licensing/", "License Administration"),
     ("/api/v1/users/auth/", "Authentication"),
     ("/api/v1/users/accounts/", "User Administration"),
     ("/api/v1/products/", "Product Catalog"),

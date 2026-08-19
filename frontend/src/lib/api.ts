@@ -1,4 +1,19 @@
 import type { Banner, BillingDetails, CartCapacityResponse, Category, NotificationInbox, Order, Paginated, PaymentAttempt, PaymentProvider, PaymentProviderCode, PaymentStatus, Product, Promotion, QuoteRequest, SiteSettings, StorefrontPaymentStatus, User, UserNotification } from '../types'
+import type {
+  AdminLicenseEvent,
+  AdminLicenseEventListResponse,
+  AdminLicenseFilters,
+  AdminOrganizationLicenseDetail,
+  AdminOrganizationLicenseListResponse,
+  ClientLicenseDetail,
+  ClientLicenseListResponse,
+  LicenseAdjustmentInput,
+  LicenseSummary,
+  OrganizationInvitation,
+  OrganizationNotificationInput,
+  OrganizationSummaryResponse,
+  OrganizationTeamResponse,
+} from '../features/licensing/types'
 
 const localApiHost =
   typeof window !== 'undefined' &&
@@ -89,6 +104,41 @@ export const api = {
     request<CartCapacityResponse>('/licensing/cart-capacity/', {
       method: 'POST',
       body: JSON.stringify({ items }),
+    }),
+  organizationSummary: () =>
+    request<OrganizationSummaryResponse>('/licensing/organization/summary/'),
+  organizationLicenses: () =>
+    request<ClientLicenseListResponse>('/licensing/organization/licenses/'),
+  organizationLicense: (licenseNumber: string) =>
+    request<ClientLicenseDetail>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/`),
+  organizationTeam: () =>
+    request<OrganizationTeamResponse>('/licensing/organization/team/'),
+  inviteLicenseManager: (email: string) =>
+    request<OrganizationInvitation>('/licensing/organization/invitations/', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  resendOrganizationInvitation: (invitationId: number) =>
+    request<OrganizationInvitation>(`/licensing/organization/invitations/${invitationId}/resend/`, { method: 'POST' }),
+  revokeOrganizationInvitation: (invitationId: number) =>
+    request<OrganizationInvitation>(`/licensing/organization/invitations/${invitationId}/revoke/`, { method: 'POST' }),
+  adminLicenseOrganizations: (filters: AdminLicenseFilters = {}) =>
+    request<AdminOrganizationLicenseListResponse>(`/admin/licensing/organizations/${licenseQuery(filters)}`),
+  adminLicenseOrganization: (organizationId: number) =>
+    request<AdminOrganizationLicenseDetail>(`/admin/licensing/organizations/${organizationId}/`),
+  adminLicenseHistory: (organizationId: number, page = 1) =>
+    request<AdminLicenseEventListResponse>(`/admin/licensing/organizations/${organizationId}/history/?page=${page}`),
+  adminLicenseNotifications: (organizationId: number, page = 1) =>
+    request<AdminLicenseEventListResponse>(`/admin/licensing/organizations/${organizationId}/notifications/?page=${page}`),
+  sendAdminLicenseNotification: (organizationId: number, data: OrganizationNotificationInput) =>
+    request<AdminLicenseEvent>(`/admin/licensing/organizations/${organizationId}/notifications/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  adjustAdminLicense: (organizationId: number, licenseNumber: string, data: LicenseAdjustmentInput) =>
+    request<LicenseSummary>(`/admin/licensing/organizations/${organizationId}/licenses/${encodeURIComponent(licenseNumber)}/adjust/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
   products: (query = '') =>
     request<Paginated<Product> | Product[]>(`/products/catalog/${query ? `?${query}` : ''}`),
@@ -224,6 +274,15 @@ export const api = {
   siteSettings: () => request<SiteSettings>('/core/site-settings/'),
   updateSiteSettings: (data: unknown) =>
     request<SiteSettings>('/core/site-settings/', { method: 'PATCH', body: JSON.stringify(data) }),
+}
+
+function licenseQuery(filters: AdminLicenseFilters) {
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') params.set(key, String(value))
+  })
+  const query = params.toString()
+  return query ? `?${query}` : ''
 }
 
 export function unwrap<T>(value: Paginated<T> | T[]) {
