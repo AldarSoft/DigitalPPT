@@ -8,6 +8,7 @@ export const licensingKeys = {
   licenses: (organizationId?: number | null) => [...licensingKeys.organization(), organizationId ?? 'default', 'licenses'] as const,
   license: (licenseNumber: string, organizationId?: number | null) => [...licensingKeys.licenses(organizationId), licenseNumber] as const,
   team: (organizationId?: number | null) => [...licensingKeys.organization(), organizationId ?? 'default', 'team'] as const,
+  settings: (organizationId?: number | null) => [...licensingKeys.organization(), organizationId ?? 'default', 'settings'] as const,
   admin: () => [...licensingKeys.all, 'admin'] as const,
   licenseProducts: () => [...licensingKeys.admin(), 'license-products'] as const,
   adminOrganizations: (filters: AdminLicenseFilters = {}) => [...licensingKeys.admin(), 'organizations', filters] as const,

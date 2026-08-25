@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { api, setAccessToken } from "../lib/api";
+import { queryClient } from "../lib/query-client";
 import type { User } from "../types";
 
 interface AuthContextValue {
@@ -47,6 +48,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await api.login({ email, password });
+    queryClient.clear();
     setAccessToken(result.access);
     setUser(result.user);
     return result.user;
@@ -54,6 +56,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const register = useCallback(async (data: unknown) => {
     const result = await api.register(data);
+    queryClient.clear();
     setAccessToken(result.access);
     setUser(result.user);
     return result.user;
@@ -71,6 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setAccessToken(null);
       setUser(null);
+      queryClient.clear();
     }
   }, []);
 

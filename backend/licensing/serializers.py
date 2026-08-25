@@ -3,7 +3,7 @@ from rest_framework import serializers
 from products.models import Product
 from products.serializers import ProductSerializer
 
-from licensing.models import License, LicenseEvent
+from licensing.models import License, LicenseEvent, Organization
 
 
 class CartCapacityItemSerializer(serializers.Serializer):
@@ -224,7 +224,7 @@ class OrganizationLicenseManagerSerializer(serializers.Serializer):
 class OrganizationInvitationSerializer(serializers.Serializer):
     invitation_id = serializers.IntegerField()
     email = serializers.EmailField()
-    role = serializers.ChoiceField(choices=("license_manager",))
+    role = serializers.ChoiceField(choices=("owner", "license_manager"))
     status = serializers.CharField()
     expires_at = serializers.DateTimeField()
     accept_url = serializers.URLField(required=False)
@@ -282,6 +282,11 @@ class OrganizationWorkspaceListSerializer(serializers.Serializer):
     default_organization_id = serializers.IntegerField(allow_null=True)
 
 
+class OrganizationCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=255)
+    billing_email = serializers.EmailField(required=False, allow_blank=True)
+
+
 class OrganizationInvitationAcceptSerializer(serializers.Serializer):
     token = serializers.CharField(min_length=20, max_length=255)
 
@@ -289,17 +294,67 @@ class OrganizationInvitationAcceptSerializer(serializers.Serializer):
 class OrganizationInvitationAcceptanceSerializer(serializers.Serializer):
     organization_id = serializers.IntegerField()
     organization_name = serializers.CharField()
-    role = serializers.ChoiceField(choices=("license_manager",))
+    role = serializers.ChoiceField(choices=("owner", "license_manager"))
+
+
+class OrganizationSettingsSerializer(serializers.Serializer):
+    id = serializers.IntegerField(read_only=True)
+    name = serializers.CharField(max_length=255)
+    billing_email = serializers.EmailField(required=False, allow_blank=True)
+    status = serializers.ChoiceField(choices=Organization.Status.choices, read_only=True)
+
+
+class AdminOrganizationCreateSerializer(serializers.Serializer):
+    class OwnerMode:
+        EXISTING = "existing"
+        CREATE_ACCOUNT = "create_account"
+        INVITE = "invite"
+        DRAFT = "draft"
+
+    name = serializers.CharField(max_length=255)
+    billing_email = serializers.EmailField(required=False, allow_blank=True)
+    owner_mode = serializers.ChoiceField(
+        choices=(OwnerMode.EXISTING, OwnerMode.CREATE_ACCOUNT, OwnerMode.INVITE, OwnerMode.DRAFT)
+    )
+    existing_owner_id = serializers.IntegerField(required=False, min_value=1)
+    owner_email = serializers.EmailField(required=False, allow_blank=True)
+    owner_first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    owner_last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    owner_phone = serializers.CharField(required=False, allow_blank=True, max_length=32)
+
+    def validate(self, attrs):
+        mode = attrs["owner_mode"]
+        if mode == self.OwnerMode.EXISTING and not attrs.get("existing_owner_id"):
+            raise serializers.ValidationError({"existing_owner_id": "Select the organization Owner."})
+        if mode in {self.OwnerMode.CREATE_ACCOUNT, self.OwnerMode.INVITE} and not attrs.get("owner_email"):
+            raise serializers.ValidationError({"owner_email": "Enter the Owner email address."})
+        return attrs
+
+
+class AdminOrganizationCreateOwnerSerializer(serializers.Serializer):
+    name = serializers.CharField()
+    email = serializers.EmailField()
+
+
+class AdminOrganizationCreateResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    billing_email = serializers.EmailField(allow_blank=True)
+    status = serializers.ChoiceField(choices=Organization.Status.choices)
+    owner = AdminOrganizationCreateOwnerSerializer(allow_null=True)
+    invitation = OrganizationInvitationSerializer(allow_null=True)
+    setup_url = serializers.URLField(allow_null=True)
 
 
 class AdminOrganizationLicenseQuerySerializer(serializers.Serializer):
     search = serializers.CharField(required=False, allow_blank=True, max_length=255)
     status = serializers.ChoiceField(
-        choices=License.Status.choices,
+        choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft")),
         required=False,
         allow_blank=True,
     )
     product = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    customer_id = serializers.IntegerField(required=False, min_value=1)
     page = serializers.IntegerField(required=False, min_value=1)
     page_size = serializers.IntegerField(required=False, min_value=1, max_value=100)
 
@@ -324,7 +379,9 @@ class AdminOrganizationLicenseRowSerializer(serializers.Serializer):
     used_capacity = serializers.IntegerField()
     total_capacity = serializers.IntegerField()
     next_expiry = serializers.DateField(allow_null=True)
-    status = serializers.ChoiceField(choices=License.Status.choices)
+    status = serializers.ChoiceField(
+        choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"))
+    )
 
 
 class AdminOrganizationLicenseListSerializer(serializers.Serializer):
@@ -347,7 +404,9 @@ class AdminOrganizationDetailSummarySerializer(serializers.Serializer):
     subscription_expires_on = serializers.DateField(allow_null=True)
     licensed_product_count = serializers.IntegerField()
     active_quantity = serializers.IntegerField()
-    status = serializers.ChoiceField(choices=License.Status.choices)
+    status = serializers.ChoiceField(
+        choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"))
+    )
 
 
 class AdminOrganizationNotificationSummarySerializer(serializers.Serializer):

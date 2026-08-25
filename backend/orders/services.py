@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -15,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 class OrderService:
     ALLOWED_STATUS_TRANSITIONS = {
+        Order.Status.DRAFT: {
+            Order.Status.PENDING,
+            Order.Status.CANCELLED,
+        },
         Order.Status.PENDING: {
             Order.Status.SCHEDULED,
             Order.Status.PROCESSING,
@@ -202,7 +207,9 @@ class OrderService:
         )
         if is_digital_only:
             return Order.Status.COMPLETED
-        if order.source == Order.Source.QUOTE:
+        if order.source == Order.Source.QUOTE or (
+            order.source == Order.Source.ADMIN and order.created_by_id
+        ):
             return Order.Status.SCHEDULED
         return Order.Status.PROCESSING
 
@@ -296,3 +303,120 @@ class OrderService:
             publish_order_status_changed(order_id, old, new)
         )
         return locked_order
+
+
+class AdminManualOrderService:
+    @staticmethod
+    @transaction.atomic
+    def create(*, validated_data, actor):
+        if not actor or not actor.is_staff:
+            raise ValidationError({"detail": "Administrator access is required."})
+
+        from licensing.models import Organization, OrganizationMembership
+        from licensing.services import CartLicenseService, OrganizationService
+        from payments.models import PaymentAttempt, PaymentProvider
+        from payments.services import PaymentService
+        from users.services import AccountSetupService
+
+        customer_mode = validated_data.pop("customer_mode")
+        organization_mode = validated_data.pop("organization_mode")
+        payment_state = validated_data.pop("payment_state")
+        payment_reference = validated_data.pop("payment_reference", "").strip()
+        items = validated_data.pop("items")
+
+        User = get_user_model()
+        if customer_mode == "existing":
+            customer = User.objects.filter(
+                pk=validated_data.pop("customer_id", None),
+                is_active=True,
+                is_staff=False,
+            ).first()
+            if customer is None:
+                raise ValidationError({"customer_id": "Select an active client account."})
+            validated_data["customer_email"] = customer.email
+            validated_data["customer_first_name"] = validated_data.get("customer_first_name") or customer.first_name
+            validated_data["customer_last_name"] = validated_data.get("customer_last_name") or customer.last_name
+            validated_data["customer_phone"] = validated_data.get("customer_phone") or customer.phone_number
+        else:
+            customer = AccountSetupService.create_user(
+                email=validated_data["customer_email"],
+                first_name=validated_data.get("customer_first_name", ""),
+                last_name=validated_data.get("customer_last_name", ""),
+                phone_number=validated_data.get("customer_phone", ""),
+            )
+
+        if organization_mode == "existing":
+            organization = Organization.objects.filter(
+                pk=validated_data.pop("organization_id", None),
+                is_active=True,
+                status=Organization.Status.ACTIVE,
+            ).first()
+            if organization is None:
+                raise ValidationError({"organization_id": "Select an active organization."})
+            if not OrganizationMembership.objects.filter(
+                organization=organization,
+                user=customer,
+                is_active=True,
+            ).exists():
+                raise ValidationError({
+                    "organization_id": "The selected client must already belong to this organization."
+                })
+        else:
+            organization = OrganizationService.create(
+                name=validated_data.pop("organization_name", ""),
+                owner=customer,
+                billing_email=validated_data["customer_email"],
+                created_by=actor,
+            )
+
+        if organization.status != Organization.Status.ACTIVE:
+            raise ValidationError({"organization_id": "Draft organizations cannot receive orders or payments."})
+
+        normalized_organization, normalized_items, _ = CartLicenseService.normalize_checkout_items(
+            user=customer,
+            items=items,
+            organization_id=organization.pk,
+            lock=True,
+        )
+        if normalized_organization != organization:
+            raise ValidationError({"organization_id": "The selected organization could not be verified."})
+
+        initial_status = Order.Status.DRAFT if payment_state == "draft" else Order.Status.PENDING
+        order = OrderService.create_order(
+            validated_data={
+                **validated_data,
+                "organization": organization,
+                "status": initial_status,
+                "created_by": actor,
+                "items": [
+                    {"product": product, "quantity": quantity}
+                    for product, quantity in normalized_items
+                ],
+            },
+            user=actor,
+        )
+
+        if payment_state == "paid":
+            provider = PaymentProvider.objects.filter(
+                code=PaymentProvider.Code.BANK_TRANSFER,
+                is_enabled=True,
+            ).first()
+            if provider is None:
+                raise ValidationError({"payment_state": "Enable the Bank transfer payment provider first."})
+            attempt = PaymentAttempt.objects.create(
+                order=order,
+                provider=provider,
+                amount=order.total,
+                currency="USD",
+                status=PaymentAttempt.Status.PENDING,
+                is_test=provider.test_mode,
+                metadata={"source": "admin_manual_order", "verified_by": actor.pk},
+                created_by=actor,
+            )
+            PaymentService.complete_success(
+                attempt=attempt,
+                actor=actor,
+                external_reference=payment_reference or f"ADMIN-{uuid4().hex[:12].upper()}",
+            )
+            order.refresh_from_db()
+        return order

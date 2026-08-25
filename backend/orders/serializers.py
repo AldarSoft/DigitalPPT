@@ -279,3 +279,72 @@ class OrderStatusSerializer(serializers.ModelSerializer):
             order=instance,
             new_status=validated_data["status"],
         )
+
+
+class AdminManualOrderItemSerializer(serializers.Serializer):
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_active=True))
+    quantity = serializers.IntegerField(min_value=1, max_value=999)
+
+
+class AdminManualOrderSerializer(serializers.Serializer):
+    customer_mode = serializers.ChoiceField(choices=("existing", "new"))
+    customer_id = serializers.IntegerField(required=False, min_value=1)
+    customer_first_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    customer_last_name = serializers.CharField(required=False, allow_blank=True, max_length=150)
+    customer_email = serializers.EmailField(required=False)
+    customer_phone = serializers.CharField(required=False, allow_blank=True, validators=[validate_phone])
+    company_name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    organization_mode = serializers.ChoiceField(choices=("existing", "new"))
+    organization_id = serializers.IntegerField(required=False, min_value=1)
+    organization_name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    shipping_address = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    shipping_city = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    shipping_state = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    shipping_postal_code = serializers.CharField(required=False, allow_blank=True, max_length=20)
+    shipping_country = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    shipping_fee = serializers.DecimalField(required=False, max_digits=12, decimal_places=2, min_value=0)
+    notes = serializers.CharField(required=False, allow_blank=True)
+    payment_state = serializers.ChoiceField(choices=("draft", "waiting_payment", "paid"))
+    payment_reference = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    items = AdminManualOrderItemSerializer(many=True, allow_empty=False)
+
+    def validate(self, attrs):
+        if attrs["customer_mode"] == "existing" and not attrs.get("customer_id"):
+            raise serializers.ValidationError({"customer_id": "Select a client account."})
+        if attrs["customer_mode"] == "new":
+            if not attrs.get("customer_email"):
+                raise serializers.ValidationError({"customer_email": "Enter the new client's email."})
+            if attrs["organization_mode"] != "new":
+                raise serializers.ValidationError({
+                    "organization_mode": "A newly created client must start with a new organization."
+                })
+        if attrs["organization_mode"] == "existing" and not attrs.get("organization_id"):
+            raise serializers.ValidationError({"organization_id": "Select an organization."})
+        if attrs["organization_mode"] == "new" and not attrs.get("organization_name", "").strip():
+            raise serializers.ValidationError({"organization_name": "Enter the organization name."})
+        if attrs["payment_state"] == "paid" and not attrs.get("payment_reference", "").strip():
+            raise serializers.ValidationError({"payment_reference": "Enter the verified payment reference."})
+        defaults = {
+            "customer_first_name": "",
+            "customer_last_name": "",
+            "customer_phone": "",
+            "company_name": "",
+            "shipping_address": "",
+            "shipping_city": "",
+            "shipping_state": "",
+            "shipping_postal_code": "",
+            "shipping_country": "",
+            "shipping_fee": 0,
+            "notes": "",
+        }
+        for key, value in defaults.items():
+            attrs.setdefault(key, value)
+        return attrs
+
+    def create(self, validated_data):
+        from orders.services import AdminManualOrderService
+
+        return AdminManualOrderService.create(
+            validated_data=validated_data,
+            actor=self.context["request"].user,
+        )

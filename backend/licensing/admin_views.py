@@ -1,4 +1,6 @@
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework.exceptions import ValidationError
@@ -25,12 +27,16 @@ from licensing.serializers import (
     OrganizationInvitationCreateSerializer,
     OrganizationInvitationSerializer,
     OrganizationOwnershipTransferSerializer,
+    AdminOrganizationCreateSerializer,
+    AdminOrganizationCreateResponseSerializer,
 )
 from licensing.services import (
     InvitationService,
     LicenseLifecycleService,
     OrganizationOwnershipService,
+    OrganizationService,
 )
+from users.services import AccountSetupService
 
 
 def _raise_api_validation(exc):
@@ -63,6 +69,7 @@ class AdminOrganizationLicenseListView(APIView):
             search=query.validated_data.get("search", "").strip(),
             status=query.validated_data.get("status", ""),
             product=query.validated_data.get("product", "").strip(),
+            customer_id=query.validated_data.get("customer_id"),
         )
         paginator = DefaultPagination()
         organizations = paginator.paginate_queryset(queryset, request, view=self)
@@ -75,6 +82,85 @@ class AdminOrganizationLicenseListView(APIView):
         )
         payload["summary"] = AdminOrganizationLicenseService.summary()
         return Response(AdminOrganizationLicenseListSerializer(payload).data)
+
+    @extend_schema(
+        operation_id="admin_licensing_organization_create",
+        summary="Create an organization with an Owner or as Draft",
+        request=AdminOrganizationCreateSerializer,
+        responses={201: AdminOrganizationCreateResponseSerializer},
+    )
+    @transaction.atomic
+    def post(self, request):
+        serializer = AdminOrganizationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        mode = data["owner_mode"]
+        owner = None
+        invitation = None
+        token = None
+        setup_url = None
+        try:
+            if mode == AdminOrganizationCreateSerializer.OwnerMode.EXISTING:
+                owner = get_object_or_404(
+                    get_user_model(),
+                    pk=data["existing_owner_id"],
+                    is_active=True,
+                )
+            elif mode == AdminOrganizationCreateSerializer.OwnerMode.CREATE_ACCOUNT:
+                owner = AccountSetupService.create_user(
+                    email=data["owner_email"],
+                    first_name=data.get("owner_first_name", ""),
+                    last_name=data.get("owner_last_name", ""),
+                    phone_number=data.get("owner_phone", ""),
+                )
+                setup_url = AccountSetupService.setup_url(owner)
+
+            if owner:
+                organization = OrganizationService.create(
+                    name=data["name"],
+                    owner=owner,
+                    billing_email=data.get("billing_email") or owner.email,
+                    created_by=request.user,
+                )
+            else:
+                organization = OrganizationService.create_draft(
+                    name=data["name"],
+                    billing_email=data.get("billing_email", ""),
+                    created_by=request.user,
+                )
+                if mode == AdminOrganizationCreateSerializer.OwnerMode.INVITE:
+                    invitation, token = InvitationService.issue(
+                        organization=organization,
+                        email=data["owner_email"],
+                        invited_by=request.user,
+                        role="owner",
+                    )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+
+        payload = {
+            "id": organization.pk,
+            "name": organization.name,
+            "billing_email": organization.billing_email,
+            "status": organization.status,
+            "owner": (
+                {"name": owner.get_full_name().strip() or owner.email, "email": owner.email}
+                if owner else None
+            ),
+            "invitation": (
+                {
+                    "invitation_id": invitation.pk,
+                    "email": invitation.email,
+                    "role": invitation.role,
+                    "status": invitation.status,
+                    "expires_at": invitation.expires_at,
+                    "accept_url": InvitationService.accept_url(token),
+                }
+                if invitation else None
+            ),
+            "setup_url": setup_url,
+        }
+        return Response(AdminOrganizationCreateResponseSerializer(payload).data, status=201)
 
 
 class AdminOrganizationLicenseDetailView(APIView):

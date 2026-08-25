@@ -20,11 +20,14 @@ from licensing.serializers import (
     OrganizationInvitationCreateSerializer,
     OrganizationInvitationSerializer,
     OrganizationOwnershipTransferSerializer,
+    OrganizationCreateSerializer,
     OrganizationSummarySerializer,
     OrganizationTeamSerializer,
     OrganizationWorkspaceListSerializer,
+    OrganizationSettingsSerializer,
 )
-from licensing.models import License, OrganizationInvitation
+from licensing.models import License, Organization, OrganizationInvitation
+from licensing.permissions import OrganizationAccessPolicy
 from licensing.services import (
     CartLicenseService,
     ClientLicenseDetailService,
@@ -33,6 +36,7 @@ from licensing.services import (
     LicenseRenewalOrderService,
     OrganizationLicenseListService,
     OrganizationSummaryService,
+    OrganizationService,
     OrganizationOwnershipService,
     OrganizationTeamService,
 )
@@ -420,3 +424,86 @@ class OrganizationWorkspaceListView(APIView):
                 OrganizationSummaryService.workspaces_for_user(request.user)
             ).data
         )
+
+    @extend_schema(
+        summary="Create the signed-in user's first organization",
+        request=OrganizationCreateSerializer,
+        responses={201: OrganizationWorkspaceListSerializer},
+    )
+    def post(self, request):
+        if OrganizationSummaryService.membership_for_user(request.user) is not None:
+            raise ValidationError(
+                {"organization": "Your account already belongs to an organization."}
+            )
+
+        serializer = OrganizationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            OrganizationService.create(
+                name=serializer.validated_data["name"],
+                owner=request.user,
+                billing_email=serializer.validated_data.get("billing_email", request.user.email),
+                created_by=request.user,
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+
+        return Response(
+            OrganizationWorkspaceListSerializer(
+                OrganizationSummaryService.workspaces_for_user(request.user)
+            ).data,
+            status=201,
+        )
+
+
+class OrganizationSettingsView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def _membership(self, request):
+        membership = OrganizationSummaryService.membership_for_user(
+            request.user,
+            organization_id=_requested_organization_id(request),
+        )
+        if membership is None:
+            raise ValidationError({"organization": "Select an organization you belong to."})
+        return membership
+
+    @extend_schema(summary="Get editable organization settings", responses=OrganizationSettingsSerializer)
+    def get(self, request):
+        organization = self._membership(request).organization
+        return Response(OrganizationSettingsSerializer({
+            "id": organization.pk,
+            "name": organization.name,
+            "billing_email": organization.billing_email,
+            "status": organization.status,
+        }).data)
+
+    @extend_schema(
+        summary="Update organization settings as Owner",
+        request=OrganizationSettingsSerializer,
+        responses=OrganizationSettingsSerializer,
+    )
+    def patch(self, request):
+        membership = self._membership(request)
+        organization = membership.organization
+        if membership.role != "owner" or not OrganizationAccessPolicy.can_manage_team(
+            user=request.user,
+            organization=organization,
+        ):
+            raise ValidationError({"organization": "Only the Organization Owner can edit organization settings."})
+        serializer = OrganizationSettingsSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        if "name" in serializer.validated_data:
+            name = serializer.validated_data["name"].strip()
+            if not name:
+                raise ValidationError({"name": "Enter an organization name."})
+            organization.name = name
+        if "billing_email" in serializer.validated_data:
+            organization.billing_email = serializer.validated_data["billing_email"].strip().casefold()
+        organization.save()
+        return Response(OrganizationSettingsSerializer({
+            "id": organization.pk,
+            "name": organization.name,
+            "billing_email": organization.billing_email,
+            "status": organization.status,
+        }).data)

@@ -10,12 +10,12 @@ export function QuotesTable({ quotes, loading = false, onSelect }: { quotes: Quo
         <tbody>
           {loading ? <tr><td colSpan={6}>Loading quote requests...</td></tr> : quotes.length ? quotes.map((quote) => (
             <tr className={tw('record-row')} key={quote.id} onDoubleClick={() => onSelect?.(quote)}>
-              <td><button className={tw('view-order')} type="button" onClick={() => onSelect?.(quote)}>{quote.quote_number}</button></td>
-              <td>{new Date(quote.created_at).toLocaleDateString()}</td>
-              <td>{quote.items.reduce((total, item) => total + item.quantity, 0)}</td>
-              <td>{quote.quoted_total ? `$${Number(quote.quoted_total).toFixed(2)}` : 'Pending'}</td>
-              <td><span className={tw(`status status-${quoteStatusKey(quote.status)}`)}>{quoteStatusLabel(quote.status)}</span></td>
-              <td><button className={tw('view-order')} type="button" onClick={() => onSelect?.(quote)}>View</button></td>
+              <td><span className={tw('mobile-table-label')}>Quote request</span><button className={tw('record-link')} type="button" onClick={() => onSelect?.(quote)}>{quote.quote_number}</button></td>
+              <td><span className={tw('mobile-table-label')}>Date</span><span>{new Date(quote.created_at).toLocaleDateString()}</span></td>
+              <td><span className={tw('mobile-table-label')}>Items</span><span>{quote.items.reduce((total, item) => total + item.quantity, 0)}</span></td>
+              <td><span className={tw('mobile-table-label')}>Quoted total</span><strong>{quote.quoted_total ? `$${Number(quote.quoted_total).toFixed(2)}` : 'Pending'}</strong></td>
+              <td><span className={tw('mobile-table-label')}>Status</span><span className={tw(`status status-${quoteStatusKey(quote.status)}`)}>{quoteStatusLabel(quote.status)}</span></td>
+              <td><span className={tw('mobile-table-label')}>Action</span><button className={tw('table-action')} type="button" onClick={() => onSelect?.(quote)}>View</button></td>
             </tr>
           )) : <tr><td colSpan={6}>No quote requests yet.</td></tr>}
         </tbody>

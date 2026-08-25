@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Building2, FileText, KeyRound, LayoutDashboard, LogOut, Package, Settings, UserRound, Users, type LucideIcon } from 'lucide-react'
+import { Building2, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Package, Settings, UserRound, Users, X, type LucideIcon } from 'lucide-react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { Pagination } from '../../../components/Pagination'
@@ -16,18 +16,20 @@ import { QuotesTable } from '../components/QuotesTable'
 import type { AccountTab } from '../types'
 import { OrganizationLicensesPanel } from '../../licensing/pages/OrganizationLicensesPanel'
 import { OrganizationTeamPanel } from '../../licensing/pages/OrganizationTeamPanel'
+import { OrganizationSettingsPanel } from '../../licensing/pages/OrganizationSettingsPanel'
 
 const ORDER_PAGE_SIZE = 8
 const QUOTE_PAGE_SIZE = 10
-const ACCOUNT_TABS: AccountTab[] = ['overview', 'quotes', 'orders', 'licenses', 'team', 'settings']
+const ACCOUNT_TABS: AccountTab[] = ['overview', 'quotes', 'orders', 'licenses', 'team', 'organization', 'settings']
 const STAFF_ACCOUNT_TABS: AccountTab[] = ['settings']
 type AccountNavItem = readonly [AccountTab, LucideIcon, string]
 const ACCOUNT_NAV_ITEMS: AccountNavItem[] = [
   ['overview', LayoutDashboard, 'Overview'],
   ['quotes', FileText, 'Quote requests'],
   ['orders', Package, 'Past orders'],
-  ['licenses', KeyRound, 'Organization licenses'],
+  ['licenses', KeyRound, 'Licenses'],
   ['team', Users, 'Organization Team'],
+  ['organization', Building2, 'Organization settings'],
   ['settings', Settings, 'Account settings'],
 ]
 const STAFF_ACCOUNT_NAV_ITEMS: AccountNavItem[] = [
@@ -42,23 +44,53 @@ export function AccountPage() {
   const requestedOrganizationId = Number(searchParams.get('org')) || null;
   const isStaff = Boolean(auth.user?.is_staff);
   const availableTabs = isStaff ? STAFF_ACCOUNT_TABS : ACCOUNT_TABS;
-  const tab: AccountTab = requestedTab && availableTabs.includes(requestedTab) ? requestedTab : isStaff ? 'settings' : 'overview';
+  const requestedAccountTab: AccountTab = requestedTab && availableTabs.includes(requestedTab) ? requestedTab : isStaff ? 'settings' : 'overview';
   const [orderPage, setOrderPage] = useState(1);
   const [quotePage, setQuotePage] = useState(1);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [selectedRecordState, setSelectedRecordState] = useState<AccountRecord | null>(null);
   const workspacesQuery = useQuery({
     queryKey: ['licensing', 'organization', 'workspaces'],
     queryFn: api.organizationWorkspaces,
     enabled: Boolean(auth.user && !isStaff),
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
-  const organizationId = requestedOrganizationId ?? workspacesQuery.data?.default_organization_id ?? null;
+  const requestedOrganizationIsAvailable = Boolean(
+    requestedOrganizationId
+    && workspacesQuery.data?.organizations.some((organization) => organization.id === requestedOrganizationId),
+  );
+  const organizationId = requestedOrganizationIsAvailable
+    ? requestedOrganizationId
+    : workspacesQuery.data?.default_organization_id ?? null;
   const selectedOrganization = workspacesQuery.data?.organizations.find((organization) => organization.id === organizationId) ?? null;
+  const hasNoOrganization = Boolean(!isStaff && workspacesQuery.isSuccess && workspacesQuery.data.organizations.length === 0);
+  const tab: AccountTab = hasNoOrganization && (requestedAccountTab === 'team' || requestedAccountTab === 'organization')
+    ? 'licenses'
+    : requestedAccountTab;
+  const accountNavItems = hasNoOrganization
+    ? ACCOUNT_NAV_ITEMS.filter(([value]) => value !== 'team' && value !== 'organization')
+    : ACCOUNT_NAV_ITEMS;
   useEffect(() => {
-    if (isStaff || requestedOrganizationId || !workspacesQuery.data?.default_organization_id) return;
+    if (isStaff || !workspacesQuery.data) return;
     const next = new URLSearchParams(searchParams);
-    next.set('org', String(workspacesQuery.data.default_organization_id));
+    if (organizationId) {
+      if (requestedOrganizationId === organizationId) return;
+      next.set('org', String(organizationId));
+    } else {
+      if (!requestedOrganizationId) return;
+      next.delete('org');
+      next.delete('license');
+    }
     setSearchParams(next, { replace: true });
-  }, [isStaff, requestedOrganizationId, searchParams, setSearchParams, workspacesQuery.data?.default_organization_id]);
+  }, [isStaff, organizationId, requestedOrganizationId, searchParams, setSearchParams, workspacesQuery.data]);
+  useEffect(() => {
+    if (!hasNoOrganization || (requestedTab !== 'team' && requestedTab !== 'organization')) return;
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'licenses');
+    next.delete('org');
+    setSearchParams(next, { replace: true });
+  }, [hasNoOrganization, requestedTab, searchParams, setSearchParams]);
   const ordersQuery = useQuery({
     queryKey: ["orders", "mine", organizationId, orderPage],
     queryFn: () => api.orders(`ordering=-created_at&page=${orderPage}&page_size=${ORDER_PAGE_SIZE}${organizationId ? `&organization=${organizationId}` : ''}`),
@@ -95,6 +127,7 @@ export function AccountPage() {
   const name =
     `${auth.user.first_name} ${auth.user.last_name}`.trim() || auth.user.email;
   const selectTab = (nextTab: AccountTab) => {
+    setAccountMenuOpen(false);
     if (nextTab === 'overview') {
       setOrderPage(1);
       setQuotePage(1);
@@ -127,33 +160,40 @@ export function AccountPage() {
       <section className={tw("account-body")}>
         <div className={tw("shell account-grid")}>
           <aside className={tw("account-nav")}>
-            <div className={tw("account-person")}>
-              <span>{initials(auth.user)}</span>
-              <div>
-                <OverflowTooltipText as="strong" text={name} />
-                <OverflowTooltipText as="small" text={auth.user.email} />
+            <div className={tw(`account-nav-summary ${isStaff ? 'single' : ''}`)}>
+              <div className={tw("account-person")}>
+                <span>{initials(auth.user)}</span>
+                <div>
+                  <OverflowTooltipText as="strong" text={name} />
+                  <OverflowTooltipText as="small" text={auth.user.email} />
+                </div>
               </div>
+              {!isStaff && selectedOrganization ? <section className={tw("account-workspace")} aria-label="Current organization"><div className="grid gap-2"><div className="flex min-w-0 items-center justify-between gap-3"><span className="inline-flex items-center gap-2 text-xs font-bold text-muted"><Building2 className="shrink-0 text-brand" size={16} />Organization</span><strong className="truncate text-right text-sm capitalize" title={selectedOrganization.name}>{selectedOrganization.name}</strong></div><div className="flex items-center justify-between gap-3"><span className="text-xs font-bold text-muted">Role</span><strong className="text-right text-sm">{selectedOrganization.role === 'owner' ? 'Owner' : 'License Manager'}</strong></div></div>{workspacesQuery.data && workspacesQuery.data.organizations.length > 1 ? <label className="mt-3 grid gap-1.5 border-t border-border pt-3"><span className="text-xs font-bold text-muted">Switch organization</span><select className="min-h-10 w-full rounded-control border border-border-input bg-white px-3 pr-8 text-sm font-semibold text-ink outline-none focus:border-brand" aria-label="Switch organization" value={organizationId ?? ''} onChange={(event) => { const next = new URLSearchParams(searchParams); next.set('org', event.target.value); next.delete('license'); setSearchParams(next, { replace: true }); }}>{workspacesQuery.data.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label> : null}</section> : null}
             </div>
-            {!isStaff && selectedOrganization ? <section className={tw("account-workspace")} aria-label="Current organization"><div className="grid gap-2"><div className="flex min-w-0 items-center justify-between gap-3"><span className="inline-flex items-center gap-2 text-xs font-bold text-muted"><Building2 className="shrink-0 text-brand" size={16} />Organization</span><strong className="truncate text-right text-sm capitalize" title={selectedOrganization.name}>{selectedOrganization.name}</strong></div><div className="flex items-center justify-between gap-3"><span className="text-xs font-bold text-muted">Role</span><strong className="text-right text-sm">{selectedOrganization.role === 'owner' ? 'Owner' : 'License Manager'}</strong></div></div>{workspacesQuery.data && workspacesQuery.data.organizations.length > 1 ? <label className="mt-3 grid gap-1.5 border-t border-border pt-3"><span className="text-xs font-bold text-muted">Switch organization</span><select className="min-h-10 w-full rounded-control border border-border-input bg-white px-3 pr-8 text-sm font-semibold text-ink outline-none focus:border-brand" aria-label="Switch organization" value={organizationId ?? ''} onChange={(event) => { const next = new URLSearchParams(searchParams); next.set('org', event.target.value); next.delete('license'); setSearchParams(next, { replace: true }); }}>{workspacesQuery.data.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name}</option>)}</select></label> : null}</section> : null}
-            {(isStaff ? STAFF_ACCOUNT_NAV_ITEMS : ACCOUNT_NAV_ITEMS).map(([value, Icon, label]) => (
-              <button
-                className={tw(tab === value ? "active" : "")}
-                type="button"
-                key={value}
-                onClick={() => selectTab(value)}
-              >
-                <Icon size={19} />
-                <span>{label}</span>
-              </button>
-            ))}
-            <button
-              className={tw("logout-button")}
-              type="button"
-              onClick={() => auth.logout()}
-            >
-              <LogOut size={19} />
-              <span>Log out</span>
+            <button className={tw("account-tab-toggle")} type="button" aria-label={accountMenuOpen ? 'Close account menu' : 'Open account menu'} title="Account menu" aria-expanded={accountMenuOpen} aria-controls="account-section-menu" onClick={() => setAccountMenuOpen((open) => !open)}>
+              {accountMenuOpen ? <X size={19} /> : <Menu size={19} />}
             </button>
+            <nav className={tw(`account-tab-list ${accountMenuOpen ? 'is-open' : ''}`)} id="account-section-menu" aria-label="Account sections">
+              {(isStaff ? STAFF_ACCOUNT_NAV_ITEMS : accountNavItems).map(([value, Icon, label]) => (
+                <button
+                  className={tw(tab === value ? "active" : "")}
+                  type="button"
+                  key={value}
+                  onClick={() => selectTab(value)}
+                >
+                  <Icon size={18} />
+                  <span>{label}</span>
+                </button>
+              ))}
+              <button
+                className={tw("logout-button")}
+                type="button"
+                onClick={() => { setAccountMenuOpen(false); void auth.logout() }}
+              >
+                <LogOut size={18} />
+                <span>Log out</span>
+              </button>
+            </nav>
           </aside>
           <div className={tw("account-content")}>
             {!isStaff && tab === "overview" ? (
@@ -176,8 +216,9 @@ export function AccountPage() {
                 <Pagination page={orderPage} pageSize={ORDER_PAGE_SIZE} total={orderCount} loading={ordersQuery.isFetching} className="mt-3" onPageChange={setOrderPage} />
               </>
             ) : null}
-            {!isStaff && tab === 'licenses' ? <OrganizationLicensesPanel organizationId={organizationId} /> : null}
+            {!isStaff && tab === 'licenses' ? <OrganizationLicensesPanel organizationId={organizationId} workspaceLoading={workspacesQuery.isLoading} workspaceError={workspacesQuery.error} onWorkspaceRetry={() => void workspacesQuery.refetch()} /> : null}
             {!isStaff && tab === 'team' ? <OrganizationTeamPanel organizationId={organizationId} /> : null}
+            {!isStaff && tab === 'organization' ? <OrganizationSettingsPanel organizationId={organizationId} canEdit={selectedOrganization?.role === 'owner'} /> : null}
             {tab === "settings" ? <ProfileForm user={auth.user} /> : null}
           </div>
         </div>

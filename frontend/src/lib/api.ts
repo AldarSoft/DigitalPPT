@@ -6,6 +6,8 @@ import type {
   AdminOrganizationLicenseDetail,
   AdminOrganizationLicenseListResponse,
   AdminOrganizationUsers,
+  AdminOrganizationCreateInput,
+  AdminOrganizationCreateResponse,
   ClientLicenseDetail,
   LicenseRenewalSummary,
   ClientLicenseListResponse,
@@ -13,10 +15,12 @@ import type {
   LicenseSummary,
   OrganizationInvitation,
   OrganizationInvitationAcceptance,
+  OrganizationCreateInput,
   OrganizationNotificationInput,
   OrganizationSummaryResponse,
   OrganizationTeamResponse,
   OrganizationWorkspaceListResponse,
+  OrganizationSettings,
 } from '../features/licensing/types'
 
 const localApiHost =
@@ -110,6 +114,11 @@ export const api = {
       body: JSON.stringify({ items }),
     }),
   organizationWorkspaces: () => request<OrganizationWorkspaceListResponse>('/licensing/organizations/'),
+  createOrganization: (data: OrganizationCreateInput) =>
+    request<OrganizationWorkspaceListResponse>('/licensing/organizations/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   organizationSummary: (organizationId?: number | null) =>
     request<OrganizationSummaryResponse>(`/licensing/organization/summary/${organizationQuery(organizationId)}`),
   organizationLicenses: (organizationId?: number | null) =>
@@ -120,6 +129,10 @@ export const api = {
     request<LicenseRenewalSummary>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/renew/${organizationQuery(organizationId)}`),
   organizationTeam: (organizationId?: number | null) =>
     request<OrganizationTeamResponse>(`/licensing/organization/team/${organizationQuery(organizationId)}`),
+  organizationSettings: (organizationId?: number | null) =>
+    request<OrganizationSettings>(`/licensing/organization/settings/${organizationQuery(organizationId)}`),
+  updateOrganizationSettings: (data: Pick<OrganizationSettings, 'name' | 'billing_email'>, organizationId?: number | null) =>
+    request<OrganizationSettings>(`/licensing/organization/settings/${organizationQuery(organizationId)}`, { method: 'PATCH', body: JSON.stringify(data) }),
   inviteLicenseManager: (email: string, organizationId?: number | null) =>
     request<OrganizationInvitation>(`/licensing/organization/invitations/${organizationQuery(organizationId)}`, {
       method: 'POST',
@@ -141,6 +154,8 @@ export const api = {
     }),
   adminLicenseOrganizations: (filters: AdminLicenseFilters = {}) =>
     request<AdminOrganizationLicenseListResponse>(`/admin/licensing/organizations/${licenseQuery(filters)}`),
+  createAdminOrganization: (data: AdminOrganizationCreateInput) =>
+    request<AdminOrganizationCreateResponse>('/admin/licensing/organizations/', { method: 'POST', body: JSON.stringify(data) }),
   adminLicenseOrganization: (organizationId: number) =>
     request<AdminOrganizationLicenseDetail>(`/admin/licensing/organizations/${organizationId}/`),
   adminOrganizationUsers: (organizationId: number) =>
@@ -221,6 +236,8 @@ export const api = {
     request<Paginated<Order> | Order[]>(`/orders/${query ? `?${query}` : ''}`),
   checkout: (data: unknown) =>
     request<Order>('/orders/checkout/', { method: 'POST', body: JSON.stringify(data) }),
+  createManualOrder: (data: unknown) =>
+    request<Order>('/orders/manual/', { method: 'POST', body: JSON.stringify(data) }),
   updateOrder: (orderNumber: string, status: Order['status']) =>
     request<Pick<Order, 'status' | 'updated_at'>>(`/orders/${orderNumber}/`, {
       method: 'PATCH',

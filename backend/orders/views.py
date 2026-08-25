@@ -1,5 +1,6 @@
 from django.db.models import Exists, OuterRef, Q
 from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
@@ -7,6 +8,7 @@ from orders.models import Order
 from payments.models import PaymentAttempt
 from orders.serializers import (
     CheckoutSerializer,
+    AdminManualOrderSerializer,
     OrderCreateSerializer,
     OrderSerializer,
     OrderStatusSerializer,
@@ -56,6 +58,7 @@ class OrderViewSet(viewsets.ModelViewSet):
         status_value = self.request.query_params.get("status")
         display_status = self.request.query_params.get("display_status")
         display_statuses = {
+            "draft": [Order.Status.DRAFT],
             "pending": [Order.Status.PENDING],
             "processing": [Order.Status.SCHEDULED, Order.Status.PROCESSING],
             "completed": [Order.Status.COMPLETED],
@@ -69,6 +72,7 @@ class OrderViewSet(viewsets.ModelViewSet):
             return queryset
         if not self.request.user or not self.request.user.is_authenticated:
             return queryset.none()
+        queryset = queryset.exclude(status=Order.Status.DRAFT)
         organization_id = self.request.query_params.get("organization")
         organization_orders = Q(
             organization__memberships__user=self.request.user,
@@ -82,11 +86,23 @@ class OrderViewSet(viewsets.ModelViewSet):
         return queryset.filter(Q(user=self.request.user) | organization_orders).distinct()
 
     def get_serializer_class(self):
+        if self.action == "manual":
+            return AdminManualOrderSerializer
         if self.action == "create":
             return OrderCreateSerializer
         if self.action in {"partial_update", "update"}:
             return OrderStatusSerializer
         return OrderSerializer
+
+    @action(detail=False, methods=["post"], permission_classes=[IsAdminUser], url_path="manual")
+    def manual(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order = serializer.save()
+        return Response(
+            OrderSerializer(order, context=self.get_serializer_context()).data,
+            status=status.HTTP_201_CREATED,
+        )
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

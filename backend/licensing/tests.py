@@ -813,6 +813,51 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(selected.data["licenses"][0]["license_number"], second_license.license_number)
         self.assertEqual(unavailable.status_code, 404)
 
+    def test_user_without_organization_can_create_first_workspace(self):
+        User = get_user_model()
+        user = User.objects.create_user(
+            username="first-workspace@example.com",
+            email="first-workspace@example.com",
+            password="StrongPass123!",
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=user)
+
+        response = api_client.post(
+            "/api/v1/licensing/organizations/",
+            {"name": "First Workspace"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(len(response.data["organizations"]), 1)
+        workspace = response.data["organizations"][0]
+        self.assertEqual(workspace["name"], "First Workspace")
+        self.assertEqual(workspace["role"], OrganizationMembership.Role.OWNER)
+        self.assertEqual(response.data["default_organization_id"], workspace["id"])
+        organization = Organization.objects.get(pk=workspace["id"])
+        self.assertEqual(organization.billing_email, user.email)
+        self.assertTrue(
+            organization.memberships.filter(
+                user=user,
+                role=OrganizationMembership.Role.OWNER,
+                is_active=True,
+            ).exists()
+        )
+
+    def test_user_with_organization_cannot_self_create_another_workspace(self):
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.owner)
+
+        response = api_client.post(
+            "/api/v1/licensing/organizations/",
+            {"name": "Unexpected Extra Workspace"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Organization.objects.filter(name="Unexpected Extra Workspace").exists())
+
     def test_organization_summary_is_scoped_and_requires_membership(self):
         other_organization = OrganizationService.create(
             name="Other Summary Organization",

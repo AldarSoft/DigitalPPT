@@ -370,7 +370,7 @@ class CartLicenseService:
 class OrganizationService:
     @staticmethod
     @transaction.atomic
-    def create(*, name, owner, billing_email=""):
+    def create(*, name, owner, billing_email="", created_by=None):
         name = name.strip()
         if not name:
             raise ValidationError({"name": "An organization name is required."})
@@ -382,7 +382,8 @@ class OrganizationService:
         organization = Organization.objects.create(
             name=name,
             billing_email=normalized_billing_email,
-            created_by=owner,
+            status=Organization.Status.ACTIVE,
+            created_by=created_by or owner,
         )
         OrganizationMembership.objects.create(
             organization=organization,
@@ -390,6 +391,22 @@ class OrganizationService:
             role=OrganizationMembership.Role.OWNER,
         )
         return organization
+
+    @staticmethod
+    @transaction.atomic
+    def create_draft(*, name, billing_email="", created_by=None):
+        name = name.strip()
+        if not name:
+            raise ValidationError({"name": "An organization name is required."})
+        normalized_billing_email = billing_email.strip().casefold()
+        if normalized_billing_email:
+            validate_email(normalized_billing_email)
+        return Organization.objects.create(
+            name=name,
+            billing_email=normalized_billing_email,
+            status=Organization.Status.DRAFT,
+            created_by=created_by,
+        )
 
 
 class OrganizationSummaryService:
@@ -409,6 +426,7 @@ class OrganizationSummaryService:
         memberships = (
             OrganizationMembership.objects.select_related("organization")
             .filter(user=user, is_active=True, organization__is_active=True)
+            .filter(organization__status=Organization.Status.ACTIVE)
             .order_by(
                 models.Case(
                     models.When(
@@ -432,6 +450,7 @@ class OrganizationSummaryService:
         memberships = list(
             OrganizationMembership.objects.select_related("organization")
             .filter(user=user, is_active=True, organization__is_active=True)
+            .filter(organization__status=Organization.Status.ACTIVE)
             .order_by(
                 models.Case(
                     models.When(
@@ -869,14 +888,15 @@ class InvitationService:
     def send_email(*, invitation, token):
         accept_url = InvitationService.accept_url(token)
         organization_name = invitation.organization.name
-        subject = f"Invitation to manage licenses for {organization_name}"
+        role_name = invitation.get_role_display()
+        subject = f"Invitation to join {organization_name} as {role_name}"
         text_body = (
-            f"You have been invited to become a License Manager for {organization_name}.\n\n"
+            f"You have been invited to become the {role_name} for {organization_name}.\n\n"
             f"Sign in with {invitation.email} and accept the invitation:\n{accept_url}\n\n"
             f"This invitation expires on {timezone.localtime(invitation.expires_at):%d %b %Y %H:%M}."
         )
         html_body = (
-            f"<p>You have been invited to become a <strong>License Manager</strong> for "
+            f"<p>You have been invited to become the <strong>{escape(role_name)}</strong> for "
             f"<strong>{escape(organization_name)}</strong>.</p>"
             f"<p>Sign in with <strong>{escape(invitation.email)}</strong> and "
             f"<a href=\"{escape(accept_url, quote=True)}\">accept the invitation</a>.</p>"
@@ -892,8 +912,19 @@ class InvitationService:
 
     @classmethod
     @transaction.atomic
-    def issue(cls, *, organization, email, invited_by, expires_in=None):
-        if not OrganizationAccessPolicy.can_manage_team(
+    def issue(cls, *, organization, email, invited_by, expires_in=None, role=None):
+        role = role or OrganizationMembership.Role.LICENSE_MANAGER
+        owner_invitation = role == OrganizationMembership.Role.OWNER
+        if role not in OrganizationMembership.Role.values:
+            raise ValidationError({"role": "Select a supported organization role."})
+        if owner_invitation:
+            if not invited_by or not invited_by.is_staff:
+                raise PermissionDenied("Only Digital PTT staff can invite a Draft organization Owner.")
+            if organization.status != Organization.Status.DRAFT:
+                raise ValidationError({"organization": "Owner invitations are only available for Draft organizations."})
+            if organization.memberships.filter(role=OrganizationMembership.Role.OWNER, is_active=True).exists():
+                raise ValidationError({"organization": "This organization already has an Owner."})
+        elif not OrganizationAccessPolicy.can_manage_team(
             user=invited_by,
             organization=organization,
         ):
@@ -937,7 +968,7 @@ class InvitationService:
         invitation = OrganizationInvitation.objects.create(
             organization=organization,
             email=normalized_email,
-            role=OrganizationMembership.Role.LICENSE_MANAGER,
+            role=role,
             token_hash=cls.hash_token(raw_token),
             expires_at=now + (expires_in or cls.DEFAULT_EXPIRY),
             invited_by=invited_by,
@@ -985,12 +1016,12 @@ class InvitationService:
             organization=invitation.organization,
             user=user,
             defaults={
-                "role": OrganizationMembership.Role.LICENSE_MANAGER,
+                "role": invitation.role,
                 "invited_by": invitation.invited_by,
             },
         )
         if not created and membership.role != OrganizationMembership.Role.OWNER:
-            membership.role = OrganizationMembership.Role.LICENSE_MANAGER
+            membership.role = invitation.role
             membership.is_active = True
             membership.invited_by = invitation.invited_by
             membership.save(
@@ -1000,6 +1031,13 @@ class InvitationService:
         invitation.accepted_at = timezone.now()
         invitation.accepted_by = user
         invitation.save(update_fields=["accepted_at", "accepted_by", "updated_at"])
+        if invitation.role == OrganizationMembership.Role.OWNER:
+            invitation.organization.status = Organization.Status.ACTIVE
+            invitation.organization.is_active = True
+            invitation.organization.billing_email = invitation.organization.billing_email or user.email
+            invitation.organization.save(
+                update_fields=["status", "is_active", "billing_email", "updated_at"]
+            )
         LicenseEvent.objects.create(
             organization=invitation.organization,
             invitation=invitation,
@@ -1030,6 +1068,7 @@ class InvitationService:
             organization=locked.organization,
             email=locked.email,
             invited_by=resent_by,
+            role=locked.role,
         )
 
     @staticmethod

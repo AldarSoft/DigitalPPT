@@ -13,6 +13,7 @@ class Order(TimeStampedModel):
         ADMIN = "admin", "Admin created"
 
     class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
         PENDING = "pending", "Pending"
         SCHEDULED = "scheduled", "Scheduled"
         PROCESSING = "processing", "Processing"
@@ -25,6 +26,13 @@ class Order(TimeStampedModel):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="orders",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="admin_created_orders",
     )
     organization = models.ForeignKey(
         "licensing.Organization",

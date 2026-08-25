@@ -6,6 +6,7 @@ const statusStyles: Record<LicenseStatus, string> = {
   pending_payment: 'bg-brand-soft text-brand',
   expired: 'bg-danger-soft text-danger',
   cancelled: 'bg-surface-muted text-muted',
+  draft: 'bg-surface-muted text-muted',
 }
 
 export function LicenseStatusBadge({ status }: { status: LicenseStatus }) {

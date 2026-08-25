@@ -222,7 +222,7 @@ export interface Order {
   source: 'direct' | 'quote' | 'admin'
   user_id: number | null
   is_paid: boolean
-  status: 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
+  status: 'draft' | 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
   customer_first_name: string
   customer_last_name: string
   customer_email: string

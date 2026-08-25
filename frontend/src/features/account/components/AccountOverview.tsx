@@ -42,7 +42,7 @@ export function AccountOverview({
       <section className={tw("account-panel")}>
         <div className={tw("panel-title")}>
           <h2>Recent quote requests</h2>
-          <button type="button" onClick={() => onTab('quotes')}>
+          <button className={tw('action-button action-button-secondary action-button-compact')} type="button" onClick={() => onTab('quotes')}>
             View all requests
           </button>
         </div>
@@ -60,7 +60,7 @@ export function AccountOverview({
               .filter(Boolean)
               .join(", ")}
           </p>
-          <button type="button" onClick={() => onTab("settings")}>
+          <button className={tw('action-button action-button-secondary action-button-compact mt-3')} type="button" onClick={() => onTab("settings")}>
             Edit account settings
           </button>
         </section>

@@ -182,13 +182,13 @@ export function AdminQuotesPage() {
             <thead><tr><th>Quote ID</th><th>Requester</th><th>Date</th><th>Items</th><th>Linked order</th><th>Status</th><th>Action</th></tr></thead>
             <tbody>{quotes.length ? quotes.map((quote) => (
               <tr className={tw('record-row')} key={quote.id} onDoubleClick={() => openQuote(quote)}>
-                <td><button className={tw('view-order')} type="button" onClick={() => openQuote(quote)}>{quote.quote_number}</button></td>
+                <td><button className={tw('record-link')} type="button" onClick={() => openQuote(quote)}>{quote.quote_number}</button></td>
                 <td><div className={tw('quote-requester')}><strong>{quote.requester_contact_person}</strong><small>{quote.requester_company_name || quote.requester_email}</small></div></td>
                 <td>{new Date(quote.created_at).toLocaleDateString()}</td>
                 <td>{quote.items.reduce((total, item) => total + item.quantity, 0)}</td>
                 <td>{quote.order_number || 'No order'}</td>
                 <td><span className={tw(`status status-${quoteStatusKey(quote.status)}`)}>{quoteStatusLabel(quote.status)}</span></td>
-                <td><button className={tw('view-order')} type="button" onClick={() => openQuote(quote)}>View</button></td>
+                <td><button className={tw('table-action')} type="button" onClick={() => openQuote(quote)}>View</button></td>
               </tr>
             )) : <tr><td colSpan={7}>No quote requests found.</td></tr>}</tbody>
           </table>

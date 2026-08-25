@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { AlertTriangle, ArrowLeft, Check, CreditCard, ExternalLink, KeyRound, Landmark, LockKeyhole, QrCode, ShieldCheck, WalletCards, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Building2, Check, CreditCard, ExternalLink, KeyRound, Landmark, LockKeyhole, QrCode, ShieldCheck, WalletCards, X } from 'lucide-react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -82,6 +82,8 @@ export function PaymentPage() {
     queryKey: ['licensing', 'organization', 'workspaces'],
     queryFn: api.organizationWorkspaces,
     enabled: Boolean(auth.user && !auth.user.is_staff),
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const returnedSessionQuery = useQuery({
     queryKey: ['payment-session', returnedSessionId],
@@ -108,12 +110,19 @@ export function PaymentPage() {
   const order = existingOrder ?? createdOrder ?? undefined
   const renewal = renewalSummaryQuery.data
   const isRenewalPayment = Boolean(requestedRenewalLicense)
-  const selectedOrganizationId = checkoutOrganizationId ?? requestedOrganizationId ?? workspacesQuery.data?.default_organization_id ?? null
+  const availableOrganizationIds = new Set(workspacesQuery.data?.organizations.map((organization) => organization.id) ?? [])
+  const selectedOrganizationId = checkoutOrganizationId && availableOrganizationIds.has(checkoutOrganizationId)
+    ? checkoutOrganizationId
+    : requestedOrganizationId && availableOrganizationIds.has(requestedOrganizationId)
+    ? requestedOrganizationId
+    : workspacesQuery.data?.default_organization_id ?? null
   const enabledProviders = statusQuery.data?.providers ?? []
   const activeProvider = enabledProviders.some((item) => item.code === provider) ? provider : enabledProviders[0]?.code ?? provider
   const selectedProvider = providerContent[activeProvider]
   const SelectedProviderIcon = selectedProvider.icon
   const newLicenseItems = order?.items.filter((item) => item.licensing_role === 'license_product') ?? []
+  const purchaseItems = order?.items ?? cart.items.map(({ product }) => product)
+  const organizationRequiredForPayment = !staffPreview && !renewal && purchaseItems.some((item) => item.licensing_role === 'license_product' || item.licensing_role === 'licensed_product')
 
   const { register, handleSubmit, reset, setError, formState: { errors } } = useForm<BillingForm>({
     defaultValues: billingDefaults(auth.user),
@@ -206,6 +215,10 @@ export function PaymentPage() {
   if (activeSession && ['failed', 'expired', 'cancelled'].includes(activeSession.status)) return <main className={tw('client-payment-complete client-payment-failed')}><span><X size={28} /></span><p className={tw('eyebrow')}>PAYMENT NOT COMPLETED</p><h1>{activeSession.status === 'expired' ? 'The payment session expired.' : 'The payment was declined.'}</h1><p>{activeSession.failure_message || 'No charge was made. You can return and start a new secure payment session.'}</p><div><button type="button" onClick={resetAttempt}>Try again</button><Link to="/account?tab=orders">View your orders</Link></div></main>
 
   if (activeSession && statusQuery.data.development_simulator) return <main className={tw('client-payment-simulator')}><span><SelectedProviderIcon size={28} /></span><p className={tw('eyebrow')}>DEVELOPMENT PROVIDER SANDBOX</p><h1>{selectedProvider.title}</h1><p>This represents the external provider handoff. Choose a test response to exercise the verified return path. No real payment credentials or funds are involved.</p><dl><div><dt>{activeSession.order_number ? 'Order' : 'License renewal'}</dt><dd>{activeSession.order_number ?? activeSession.renewal_license_number}</dd></div><div><dt>Amount</dt><dd>{money(activeSession.amount, activeSession.currency)}</dd></div><div><dt>Session</dt><dd>{activeSession.reference}</dd></div></dl><div><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'failed' })}>Simulate decline</button><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'succeeded' })}>{confirmSession.isPending ? 'Confirming...' : 'Simulate successful payment'}</button></div></main>
+
+  if (organizationRequiredForPayment && workspacesQuery.isLoading) return <main className={tw('route-loading')}>Checking organization access...</main>
+  if (organizationRequiredForPayment && workspacesQuery.isError) return <main className={tw('route-message')}><AlertTriangle size={34}/><h1>Organization access is unavailable</h1><p>We could not verify where this license purchase should be assigned.</p><button className={tw('action-button action-button-secondary')} type="button" onClick={() => void workspacesQuery.refetch()}>Try again</button></main>
+  if (organizationRequiredForPayment && !selectedOrganizationId) return <main className={tw('route-message')}><Building2 size={34}/><h1>Create an organization before payment</h1><p>Licenses and licensed radio products are owned by an organization. Your cart will remain saved while you create one.</p><Link className={tw('primary-action')} to="/account?tab=licenses">Create organization</Link><Link className={tw('text-link')} to="/cart"><ArrowLeft size={15}/>Back to cart</Link></main>
 
   if (!order && !renewal && !cart.items.length) return <main className={tw('route-message')}><CreditCard size={34} /><h1>No products are ready for payment</h1><p>Add products to your cart, or open a pending invoice from your account.</p><Link className={tw('primary-action')} to="/shop">Browse products</Link></main>
   if (order && order.status !== 'pending') return <main className={tw('route-message')}><ShieldCheck size={34} /><h1>This order is not payable</h1><p>Only pending orders and invoices can start a payment session.</p><Link className={tw('primary-action')} to="/account?tab=orders">View your orders</Link></main>

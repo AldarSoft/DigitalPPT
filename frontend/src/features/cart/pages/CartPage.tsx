@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, FileText, LockKeyhole, Minus, Plus, ShoppingBag } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Building2, FileText, LockKeyhole, Minus, Plus, ShoppingBag } from 'lucide-react'
 import { Link, Navigate } from 'react-router-dom'
 import { useAuth } from '../../../contexts/AuthContext'
 import { useCart } from '../../../contexts/CartContext'
@@ -12,9 +12,29 @@ export function CartPage() {
     const cart = useCart();
     const auth = useAuth();
     const paymentStatus = useQuery({ queryKey: ['storefront-payment-status'], queryFn: api.storefrontPaymentStatus });
+    const requiresOrganization = cart.items.some(({ product }) => product.licensing_role === 'license_product' || product.licensing_role === 'licensed_product');
+    const workspacesQuery = useQuery({
+      queryKey: ['licensing', 'organization', 'workspaces'],
+      queryFn: api.organizationWorkspaces,
+      enabled: Boolean(auth.user && !auth.user.is_staff && requiresOrganization),
+      staleTime: 0,
+      refetchOnMount: 'always',
+    });
     if (auth.user?.is_staff) return <Navigate to="/admin" replace />
     const canContinue = cart.items.length > 0 && !cart.isLicenseCalculating && !cart.licenseCalculationError;
     const canPurchase = canContinue && cart.items.every(({ product, quantity }) => product.is_stock_tracked === false || product.inventory_quantity >= quantity);
+    const hasOrganization = Boolean(workspacesQuery.data?.organizations.length);
+    const organizationReady = !requiresOrganization || Boolean(auth.user && workspacesQuery.isSuccess && hasOrganization);
+    const organizationCheckPending = requiresOrganization && Boolean(auth.user) && workspacesQuery.isLoading;
+    const organizationCheckFailed = requiresOrganization && workspacesQuery.isError;
+    const needsOrganization = requiresOrganization && auth.ready && Boolean(auth.user) && workspacesQuery.isSuccess && !hasOrganization;
+    const needsSignIn = requiresOrganization && auth.ready && !auth.user;
+    const canStartPayment = canPurchase && organizationReady;
+    const paymentDisabledReason = !organizationReady
+      ? 'Create an organization before purchasing licenses or licensed products.'
+      : canContinue
+      ? 'Requested quantity exceeds available stock. Request a quote instead.'
+      : undefined;
     const paymentsEnabled = paymentStatus.data?.storefront_enabled === true;
     return (<main className={tw("cart-page")}>
       <section className={tw("page-title")}>
@@ -88,9 +108,12 @@ export function CartPage() {
             </dl>
             {cart.isLicenseCalculating ? <p>Calculating required license capacity...</p> : null}
             {cart.licenseCalculationError ? <p role="alert">Required license capacity could not be calculated.</p> : null}
-            {paymentsEnabled && canPurchase ? <Link className={tw("primary-action")} to="/payment">
+            {organizationCheckPending ? <p>Checking organization access...</p> : null}
+            {needsOrganization || needsSignIn ? <section className="mb-3 rounded-control border border-[#f1d29a] bg-warning-soft p-3 text-left text-xs text-warning" role="alert"><div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 shrink-0" size={17}/><div><strong className="block text-sm text-ink">Organization required</strong><p className="mt-1 !flex !items-start !justify-start !text-left !text-warning">Licenses and licensed radio products must belong to an organization before payment.</p><Link className={tw('action-button action-button-primary action-button-compact mt-3 w-full')} to={auth.user ? '/account?tab=licenses' : '/login'}><Building2 size={16}/>{auth.user ? 'Create organization' : 'Sign in to continue'}</Link></div></div></section> : null}
+            {organizationCheckFailed ? <section className="mb-3 rounded-control border border-danger bg-danger-soft p-3 text-left text-xs text-danger" role="alert"><strong>Organization access could not be checked.</strong><button className={tw('action-button action-button-secondary action-button-compact mt-2 w-full')} type="button" onClick={() => void workspacesQuery.refetch()}>Try again</button></section> : null}
+            {paymentsEnabled && canStartPayment ? <Link className={tw("primary-action")} to="/payment">
               <LockKeyhole size={17}/>Proceed to payment <ArrowRight size={18}/>
-            </Link> : paymentsEnabled ? <button className={tw("primary-action disabled")} type="button" disabled title={canContinue ? 'Requested quantity exceeds available stock. Request a quote instead.' : undefined}>
+            </Link> : paymentsEnabled ? <button className={tw("primary-action disabled")} type="button" disabled title={paymentDisabledReason}>
               <LockKeyhole size={17}/>Proceed to payment <ArrowRight size={18}/>
             </button> : <button className={tw("payment-coming-soon-button")} type="button" disabled aria-disabled="true">
               <LockKeyhole size={17}/>Online payment coming soon

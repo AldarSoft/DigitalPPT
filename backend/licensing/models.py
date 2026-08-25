@@ -29,10 +29,21 @@ class OrganizationQuerySet(models.QuerySet):
 
 
 class Organization(ActiveModel):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        ACTIVE = "active", "Active"
+        INACTIVE = "inactive", "Inactive"
+
     public_id = models.UUIDField(default=uuid4, unique=True, editable=False)
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=280, unique=True, blank=True)
     billing_email = models.EmailField(blank=True)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+        db_index=True,
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -45,7 +56,13 @@ class Organization(ActiveModel):
 
     class Meta:
         ordering = ("name", "id")
-        indexes = [models.Index(fields=["name", "is_active"])]
+        indexes = [
+            models.Index(fields=["name", "is_active"]),
+            models.Index(
+                fields=["status", "is_active"],
+                name="licensing_o_status_be764b_idx",
+            ),
+        ]
 
     def save(self, *args, **kwargs):
         if not self.slug:
@@ -143,10 +160,6 @@ class OrganizationInvitation(TimeStampedModel):
         ordering = ("-created_at",)
         constraints = [
             models.CheckConstraint(
-                condition=Q(role="license_manager"),
-                name="licensing_invitations_are_for_license_managers",
-            ),
-            models.CheckConstraint(
                 condition=Q(accepted_at__isnull=True) | Q(revoked_at__isnull=True),
                 name="licensing_invitation_not_accepted_and_revoked",
             ),
@@ -173,8 +186,6 @@ class OrganizationInvitation(TimeStampedModel):
     def clean(self):
         super().clean()
         self.email = self.email.strip().casefold()
-        if self.role != OrganizationMembership.Role.LICENSE_MANAGER:
-            raise ValidationError({"role": "Only License Managers can be invited."})
         if self.accepted_at and self.revoked_at:
             raise ValidationError("An invitation cannot be both accepted and revoked.")
         if self.accepted_by_id and not self.accepted_at:

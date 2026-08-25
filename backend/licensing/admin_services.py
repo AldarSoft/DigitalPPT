@@ -25,8 +25,13 @@ class AdminOrganizationLicenseService:
         return user.get_full_name().strip() or user.email or user.get_username()
 
     @classmethod
-    def queryset(cls, *, search="", status="", product=""):
-        queryset = Organization.objects.filter(licenses__isnull=False)
+    def queryset(cls, *, search="", status="", product="", customer_id=None):
+        queryset = Organization.objects.all()
+        if customer_id:
+            queryset = queryset.filter(
+                memberships__user_id=customer_id,
+                memberships__is_active=True,
+            )
         if search:
             queryset = queryset.filter(
                 models.Q(name__icontains=search)
@@ -38,7 +43,9 @@ class AdminOrganizationLicenseService:
                 | models.Q(licenses__license_product__name__icontains=search)
                 | models.Q(licenses__license_product__sku__icontains=search)
             )
-        if status:
+        if status == Organization.Status.DRAFT:
+            queryset = queryset.filter(status=Organization.Status.DRAFT)
+        elif status:
             queryset = queryset.filter(licenses__status=status)
         if product:
             product_filter = (
@@ -92,7 +99,9 @@ class AdminOrganizationLicenseService:
         }
 
     @classmethod
-    def status_for(cls, licenses):
+    def status_for(cls, licenses, organization=None):
+        if organization and organization.status == Organization.Status.DRAFT:
+            return Organization.Status.DRAFT
         licenses = list(licenses)
         today = timezone.localdate()
         if any(
@@ -155,7 +164,7 @@ class AdminOrganizationLicenseService:
             ),
             "total_capacity": sum(license.capacity for license in capacity_licenses),
             "next_expiry": next_expiry,
-            "status": cls.status_for(licenses),
+            "status": cls.status_for(licenses, organization),
         }
 
     @staticmethod
@@ -300,7 +309,7 @@ class AdminOrganizationLicenseService:
                     allocation_totals["licensed_product_count"] or 0
                 ),
                 "active_quantity": allocation_totals["active_quantity"] or 0,
-                "status": cls.status_for(current_licenses),
+                "status": cls.status_for(current_licenses, organization),
             },
             "licenses": [
                 ClientLicenseDetailService.serialize_license(license)

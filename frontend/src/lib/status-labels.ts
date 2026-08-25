@@ -1,8 +1,9 @@
 import type { Order, PaymentAttempt, QuoteRequest } from '../types'
 
-export type SimpleStatus = 'pending' | 'processing' | 'completed' | 'cancelled'
+export type SimpleStatus = 'draft' | 'pending' | 'processing' | 'completed' | 'cancelled'
 
 const ORDER_STATUS: Record<Order['status'], SimpleStatus> = {
+  draft: 'draft',
   pending: 'pending',
   scheduled: 'processing',
   processing: 'processing',
@@ -28,6 +29,7 @@ const PAYMENT_STATUS: Record<PaymentAttempt['status'], SimpleStatus> = {
 }
 
 const LABELS: Record<SimpleStatus, string> = {
+  draft: 'Draft',
   pending: 'Pending',
   processing: 'Processing',
   completed: 'Completed',

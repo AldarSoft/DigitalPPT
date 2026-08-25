@@ -14,6 +14,7 @@ from licensing.views import (
     OrganizationSummaryView,
     OrganizationTeamView,
     OrganizationWorkspaceListView,
+    OrganizationSettingsView,
 )
 
 
@@ -28,6 +29,11 @@ urlpatterns = [
         "organizations/",
         OrganizationWorkspaceListView.as_view(),
         name="licensing-organization-workspace-list",
+    ),
+    path(
+        "organization/settings/",
+        OrganizationSettingsView.as_view(),
+        name="licensing-organization-settings",
     ),
     path(
         "organization/licenses/",

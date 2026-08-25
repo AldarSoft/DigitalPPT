@@ -1,5 +1,34 @@
-export type LicenseStatus = 'pending_payment' | 'active' | 'expiring_soon' | 'expired' | 'cancelled'
+export type LicenseStatus = 'draft' | 'pending_payment' | 'active' | 'expiring_soon' | 'expired' | 'cancelled'
 export type OrganizationRole = 'owner' | 'license_manager'
+export type OrganizationStatus = 'draft' | 'active' | 'inactive'
+
+export interface OrganizationSettings {
+  id: number
+  name: string
+  billing_email: string
+  status: OrganizationStatus
+}
+
+export interface AdminOrganizationCreateInput {
+  name: string
+  billing_email?: string
+  owner_mode: 'existing' | 'create_account' | 'invite' | 'draft'
+  existing_owner_id?: number
+  owner_email?: string
+  owner_first_name?: string
+  owner_last_name?: string
+  owner_phone?: string
+}
+
+export interface AdminOrganizationCreateResponse {
+  id: number
+  name: string
+  billing_email: string
+  status: OrganizationStatus
+  owner: { name: string; email: string } | null
+  invitation: OrganizationInvitation | null
+  setup_url: string | null
+}
 
 export interface OrganizationLicenseSummary {
   license_count: number
@@ -80,7 +109,7 @@ export interface LicenseRenewalSummary {
 export interface OrganizationInvitation {
   invitation_id: number
   email: string
-  role: 'license_manager'
+  role: 'owner' | 'license_manager'
   status: string
   expires_at: string
   accept_url?: string
@@ -89,7 +118,7 @@ export interface OrganizationInvitation {
 export interface OrganizationInvitationAcceptance {
   organization_id: number
   organization_name: string
-  role: 'license_manager'
+  role: 'owner' | 'license_manager'
 }
 
 export interface OrganizationWorkspace {
@@ -101,6 +130,11 @@ export interface OrganizationWorkspace {
 export interface OrganizationWorkspaceListResponse {
   organizations: OrganizationWorkspace[]
   default_organization_id: number | null
+}
+
+export interface OrganizationCreateInput {
+  name: string
+  billing_email?: string
 }
 
 export interface OrganizationTeamResponse {
@@ -116,6 +150,7 @@ export interface AdminLicenseFilters {
   search?: string
   status?: LicenseStatus | ''
   product?: string
+  customer_id?: number
   page?: number
   page_size?: number
 }
