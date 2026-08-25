@@ -21,6 +21,7 @@ import { ProductDetailsPage } from '../features/products/pages/ProductDetailsPag
 import { ShopPage } from '../features/products/pages/ShopPage'
 import { AdminLicenseDetailPage } from '../features/licensing/pages/AdminLicenseDetailPage'
 import { AdminLicensesPage } from '../features/licensing/pages/AdminLicensesPage'
+import { AcceptOrganizationInvitationPage } from '../features/licensing/pages/AcceptOrganizationInvitationPage'
 import { AdminLayout } from '../layouts/AdminLayout'
 import { PublicLayout } from '../layouts/PublicLayout'
 import { HomePage } from '../pages/HomePage'
@@ -49,6 +50,7 @@ export function AppRouter() {
           <Route path="checkout" element={<CheckoutPage />} />
           <Route path="login" element={<LoginPage />} />
           <Route path="register" element={<RegisterPage />} />
+          <Route path="invite" element={<AcceptOrganizationInvitationPage />} />
           <Route element={<RequireAuth />}>
             <Route path="account" element={<AccountPage />} />
             <Route path="payment" element={<PaymentPage />} />

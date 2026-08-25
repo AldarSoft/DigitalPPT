@@ -42,6 +42,7 @@ class OrderService:
         validated_data.pop("quote_number", None)
         tax_amount = validated_data.pop("tax_amount", Decimal("0.00"))
         shipping_fee = validated_data.pop("shipping_fee", Decimal("0.00"))
+        organization = validated_data.pop("organization", None)
         authenticated_user = user if user and user.is_authenticated else None
         order_user = authenticated_user
 
@@ -52,8 +53,15 @@ class OrderService:
                 or authenticated_user
             )
 
+        if organization is None and order_user and not order_user.is_staff:
+            from licensing.services import OrganizationSummaryService
+
+            membership = OrganizationSummaryService.membership_for_user(order_user)
+            organization = membership.organization if membership else None
+
         order = Order.objects.create(
             user=order_user,
+            organization=organization,
             quote_request=quote_request,
             source=Order.Source.QUOTE if quote_request else Order.Source.ADMIN,
             **validated_data,
@@ -91,7 +99,7 @@ class OrderService:
 
         logger.info("Created order %s with %s items", order.order_number, len(order_items))
         return (
-            Order.objects.select_related("user")
+            Order.objects.select_related("user", "organization")
             .prefetch_related("items__product")
             .get(pk=order.pk)
         )
@@ -101,6 +109,7 @@ class OrderService:
     def create_checkout_order(*, validated_data, user=None):
         items_data = validated_data.pop("items")
         checkout_key = validated_data.pop("idempotency_key")
+        requested_organization = validated_data.pop("organization", None)
         authenticated_user = user if user and user.is_authenticated else None
         if not authenticated_user:
             raise ValidationError({"detail": "Sign in before starting checkout."})
@@ -118,11 +127,14 @@ class OrderService:
             return existing
         from licensing.services import CartLicenseService
 
-        _, normalized_items, _ = CartLicenseService.normalize_checkout_items(
+        organization, normalized_items, _ = CartLicenseService.normalize_checkout_items(
             user=authenticated_user,
             items=items_data,
+            organization_id=requested_organization.pk if requested_organization else None,
             lock=True,
         )
+        if requested_organization and organization is None:
+            raise ValidationError({"organization": "Select an organization you can manage."})
         product_ids = [product.pk for product, _ in normalized_items]
         products = Product.objects.select_for_update().public().in_bulk(product_ids)
 
@@ -157,6 +169,7 @@ class OrderService:
 
         order = Order.objects.create(
             user=authenticated_user,
+            organization=organization,
             source=Order.Source.DIRECT,
             checkout_key=checkout_key,
             **validated_data,
@@ -169,14 +182,33 @@ class OrderService:
         order.save(update_fields=["subtotal", "total", "updated_at"])
         logger.info("Created checkout order %s", order.order_number)
         return (
-            Order.objects.select_related("user")
+            Order.objects.select_related("user", "organization")
             .prefetch_related("items__product")
             .get(pk=order.pk)
         )
 
     @staticmethod
+    def status_after_successful_payment(*, order):
+        """Return the first fulfilment status after a confirmed payment.
+
+        License products are delivered by payment-success provisioning and do
+        not require shipment or manual fulfilment. Any stock-tracked item keeps
+        the order on the normal physical fulfilment route.
+        """
+        items = list(order.items.all())
+        is_digital_only = bool(items) and all(
+            item.product_id and not item.product.is_stock_tracked
+            for item in items
+        )
+        if is_digital_only:
+            return Order.Status.COMPLETED
+        if order.source == Order.Source.QUOTE:
+            return Order.Status.SCHEDULED
+        return Order.Status.PROCESSING
+
+    @staticmethod
     @transaction.atomic
-    def update_status(*, order, new_status):
+    def update_status(*, order, new_status, exclude_pending_payment_attempt_id=None):
         locked_order = (
             Order.objects.select_for_update()
             .prefetch_related("items__product")
@@ -253,6 +285,7 @@ class OrderService:
 
             PaymentService.close_pending_attempts(
                 order=locked_order,
+                exclude_attempt_id=exclude_pending_payment_attempt_id,
                 reason=f"Order changed to {new_status}.",
             )
 

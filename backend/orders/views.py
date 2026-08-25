@@ -1,4 +1,4 @@
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 from rest_framework import status, viewsets
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
@@ -14,7 +14,13 @@ from orders.serializers import (
 
 
 class OrderViewSet(viewsets.ModelViewSet):
-    queryset = Order.objects.select_related("user", "quote_request").prefetch_related("items__product")
+    queryset = Order.objects.select_related(
+        "user",
+        "organization",
+        "quote_request",
+        "renewal_license__organization",
+        "renewal_license__license_product",
+    ).prefetch_related("items__product")
     http_method_names = ["get", "post", "patch", "head", "options"]
     lookup_field = "order_number"
     search_fields = (
@@ -63,7 +69,17 @@ class OrderViewSet(viewsets.ModelViewSet):
             return queryset
         if not self.request.user or not self.request.user.is_authenticated:
             return queryset.none()
-        return queryset.filter(user=self.request.user)
+        organization_id = self.request.query_params.get("organization")
+        organization_orders = Q(
+            organization__memberships__user=self.request.user,
+            organization__memberships__is_active=True,
+            organization__is_active=True,
+        )
+        if organization_id:
+            if not organization_id.isdigit():
+                return queryset.none()
+            return queryset.filter(organization_id=organization_id).filter(organization_orders).distinct()
+        return queryset.filter(Q(user=self.request.user) | organization_orders).distinct()
 
     def get_serializer_class(self):
         if self.action == "create":

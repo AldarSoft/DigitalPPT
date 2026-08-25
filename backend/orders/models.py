@@ -26,6 +26,20 @@ class Order(TimeStampedModel):
         on_delete=models.SET_NULL,
         related_name="orders",
     )
+    organization = models.ForeignKey(
+        "licensing.Organization",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="orders",
+    )
+    renewal_license = models.ForeignKey(
+        "licensing.License",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="renewal_orders",
+    )
     quote_request = models.ForeignKey(
         "quotes.QuoteRequest",
         null=True,
@@ -70,6 +84,7 @@ class Order(TimeStampedModel):
         verbose_name_plural = "Orders"
         indexes = [
             models.Index(fields=["user", "status"]),
+            models.Index(fields=["organization", "status"]),
             models.Index(fields=["source", "status"]),
             models.Index(fields=["quote_request", "status"]),
             models.Index(fields=["status", "created_at"]),

@@ -1,8 +1,10 @@
 from datetime import timedelta
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.utils import timezone
 
 from licensing.models import (
     License,
@@ -12,11 +14,15 @@ from licensing.models import (
     OrganizationMembership,
     ProductLicenseAllocation,
 )
-from licensing.services import LicenseLifecycleService, OrganizationService
+from licensing.services import (
+    LicenseLifecycleService,
+    OrganizationService,
+)
 from orders.models import Order, OrderItem
 from payments.models import PaymentAttempt, PaymentProvider
 from payments.services import PaymentService
 from products.models import Category, Product
+from quotes.models import QuoteRequest
 
 
 class PaymentSuccessProvisioningTests(TestCase):
@@ -295,7 +301,7 @@ class PaymentSuccessProvisioningTests(TestCase):
             1,
         )
 
-    def test_license_only_order_extends_assigned_compatible_license(self):
+    def test_license_only_order_creates_a_new_license_when_another_exists(self):
         organization = OrganizationService.create(
             name="Existing Customer Organization",
             owner=self.customer,
@@ -319,33 +325,19 @@ class PaymentSuccessProvisioningTests(TestCase):
 
         result.refresh_from_db()
         existing_license.refresh_from_db()
-        renewal_event = LicenseEvent.objects.get(
-            license=existing_license,
-            event_type=LicenseEvent.Type.RENEWED,
-        )
-        self.assertEqual(License.objects.count(), 1)
-        self.assertEqual(
-            existing_license.expires_on,
-            previous_expiry + timedelta(days=365),
-        )
+        created_license = License.objects.get(source_order_item=license_item)
+        self.assertEqual(License.objects.count(), 2)
+        self.assertNotEqual(created_license.pk, existing_license.pk)
+        self.assertEqual(existing_license.expires_on, previous_expiry)
         self.assertEqual(existing_license.used_capacity, 2)
         self.assertEqual(
-            renewal_event.metadata["source_order_item_id"],
-            license_item.pk,
-        )
-        self.assertEqual(
             result.metadata["license_provisioning"]["renewed_license_ids"],
-            [existing_license.pk],
+            [],
         )
         self.assertEqual(
             result.metadata["license_provisioning"]["license_ids"],
-            [],
+            [created_license.pk],
         )
-        renewed_expiry = existing_license.expires_on
-        renewal_event_count = LicenseEvent.objects.filter(
-            license=existing_license,
-            event_type=LicenseEvent.Type.RENEWED,
-        ).count()
         PaymentAttempt.objects.filter(pk=result.pk).update(metadata={})
         result.refresh_from_db()
 
@@ -355,19 +347,107 @@ class PaymentSuccessProvisioningTests(TestCase):
             outcome=PaymentAttempt.Status.SUCCEEDED,
         )
 
-        existing_license.refresh_from_db()
-        self.assertEqual(existing_license.expires_on, renewed_expiry)
-        self.assertEqual(
-            LicenseEvent.objects.filter(
-                license=existing_license,
-                event_type=LicenseEvent.Type.RENEWED,
-            ).count(),
-            renewal_event_count,
-        )
+        self.assertEqual(License.objects.count(), 2)
         self.assertEqual(LicenseOrderItemProvisioning.objects.count(), 1)
 
+    @override_settings(DEBUG=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
+    def test_selected_renewal_payment_creates_a_completed_order_and_extends_only_its_linked_license(self):
+        organization = OrganizationService.create(
+            name="Renewal Selection Organization",
+            owner=self.customer,
+            billing_email=self.customer.email,
+        )
+        selected_license = LicenseLifecycleService.provision(
+            organization=organization,
+            license_product=self.license_product,
+            actor=self.customer,
+        )
+        other_license = LicenseLifecycleService.provision(
+            organization=organization,
+            license_product=self.license_product,
+            actor=self.customer,
+        )
+        expiry = timezone.localdate() + timedelta(days=360)
+        License.objects.filter(pk=selected_license.pk).update(
+            status=License.Status.EXPIRING_SOON,
+            expires_on=expiry,
+            renews_on=expiry + timedelta(days=1),
+        )
+        selected_license.refresh_from_db()
+        other_expiry = other_license.expires_on
+
+        attempt, created = PaymentService.start_license_renewal_checkout(
+            user=self.customer,
+            license_number=selected_license.license_number,
+            organization_id=organization.pk,
+            provider=self.provider,
+            idempotency_key=uuid4(),
+            billing={
+                "email": self.customer.email,
+                "first_name": "Test",
+                "last_name": "Customer",
+                "phone": "99999999",
+                "company": organization.name,
+                "address": "Main street",
+                "city": "Ulaanbaatar",
+                "state": "",
+                "postal_code": "14200",
+                "country": "Mongolia",
+            },
+        )
+        self.assertIsNone(attempt.order_id)
+
+        PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+
+        selected_license.refresh_from_db()
+        other_license.refresh_from_db()
+        self.assertTrue(created)
+        order = Order.objects.get(renewal_license=selected_license)
+        self.assertEqual(order.status, Order.Status.COMPLETED)
+        self.assertEqual(License.objects.count(), 2)
+        self.assertEqual(selected_license.expires_on, expiry + timedelta(days=365))
+        self.assertEqual(other_license.expires_on, other_expiry)
+
+        # A new annual cycle may be renewed later; the prior successful
+        # payment must not be mistaken for a duplicate of this new cycle.
+        next_expiry = selected_license.expires_on
+        License.objects.filter(pk=selected_license.pk).update(
+            status=License.Status.EXPIRING_SOON,
+        )
+        second_attempt, second_created = PaymentService.start_license_renewal_checkout(
+            user=self.customer,
+            license_number=selected_license.license_number,
+            organization_id=organization.pk,
+            provider=self.provider,
+            idempotency_key=uuid4(),
+            billing={
+                "email": self.customer.email,
+                "first_name": "Test",
+                "last_name": "Customer",
+                "phone": "99999999",
+                "company": organization.name,
+                "address": "Main street",
+                "city": "Ulaanbaatar",
+                "state": "",
+                "postal_code": "14200",
+                "country": "Mongolia",
+            },
+        )
+        PaymentService.simulate_checkout(
+            attempt=second_attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+        selected_license.refresh_from_db()
+        self.assertTrue(second_created)
+        self.assertEqual(selected_license.expires_on, next_expiry + timedelta(days=365))
+
     def test_license_only_order_creates_unused_license_without_assignment(self):
-        _, license_item, attempt = self.create_license_only_order()
+        order, license_item, attempt = self.create_license_only_order()
 
         result = PaymentService.simulate_checkout(
             attempt=attempt,
@@ -376,7 +456,10 @@ class PaymentSuccessProvisioningTests(TestCase):
         )
 
         result.refresh_from_db()
+        order.refresh_from_db()
         created_license = License.objects.get(source_order_item=license_item)
+        self.assertEqual(order.status, Order.Status.COMPLETED)
+        self.assertFalse(order.stock_deducted)
         self.assertEqual(created_license.used_capacity, 0)
         self.assertEqual(created_license.available_capacity, 200)
         self.assertEqual(
@@ -387,6 +470,49 @@ class PaymentSuccessProvisioningTests(TestCase):
             result.metadata["license_provisioning"]["renewed_license_ids"],
             [],
         )
+
+    def test_repeated_success_completes_a_legacy_paid_license_only_order(self):
+        order, _, attempt = self.create_license_only_order()
+
+        PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+        Order.objects.filter(pk=order.pk).update(status=Order.Status.PROCESSING)
+        order.refresh_from_db()
+
+        PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.COMPLETED)
+
+    def test_paid_quote_with_only_a_license_completes_immediately(self):
+        order, _, attempt = self.create_license_only_order()
+        quote = QuoteRequest.objects.create(
+            user=self.customer,
+            requester_contact_person="License Customer",
+            requester_email=self.customer.email,
+            status=QuoteRequest.Status.QUOTED,
+        )
+        order.quote_request = quote
+        order.source = Order.Source.QUOTE
+        order.save(update_fields=["quote_request", "source", "updated_at"])
+
+        PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+
+        order.refresh_from_db()
+        quote.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.COMPLETED)
+        self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
 
     def test_provisioning_failure_rolls_back_payment_order_and_inventory(self):
         order, _, _, attempt = self.create_order(include_license=False)

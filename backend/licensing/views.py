@@ -12,12 +12,17 @@ from licensing.serializers import (
     CartCapacityRequirementSerializer,
     ClientLicenseDetailSerializer,
     ClientLicenseListSerializer,
+    LicenseRenewalSummarySerializer,
     LicenseAdjustmentSerializer,
     LicenseSummarySerializer,
+    OrganizationInvitationAcceptSerializer,
+    OrganizationInvitationAcceptanceSerializer,
     OrganizationInvitationCreateSerializer,
     OrganizationInvitationSerializer,
+    OrganizationOwnershipTransferSerializer,
     OrganizationSummarySerializer,
     OrganizationTeamSerializer,
+    OrganizationWorkspaceListSerializer,
 )
 from licensing.models import License, OrganizationInvitation
 from licensing.services import (
@@ -25,8 +30,10 @@ from licensing.services import (
     ClientLicenseDetailService,
     InvitationService,
     LicenseLifecycleService,
+    LicenseRenewalOrderService,
     OrganizationLicenseListService,
     OrganizationSummaryService,
+    OrganizationOwnershipService,
     OrganizationTeamService,
 )
 
@@ -38,14 +45,30 @@ def _raise_api_validation(exc):
     raise ValidationError(detail) from exc
 
 
-def _invitation_payload(invitation):
-    return {
+def _invitation_payload(invitation, *, accept_url=None):
+    payload = {
         "invitation_id": invitation.pk,
         "email": invitation.email,
         "role": invitation.role,
         "status": invitation.status,
         "expires_at": invitation.expires_at,
     }
+    if accept_url:
+        payload["accept_url"] = accept_url
+    return payload
+
+
+def _requested_organization_id(request):
+    value = request.query_params.get("organization")
+    if value in (None, ""):
+        return None
+    try:
+        organization_id = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValidationError({"organization": "Use a valid organization id."}) from exc
+    if organization_id < 1:
+        raise ValidationError({"organization": "Use a valid organization id."})
+    return organization_id
 
 
 class CartCapacityView(APIView):
@@ -146,7 +169,10 @@ class OrganizationSummaryView(APIView):
         responses=OrganizationSummarySerializer,
     )
     def get(self, request):
-        summary = OrganizationSummaryService.for_user(request.user)
+        summary = OrganizationSummaryService.for_user(
+            request.user,
+            organization_id=_requested_organization_id(request),
+        )
         if summary is None:
             return Response(
                 {"detail": "No active organization membership was found."},
@@ -163,7 +189,10 @@ class OrganizationLicenseListView(APIView):
         responses=ClientLicenseListSerializer,
     )
     def get(self, request):
-        payload = OrganizationLicenseListService.for_user(request.user)
+        payload = OrganizationLicenseListService.for_user(
+            request.user,
+            organization_id=_requested_organization_id(request),
+        )
         if payload is None:
             return Response(
                 {"detail": "No active organization membership was found."},
@@ -183,10 +212,27 @@ class ClientLicenseDetailView(APIView):
         payload = ClientLicenseDetailService.for_user(
             user=request.user,
             license_number=license_number,
+            organization_id=_requested_organization_id(request),
         )
         if payload is None:
             return Response({"detail": "License not found."}, status=404)
         return Response(ClientLicenseDetailSerializer(payload).data)
+
+
+class LicenseRenewalOrderView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        summary="Get the selected license renewal payment summary",
+        responses=LicenseRenewalSummarySerializer,
+    )
+    def get(self, request, license_number):
+        payload = LicenseRenewalOrderService.summary(
+            user=request.user,
+            license_number=license_number,
+            organization_id=_requested_organization_id(request),
+        )
+        return Response(LicenseRenewalSummarySerializer(payload).data)
 
 
 class OrganizationTeamView(APIView):
@@ -197,12 +243,50 @@ class OrganizationTeamView(APIView):
         responses=OrganizationTeamSerializer,
     )
     def get(self, request):
-        payload = OrganizationTeamService.for_user(request.user)
+        payload = OrganizationTeamService.for_user(
+            request.user,
+            organization_id=_requested_organization_id(request),
+        )
         if payload is None:
             return Response(
                 {"detail": "No active organization membership was found."},
                 status=404,
             )
+        return Response(OrganizationTeamSerializer(payload).data)
+
+
+class OrganizationOwnershipTransferView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        summary="Transfer organization ownership to a License Manager",
+        request=OrganizationOwnershipTransferSerializer,
+        responses=OrganizationTeamSerializer,
+    )
+    def post(self, request):
+        membership = OrganizationSummaryService.membership_for_user(
+            request.user,
+            organization_id=_requested_organization_id(request),
+        )
+        if membership is None:
+            return Response(
+                {"detail": "No active organization membership was found."},
+                status=404,
+            )
+        serializer = OrganizationOwnershipTransferSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            OrganizationOwnershipService.transfer(
+                organization=membership.organization,
+                target_membership_id=serializer.validated_data["membership_id"],
+                transferred_by=request.user,
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+        payload = OrganizationTeamService.for_user(
+            request.user,
+            organization_id=membership.organization_id,
+        )
         return Response(OrganizationTeamSerializer(payload).data)
 
 
@@ -215,7 +299,10 @@ class OrganizationInvitationCreateView(APIView):
         responses={201: OrganizationInvitationSerializer},
     )
     def post(self, request):
-        membership = OrganizationSummaryService.membership_for_user(request.user)
+        membership = OrganizationSummaryService.membership_for_user(
+            request.user,
+            organization_id=_requested_organization_id(request),
+        )
         if membership is None:
             return Response(
                 {"detail": "No active organization membership was found."},
@@ -224,7 +311,7 @@ class OrganizationInvitationCreateView(APIView):
         serializer = OrganizationInvitationCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            invitation, _token = InvitationService.issue(
+            invitation, token = InvitationService.issue(
                 organization=membership.organization,
                 email=serializer.validated_data["email"],
                 invited_by=request.user,
@@ -233,9 +320,38 @@ class OrganizationInvitationCreateView(APIView):
             _raise_api_validation(exc)
         return Response(
             OrganizationInvitationSerializer(
-                _invitation_payload(invitation)
+                _invitation_payload(invitation, accept_url=InvitationService.accept_url(token))
             ).data,
             status=201,
+        )
+
+
+class OrganizationInvitationAcceptView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        summary="Accept an organization License Manager invitation",
+        request=OrganizationInvitationAcceptSerializer,
+        responses=OrganizationInvitationAcceptanceSerializer,
+    )
+    def post(self, request):
+        serializer = OrganizationInvitationAcceptSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            membership = InvitationService.accept(
+                token=serializer.validated_data["token"],
+                user=request.user,
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+        return Response(
+            OrganizationInvitationAcceptanceSerializer(
+                {
+                    "organization_id": membership.organization_id,
+                    "organization_name": membership.organization.name,
+                    "role": membership.role,
+                }
+            ).data
         )
 
 
@@ -249,7 +365,10 @@ class OrganizationInvitationActionView(APIView):
         responses=OrganizationInvitationSerializer,
     )
     def post(self, request, pk):
-        membership = OrganizationSummaryService.membership_for_user(request.user)
+        membership = OrganizationSummaryService.membership_for_user(
+            request.user,
+            organization_id=_requested_organization_id(request),
+        )
         if membership is None:
             return Response(
                 {"detail": "No active organization membership was found."},
@@ -262,7 +381,7 @@ class OrganizationInvitationActionView(APIView):
         )
         try:
             if self.action == "resend":
-                invitation, _token = InvitationService.resend(
+                invitation, token = InvitationService.resend(
                     invitation=invitation,
                     resent_by=request.user,
                 )
@@ -273,11 +392,11 @@ class OrganizationInvitationActionView(APIView):
                 )
         except DjangoValidationError as exc:
             _raise_api_validation(exc)
-        return Response(
-            OrganizationInvitationSerializer(
-                _invitation_payload(invitation)
-            ).data
+        payload = _invitation_payload(
+            invitation,
+            accept_url=(InvitationService.accept_url(token) if self.action == "resend" else None),
         )
+        return Response(OrganizationInvitationSerializer(payload).data)
 
 
 class OrganizationInvitationResendView(OrganizationInvitationActionView):
@@ -286,3 +405,18 @@ class OrganizationInvitationResendView(OrganizationInvitationActionView):
 
 class OrganizationInvitationRevokeView(OrganizationInvitationActionView):
     action = "revoke"
+
+
+class OrganizationWorkspaceListView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        summary="List organizations available to the signed-in user",
+        responses=OrganizationWorkspaceListSerializer,
+    )
+    def get(self, request):
+        return Response(
+            OrganizationWorkspaceListSerializer(
+                OrganizationSummaryService.workspaces_for_user(request.user)
+            ).data
+        )

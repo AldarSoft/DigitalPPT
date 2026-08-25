@@ -2,6 +2,9 @@ from .base import *  # noqa: F403,F401
 
 DEBUG = True
 
+# Keep browser-to-API traffic visible while developing locally.
+MIDDLEWARE += ["common.request_logging.DevelopmentRequestLoggingMiddleware"]  # noqa: F405
+
 # Development exposes the customer payment flow through a non-charging
 # simulator. Production explicitly disables the simulator in prod.py.
 PAYMENTS_STOREFRONT_ENABLED = env("PAYMENTS_STOREFRONT_ENABLED", default=True, cast=bool)  # noqa: F405

@@ -10,11 +10,12 @@ export type AdminReport =
   | { kind: 'promotions'; rows: Promotion[] }
 
 type CellValue = string | number | boolean | Date | null
+type CellFormat = 'currency' | 'date' | 'datetime' | 'integer' | 'percent'
 type Column<Row> = {
   header: string
   width: number
   value: (row: Row) => CellValue
-  format?: 'currency' | 'date' | 'datetime' | 'integer' | 'percent'
+  format?: CellFormat | ((row: Row) => CellFormat)
 }
 
 const colors = {
@@ -62,8 +63,8 @@ function productColumns(inventoryOnly = false): Column<Product>[] {
     { header: 'SKU', width: 17, value: (row) => row.sku },
     { header: 'Category', width: 22, value: (row) => row.category.name },
     { header: 'Brand', width: 20, value: (row) => row.brand },
-    { header: 'Stock quantity', width: 15, value: (row) => row.inventory_quantity, format: 'integer' },
-    { header: 'Stock level', width: 16, value: (row) => row.inventory_quantity === 0 ? 'Out of stock' : row.inventory_quantity <= 5 ? 'Low stock' : 'In stock' },
+    { header: 'Stock quantity', width: 15, value: (row) => row.is_stock_tracked === false ? 'Not tracked' : row.inventory_quantity },
+    { header: 'Stock level', width: 16, value: (row) => row.is_stock_tracked === false ? 'Always available' : row.inventory_quantity === 0 ? 'Out of stock' : row.inventory_quantity <= 5 ? 'Low stock' : 'In stock' },
     { header: 'Status', width: 14, value: (row) => titleCase(row.status) },
     { header: 'Storefront active', width: 17, value: (row) => yesNo(row.is_active) },
     { header: 'Updated', width: 20, value: (row) => dateValue(row.updated_at), format: 'datetime' },
@@ -125,7 +126,7 @@ function promotionColumns(): Column<Promotion>[] {
     { header: 'Description', width: 40, value: (row) => row.description },
     { header: 'Status', width: 15, value: (row) => titleCase(row.status) },
     { header: 'Discount type', width: 17, value: (row) => titleCase(row.discount_type) },
-    { header: 'Discount value', width: 17, value: (row) => Number(row.discount_value), format: row.discount_type === 'percentage' ? 'percent' : 'currency' },
+    { header: 'Discount value', width: 17, value: (row) => Number(row.discount_value), format: (row) => row.discount_type === 'percentage' ? 'percent' : 'currency' },
     { header: 'Starts', width: 20, value: (row) => dateValue(row.starts_at), format: 'datetime' },
     { header: 'Ends', width: 20, value: (row) => dateValue(row.ends_at), format: 'datetime' },
     { header: 'Usage limit', width: 14, value: (row) => row.usage_limit, format: 'integer' },
@@ -209,7 +210,10 @@ export async function exportAdminReport(report: AdminReport) {
         cell.border = thinBorder
         cell.alignment = { vertical: 'middle', wrapText: true }
         if (index % 2 === 1) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.paleGray } }
-        const format = columns[columnIndex - 1]?.format
+        const formatDefinition = columns[columnIndex - 1]?.format
+        const format = typeof formatDefinition === 'function'
+          ? formatDefinition(record)
+          : formatDefinition
         if (format === 'currency') cell.numFmt = '$#,##0.00'
         if (format === 'integer') cell.numFmt = '#,##0'
         if (format === 'date') cell.numFmt = 'yyyy-mm-dd'

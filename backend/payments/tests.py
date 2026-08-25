@@ -10,6 +10,8 @@ from rest_framework.test import APITestCase
 
 from orders.models import Order, OrderItem
 from orders.services import OrderService
+from licensing.services import OrganizationService
+from licensing.models import OrganizationMembership
 from payments.models import PaymentAttempt, PaymentProvider
 from products.models import Category, Product
 from quotes.models import QuoteRequest
@@ -128,6 +130,80 @@ class PaymentFoundationTests(APITestCase):
                 "country": "Mongolia",
             },
         }
+
+    @override_settings(DEBUG=True, PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
+    def test_license_manager_can_list_and_pay_an_organization_order(self):
+        User = get_user_model()
+        manager = User.objects.create_user(
+            username="license-manager-payment@example.com",
+            email="license-manager-payment@example.com",
+            password="StrongPass123!",
+        )
+        organization = OrganizationService.create(
+            name="Payment Operations",
+            owner=self.customer,
+            billing_email=self.customer.email,
+        )
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=manager,
+            role=OrganizationMembership.Role.LICENSE_MANAGER,
+        )
+        self.order.organization = organization
+        self.order.save(update_fields=["organization", "updated_at"])
+        self.client.force_authenticate(manager)
+
+        listed = self.client.get(f"/api/v1/orders/?organization={organization.pk}")
+        self.assertEqual(listed.status_code, status.HTTP_200_OK)
+        rows = listed.data["results"] if "results" in listed.data else listed.data
+        self.assertEqual([row["order_number"] for row in rows], [self.order.order_number])
+
+        payload = self.checkout_payload()
+        payload["billing"]["email"] = manager.email
+        created = self.client.post("/api/v1/payments/checkout-sessions/", payload, format="json")
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+
+        completed = self.client.post(
+            f"/api/v1/payments/checkout-sessions/{created.data['session_id']}/simulate/",
+            {"outcome": "succeeded"},
+            format="json",
+        )
+        self.assertEqual(completed.status_code, status.HTTP_200_OK)
+        self.assertEqual(completed.data["status"], PaymentAttempt.Status.SUCCEEDED)
+
+    @override_settings(PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
+    def test_license_manager_cannot_access_another_organizations_order(self):
+        User = get_user_model()
+        manager = User.objects.create_user(
+            username="limited-license-manager@example.com",
+            email="limited-license-manager@example.com",
+            password="StrongPass123!",
+        )
+        organization = OrganizationService.create(
+            name="Manager Organization",
+            owner=self.customer,
+        )
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=manager,
+            role=OrganizationMembership.Role.LICENSE_MANAGER,
+        )
+        other_owner = User.objects.create_user(
+            username="unrelated-owner@example.com",
+            email="unrelated-owner@example.com",
+            password="StrongPass123!",
+        )
+        unrelated = OrganizationService.create(name="Unrelated Organization", owner=other_owner)
+        self.order.organization = unrelated
+        self.order.save(update_fields=["organization", "updated_at"])
+        self.client.force_authenticate(manager)
+
+        response = self.client.post(
+            "/api/v1/payments/checkout-sessions/",
+            self.checkout_payload(),
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     @override_settings(DEBUG=True, PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
     def test_customer_can_create_idempotent_checkout_session_for_owned_order(self):

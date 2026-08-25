@@ -4,12 +4,16 @@ from licensing.views import (
     CartCapacityView,
     ClientLicenseDetailView,
     LicenseAdjustmentView,
+    LicenseRenewalOrderView,
+    OrganizationInvitationAcceptView,
     OrganizationInvitationCreateView,
     OrganizationInvitationResendView,
     OrganizationInvitationRevokeView,
     OrganizationLicenseListView,
+    OrganizationOwnershipTransferView,
     OrganizationSummaryView,
     OrganizationTeamView,
+    OrganizationWorkspaceListView,
 )
 
 
@@ -19,6 +23,11 @@ urlpatterns = [
         "organization/summary/",
         OrganizationSummaryView.as_view(),
         name="licensing-organization-summary",
+    ),
+    path(
+        "organizations/",
+        OrganizationWorkspaceListView.as_view(),
+        name="licensing-organization-workspace-list",
     ),
     path(
         "organization/licenses/",
@@ -31,9 +40,19 @@ urlpatterns = [
         name="licensing-organization-team",
     ),
     path(
+        "organization/ownership-transfer/",
+        OrganizationOwnershipTransferView.as_view(),
+        name="licensing-organization-ownership-transfer",
+    ),
+    path(
         "organization/invitations/",
         OrganizationInvitationCreateView.as_view(),
         name="licensing-organization-invitation-create",
+    ),
+    path(
+        "organization/invitations/accept/",
+        OrganizationInvitationAcceptView.as_view(),
+        name="licensing-organization-invitation-accept",
     ),
     path(
         "organization/invitations/<int:pk>/resend/",
@@ -49,6 +68,11 @@ urlpatterns = [
         "licenses/<str:license_number>/",
         ClientLicenseDetailView.as_view(),
         name="licensing-license-detail",
+    ),
+    path(
+        "licenses/<str:license_number>/renew/",
+        LicenseRenewalOrderView.as_view(),
+        name="licensing-license-renewal-order",
     ),
     path(
         "licenses/<int:pk>/adjust/",

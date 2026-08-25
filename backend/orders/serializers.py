@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from rest_framework import serializers
+from django.utils import timezone
 from quotes.models import QuoteRequest
 
 from orders.models import Order, OrderItem
 from orders.services import OrderService
 from common.validators import validate_phone
 from products.models import Product
+from licensing.models import Organization
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product_slug = serializers.CharField(source="product.slug", read_only=True)
     image_url = serializers.SerializerMethodField()
     available_stock = serializers.SerializerMethodField()
+    licensing_role = serializers.SerializerMethodField()
+    license_capacity = serializers.SerializerMethodField()
+    license_term_days = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
@@ -27,6 +34,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "line_total",
             "image_url",
             "available_stock",
+            "licensing_role",
+            "license_capacity",
+            "license_term_days",
         )
 
     def get_image_url(self, obj) -> str:
@@ -36,10 +46,26 @@ class OrderItemSerializer(serializers.ModelSerializer):
     def get_available_stock(self, obj) -> int | None:
         return obj.product.inventory_quantity if obj.product else None
 
+    def get_licensing_role(self, obj) -> str | None:
+        return obj.product.licensing_role if obj.product else None
+
+    def get_license_capacity(self, obj) -> int | None:
+        return obj.product.license_capacity if obj.product else None
+
+    def get_license_term_days(self, obj) -> int | None:
+        return obj.product.license_term_days if obj.product else None
+
 
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
     user_id = serializers.IntegerField(read_only=True)
+    organization_id = serializers.IntegerField(read_only=True)
+    renewal_license_number = serializers.CharField(
+        source="renewal_license.license_number",
+        read_only=True,
+        allow_null=True,
+    )
+    renewal = serializers.SerializerMethodField()
     quote_number = serializers.CharField(source="quote_request.quote_number", read_only=True)
     is_paid = serializers.SerializerMethodField()
 
@@ -52,6 +78,9 @@ class OrderSerializer(serializers.ModelSerializer):
             "is_paid",
             "source",
             "user_id",
+            "organization_id",
+            "renewal_license_number",
+            "renewal",
             "status",
             "customer_first_name",
             "customer_last_name",
@@ -81,6 +110,27 @@ class OrderSerializer(serializers.ModelSerializer):
         return obj.payment_attempts.filter(
             status=PaymentAttempt.Status.SUCCEEDED
         ).exists()
+
+    def get_renewal(self, obj):
+        license = obj.renewal_license
+        if license is None:
+            return None
+        term_days = license.license_product.license_term_days or 0
+        current_expiry = license.expires_on
+        projected_expiry = (
+            max(timezone.localdate(), current_expiry or timezone.localdate())
+            + timedelta(days=term_days)
+            if term_days
+            else None
+        )
+        return {
+            "license_number": license.license_number,
+            "license_name": license.name,
+            "organization_name": license.organization.name,
+            "current_expires_on": current_expiry,
+            "projected_expires_on": projected_expiry,
+            "term_days": term_days or None,
+        }
 
 
 class OrderCreateItemSerializer(serializers.ModelSerializer):
@@ -117,6 +167,7 @@ class OrderCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = (
+            "organization",
             "quote_number",
             "customer_first_name",
             "customer_last_name",
@@ -163,6 +214,12 @@ class OrderCreateSerializer(serializers.ModelSerializer):
 
 class CheckoutSerializer(serializers.ModelSerializer):
     idempotency_key = serializers.UUIDField(write_only=True)
+    organization = serializers.PrimaryKeyRelatedField(
+        queryset=Organization.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
     items = CheckoutItemSerializer(many=True)
     customer_phone = serializers.CharField(
         required=False,
@@ -174,6 +231,7 @@ class CheckoutSerializer(serializers.ModelSerializer):
         model = Order
         fields = (
             "idempotency_key",
+            "organization",
             "customer_first_name",
             "customer_last_name",
             "customer_email",

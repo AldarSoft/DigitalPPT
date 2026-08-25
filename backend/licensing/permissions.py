@@ -27,6 +27,11 @@ class OrganizationAccessPolicy:
         return cls.can_view(user=user, organization=organization)
 
     @classmethod
+    def can_manage_billing(cls, *, user, organization):
+        """Owners and License Managers may pay organization licensing orders."""
+        return cls.can_view(user=user, organization=organization)
+
+    @classmethod
     def can_manage_team(cls, *, user, organization):
         if not user or not user.is_authenticated:
             return False

@@ -29,9 +29,10 @@ export function AdminDashboardPage() {
     }, [data.orderList]);
     if (data.isError)
         return <AdminErrorState resource="dashboard data" />;
-    const inStock = data.productList.filter((product) => product.inventory_quantity > 5).length;
-    const lowStock = data.productList.filter((product) => product.inventory_quantity > 0 && product.inventory_quantity <= 5);
-    const outOfStock = data.productList.filter((product) => product.inventory_quantity === 0).length;
+    const stockTrackedProducts = data.productList.filter((product) => product.is_stock_tracked !== false);
+    const inStock = stockTrackedProducts.filter((product) => product.inventory_quantity > 5).length;
+    const lowStock = stockTrackedProducts.filter((product) => product.inventory_quantity > 0 && product.inventory_quantity <= 5);
+    const outOfStock = stockTrackedProducts.filter((product) => product.inventory_quantity === 0).length;
     return (<main className={tw("admin-page")}>
       <div className={tw("admin-title-row")}>
         <div><h1>Dashboard</h1><p>{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })} &nbsp;-&nbsp; Store overview</p></div>

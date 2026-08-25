@@ -172,8 +172,10 @@ class AdminOrganizationLicenseService:
                 f"{metadata.get('new_expiry', 'the next term')}."
             ),
             LicenseEvent.Type.EXPIRED: f"{license_name} expired.",
-            LicenseEvent.Type.NOTIFICATION_SENT: metadata.get(
-                "message", "License notification sent."
+            LicenseEvent.Type.NOTIFICATION_SENT: (
+                "Renewal invoice notice sent."
+                if metadata.get("notification_type") == "renewal_invoice"
+                else metadata.get("message", "License notification sent.")
             ),
             LicenseEvent.Type.INVITATION_SENT: (
                 f"License Manager invitation sent to {metadata.get('email', '')}."
@@ -183,6 +185,10 @@ class AdminOrganizationLicenseService:
             ),
             LicenseEvent.Type.INVITATION_REVOKED: (
                 "License Manager invitation revoked."
+            ),
+            LicenseEvent.Type.OWNERSHIP_TRANSFERRED: (
+                "Organization ownership transferred to "
+                f"{metadata.get('new_owner_email', 'the new Owner')}."
             ),
             LicenseEvent.Type.ADJUSTED: metadata.get(
                 "reason", "License manually adjusted."
@@ -265,6 +271,10 @@ class AdminOrganizationLicenseService:
             ),
             default=None,
         )
+        renewal_invoice_issued = cls.event_queryset(organization).filter(
+            event_type=LicenseEvent.Type.NOTIFICATION_SENT,
+            metadata__notification_type="renewal_invoice",
+        ).exists()
         recent_events = cls.event_queryset(organization)[:20]
         return {
             "organization": {
@@ -300,7 +310,9 @@ class AdminOrganizationLicenseService:
                 "renewal_reminder_scheduled_for": (
                     expires_on - timedelta(days=60) if expires_on else None
                 ),
-                "renewal_invoice_status": "not_issued",
+                "renewal_invoice_status": (
+                    "issued" if renewal_invoice_issued else "not_issued"
+                ),
             },
             "events": [cls.event_row(event) for event in recent_events],
             "permissions": {
@@ -311,10 +323,67 @@ class AdminOrganizationLicenseService:
         }
 
 
+    @classmethod
+    def users(cls, organization):
+        memberships = list(
+            organization.memberships.select_related("user")
+            .filter(is_active=True, user__is_active=True)
+            .order_by("role", "user__first_name", "user__email", "pk")
+        )
+
+        def member_row(membership):
+            return {
+                "membership_id": membership.pk,
+                "user_id": membership.user_id,
+                "name": cls._display_name(membership.user),
+                "email": membership.user.email,
+                "role": membership.role,
+                "status": "active",
+            }
+
+        owner = next(
+            (item for item in memberships if item.role == OrganizationMembership.Role.OWNER),
+            None,
+        )
+        invitations = organization.invitations.filter(
+            accepted_at__isnull=True,
+            revoked_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).order_by("-created_at", "pk")
+        return {
+            "organization": {"id": organization.pk, "name": organization.name},
+            "owner": member_row(owner) if owner else None,
+            "license_managers": [
+                member_row(item)
+                for item in memberships
+                if item.role == OrganizationMembership.Role.LICENSE_MANAGER
+            ],
+            "pending_invitations": [
+                {
+                    "invitation_id": invitation.pk,
+                    "email": invitation.email,
+                    "role": invitation.role,
+                    "status": invitation.status,
+                    "expires_at": invitation.expires_at,
+                }
+                for invitation in invitations
+            ],
+        }
+
+
 class AdminLicenseNotificationService:
     @classmethod
     @transaction.atomic
-    def send(cls, *, organization, actor, title, message, license=None):
+    def send(
+        cls,
+        *,
+        organization,
+        actor,
+        title,
+        message,
+        license=None,
+        notification_type="support",
+    ):
         if not actor or not actor.is_authenticated or not actor.is_staff:
             raise ValidationError("Only staff can send organization notifications.")
         if license and license.organization_id != organization.pk:
@@ -336,7 +405,7 @@ class AdminLicenseNotificationService:
                     recipient=recipient,
                     title=title,
                     message=message,
-                    url="/account?tab=licenses",
+                    url=f"/account?tab=licenses&org={organization.pk}",
                 )
                 for recipient in recipients
             ]
@@ -350,6 +419,21 @@ class AdminLicenseNotificationService:
                 "manual": True,
                 "title": title,
                 "message": message,
+                "notification_type": notification_type,
                 "recipient_ids": [recipient.pk for recipient in recipients],
             },
+        )
+
+    @classmethod
+    def send_renewal_invoice(cls, *, organization, actor):
+        return cls.send(
+            organization=organization,
+            actor=actor,
+            title="Renewal review requested",
+            message=(
+                "Digital PTT has requested a renewal review for your organization. "
+                "Open Organization licenses to review expiry dates, then contact Digital "
+                "PTT support to arrange renewal. No payment has been created yet."
+            ),
+            notification_type="renewal_invoice",
         )

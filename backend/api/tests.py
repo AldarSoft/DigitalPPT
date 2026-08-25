@@ -21,6 +21,7 @@ from orders.models import Order
 from payments.models import PaymentAttempt, PaymentProvider
 from common.integrations.power_automate import send_power_automate_event
 from core.models import NotificationJob, Promotion, UserNotification
+from licensing.services import OrganizationService
 
 
 class ActiveApiPermissionTests(APITestCase):
@@ -153,6 +154,22 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(response.data["total"], Decimal("1000.00"))
         self.assertEqual(response.data["items"][0]["unit_price"], Decimal("1000.00"))
         self.assertEqual(response.data["source"], Order.Source.DIRECT)
+
+    def test_checkout_associates_the_selected_organization(self):
+        organization = OrganizationService.create(
+            name="Selected Checkout Organization",
+            owner=self.customer,
+            billing_email=self.customer.email,
+        )
+        payload = self.order_payload()
+        payload["organization"] = organization.pk
+        self.client.force_authenticate(self.customer)
+
+        response = self.client.post("/api/v1/orders/checkout/", payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["organization_id"], organization.pk)
+        self.assertEqual(Order.objects.get(pk=response.data["id"]).organization, organization)
 
     def test_customer_direct_checkout_uses_bulk_price_at_threshold(self):
         self.product.bulk_minimum_quantity = 3

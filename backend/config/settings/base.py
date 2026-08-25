@@ -261,6 +261,12 @@ LOGGING = {
         "level": env("LOG_LEVEL", default="INFO"),
     },
     "loggers": {
+        # Keep runserver request lines visible alongside application logs.
+        "django.server": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "django.db.backends": {
             "handlers": ["console"],
             "level": env("DJANGO_DB_LOG_LEVEL", default="WARNING"),

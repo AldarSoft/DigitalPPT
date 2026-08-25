@@ -201,12 +201,24 @@ export interface OrderItem {
   line_total: string
   image_url: string
   available_stock: number | null
+  licensing_role: 'standard' | 'licensed_product' | 'license_product' | null
+  license_capacity: number | null
+  license_term_days: number | null
 }
 
 export interface Order {
   id: number
   order_number: string
   quote_number: string | null
+  renewal_license_number: string | null
+  renewal: {
+    license_number: string
+    license_name: string
+    organization_name: string
+    current_expires_on: string | null
+    projected_expires_on: string | null
+    term_days: number | null
+  } | null
   source: 'direct' | 'quote' | 'admin'
   user_id: number | null
   is_paid: boolean
@@ -332,8 +344,9 @@ export interface PaymentStatus {
 export interface PaymentAttempt {
   id: number
   reference: string
-  order_number: string
-  order_status: Order['status']
+  order_number: string | null
+  order_status: Order['status'] | null
+  renewal_license_number: string | null
   provider_code: PaymentProviderCode
   provider_name: string
   amount: number | string

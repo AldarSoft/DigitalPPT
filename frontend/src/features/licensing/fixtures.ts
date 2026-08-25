@@ -9,6 +9,7 @@ import type {
 export const clientLicenseListFixture: ClientLicenseListResponse = {
   organization: { id: 1, public_id: 'a9f43d38-244e-4f18-98a3-0ab39b4cb55d', name: 'Digital PTT Aldarsoft', role: 'owner' },
   summary: { license_count: 2, active_license_count: 2, expiring_soon_count: 0, expired_license_count: 0, total_capacity: 400, used_capacity: 250, available_capacity: 150, next_expiry: '2027-08-17', next_expiry_remaining_days: 363 },
+  renewal_request: { issued: false, issued_at: null },
   licenses: [
     { id: 1, license_number: 'LIC-RA-01482', name: 'RadioAdmin License 01', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 200, available_capacity: 0, capacity_percentage: 100, starts_on: '2026-08-18', expires_on: '2027-08-17', renews_on: '2027-08-18', remaining_days: 363 },
     { id: 2, license_number: 'LIC-RA-01509', name: 'RadioAdmin License 02', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 50, available_capacity: 150, capacity_percentage: 25, starts_on: '2027-03-04', expires_on: '2028-03-03', renews_on: '2028-03-04', remaining_days: 562 },

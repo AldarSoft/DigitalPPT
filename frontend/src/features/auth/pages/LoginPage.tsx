@@ -22,8 +22,10 @@ export function LoginPage() {
     const [forgotOpen, setForgotOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const { register, handleSubmit, setError, formState: { errors } } = useForm<LoginForm>();
-    if (auth.user)
-        return <Navigate to={auth.user.is_staff ? '/admin' : '/account'} replace/>;
+    if (auth.user) {
+        const from = (location.state as { from?: string } | null)?.from;
+        return <Navigate to={from || (auth.user.is_staff ? '/admin' : '/account')} replace/>;
+    }
     const submit = handleSubmit(async (values) => {
         const parsed = loginSchema.safeParse(values);
         if (!parsed.success) {

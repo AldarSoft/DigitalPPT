@@ -4,13 +4,17 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import timedelta
+from html import escape
+from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
+from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.validators import validate_email
 from django.db import models, transaction
 from django.utils import timezone
 
+from common.email_delivery import send_application_email
 from licensing.models import (
     License,
     LicenseEvent,
@@ -250,11 +254,15 @@ class CartLicenseRequirement:
 
 class CartLicenseService:
     @staticmethod
-    def organization_for_user(user):
+    def organization_for_user(user, organization_id=None):
         if not user or not user.is_authenticated or user.is_staff:
             return None
         membership = (
-            OrganizationMembership.objects.filter(user=user, is_active=True)
+            OrganizationMembership.objects.filter(
+                user=user,
+                is_active=True,
+                organization__is_active=True,
+            )
             .select_related("organization")
             .order_by(
                 models.Case(
@@ -268,8 +276,11 @@ class CartLicenseService:
                 "created_at",
                 "pk",
             )
-            .first()
         )
+        if organization_id is not None:
+            membership = membership.filter(organization_id=organization_id).first()
+        else:
+            membership = membership.first()
         return membership.organization if membership else None
 
     @classmethod
@@ -278,10 +289,11 @@ class CartLicenseService:
         *,
         user,
         product_quantities,
+        organization_id=None,
         on_date=None,
         lock=False,
     ):
-        organization = cls.organization_for_user(user)
+        organization = cls.organization_for_user(user, organization_id=organization_id)
         aggregated = {}
         for product, quantity in product_quantities:
             if quantity <= 0:
@@ -325,7 +337,7 @@ class CartLicenseService:
         return organization, tuple(results)
 
     @classmethod
-    def normalize_checkout_items(cls, *, user, items, lock=False):
+    def normalize_checkout_items(cls, *, user, items, organization_id=None, lock=False):
         manual_items = []
         for item in items:
             product = item["product"]
@@ -339,6 +351,7 @@ class CartLicenseService:
         organization, requirements = cls.calculate(
             user=user,
             product_quantities=manual_items,
+            organization_id=organization_id,
             lock=lock,
         )
         normalized = {}
@@ -390,10 +403,10 @@ class OrganizationSummaryService:
         return user.get_full_name().strip() or user.email or user.get_username()
 
     @classmethod
-    def membership_for_user(cls, user):
+    def membership_for_user(cls, user, organization_id=None):
         if not user or not user.is_authenticated:
             return None
-        return (
+        memberships = (
             OrganizationMembership.objects.select_related("organization")
             .filter(user=user, is_active=True, organization__is_active=True)
             .order_by(
@@ -407,12 +420,45 @@ class OrganizationSummaryService:
                 "organization__name",
                 "pk",
             )
-            .first()
         )
+        if organization_id is not None:
+            return memberships.filter(organization_id=organization_id).first()
+        return memberships.first()
 
     @classmethod
-    def for_user(cls, user):
-        membership = cls.membership_for_user(user)
+    def workspaces_for_user(cls, user):
+        if not user or not user.is_authenticated:
+            return {"organizations": [], "default_organization_id": None}
+        memberships = list(
+            OrganizationMembership.objects.select_related("organization")
+            .filter(user=user, is_active=True, organization__is_active=True)
+            .order_by(
+                models.Case(
+                    models.When(
+                        role=OrganizationMembership.Role.OWNER,
+                        then=models.Value(0),
+                    ),
+                    default=models.Value(1),
+                ),
+                "organization__name",
+                "pk",
+            )
+        )
+        return {
+            "organizations": [
+                {
+                    "id": membership.organization_id,
+                    "name": membership.organization.name,
+                    "role": membership.role,
+                }
+                for membership in memberships
+            ],
+            "default_organization_id": memberships[0].organization_id if memberships else None,
+        }
+
+    @classmethod
+    def for_user(cls, user, organization_id=None):
+        membership = cls.membership_for_user(user, organization_id=organization_id)
         if membership is None:
             return None
 
@@ -504,8 +550,11 @@ class OrganizationSummaryService:
 
 class OrganizationLicenseListService:
     @classmethod
-    def for_user(cls, user):
-        organization_summary = OrganizationSummaryService.for_user(user)
+    def for_user(cls, user, organization_id=None):
+        organization_summary = OrganizationSummaryService.for_user(
+            user,
+            organization_id=organization_id,
+        )
         if organization_summary is None:
             return None
 
@@ -543,6 +592,20 @@ class OrganizationLicenseListService:
                 }
             )
 
+        renewal_request = (
+            LicenseEvent.objects.filter(
+                organization_id=organization_data["id"],
+                event_type=LicenseEvent.Type.NOTIFICATION_SENT,
+                metadata__notification_type="renewal_invoice",
+            )
+            .order_by("-created_at", "-pk")
+            .values("created_at")
+            .first()
+        )
+        has_current_renewal_need = licenses.filter(
+            status__in=(License.Status.EXPIRING_SOON, License.Status.EXPIRED),
+        ).exists()
+
         return {
             "organization": {
                 "id": organization_data["id"],
@@ -552,6 +615,17 @@ class OrganizationLicenseListService:
             },
             "summary": summary_data,
             "licenses": license_rows,
+            "renewal_request": {
+                # Notification history is retained, but the client-page banner
+                # must reflect the current license state rather than an old
+                # reminder that staff has since resolved.
+                "issued": bool(renewal_request and has_current_renewal_need),
+                "issued_at": (
+                    renewal_request["created_at"]
+                    if renewal_request and has_current_renewal_need
+                    else None
+                ),
+            },
         }
 
 
@@ -615,8 +689,11 @@ class ClientLicenseDetailService:
         }
 
     @classmethod
-    def for_user(cls, *, user, license_number):
-        membership = OrganizationSummaryService.membership_for_user(user)
+    def for_user(cls, *, user, license_number, organization_id=None):
+        membership = OrganizationSummaryService.membership_for_user(
+            user,
+            organization_id=organization_id,
+        )
         if membership is None:
             return None
 
@@ -639,8 +716,11 @@ class ClientLicenseDetailService:
 
 class OrganizationTeamService:
     @classmethod
-    def for_user(cls, user):
-        membership = OrganizationSummaryService.membership_for_user(user)
+    def for_user(cls, user, organization_id=None):
+        membership = OrganizationSummaryService.membership_for_user(
+            user,
+            organization_id=organization_id,
+        )
         if membership is None:
             return None
 
@@ -718,12 +798,97 @@ class OrganizationTeamService:
         }
 
 
+class OrganizationOwnershipService:
+    @classmethod
+    @transaction.atomic
+    def transfer(cls, *, organization, target_membership_id, transferred_by):
+        organization = Organization.objects.select_for_update().get(pk=organization.pk)
+        if not OrganizationAccessPolicy.can_manage_team(
+            user=transferred_by,
+            organization=organization,
+        ):
+            raise PermissionDenied(
+                "Only the Organization Owner can transfer organization ownership."
+            )
+
+        current_owner = OrganizationMembership.objects.select_for_update().get(
+            organization=organization,
+            role=OrganizationMembership.Role.OWNER,
+            is_active=True,
+        )
+        target = (
+            OrganizationMembership.objects.select_for_update()
+            .select_related("user")
+            .filter(
+                pk=target_membership_id,
+                organization=organization,
+                role=OrganizationMembership.Role.LICENSE_MANAGER,
+                is_active=True,
+            )
+            .first()
+        )
+        if target is None:
+            raise ValidationError(
+                {
+                    "membership_id": (
+                        "Choose an active License Manager as the new Organization Owner."
+                    )
+                }
+            )
+
+        current_owner.role = OrganizationMembership.Role.LICENSE_MANAGER
+        current_owner.save(update_fields=("role", "updated_at"))
+        target.role = OrganizationMembership.Role.OWNER
+        target.save(update_fields=("role", "updated_at"))
+        LicenseEvent.objects.create(
+            organization=organization,
+            event_type=LicenseEvent.Type.OWNERSHIP_TRANSFERRED,
+            actor=transferred_by,
+            metadata={
+                "previous_owner_id": current_owner.user_id,
+                "previous_owner_email": current_owner.user.email,
+                "new_owner_id": target.user_id,
+                "new_owner_email": target.user.email,
+            },
+        )
+        return target
+
+
 class InvitationService:
     DEFAULT_EXPIRY = timedelta(days=7)
 
     @staticmethod
     def hash_token(token):
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def accept_url(token):
+        return f"{settings.FRONTEND_URL.rstrip('/')}/invite?token={quote(token, safe='')}"
+
+    @staticmethod
+    def send_email(*, invitation, token):
+        accept_url = InvitationService.accept_url(token)
+        organization_name = invitation.organization.name
+        subject = f"Invitation to manage licenses for {organization_name}"
+        text_body = (
+            f"You have been invited to become a License Manager for {organization_name}.\n\n"
+            f"Sign in with {invitation.email} and accept the invitation:\n{accept_url}\n\n"
+            f"This invitation expires on {timezone.localtime(invitation.expires_at):%d %b %Y %H:%M}."
+        )
+        html_body = (
+            f"<p>You have been invited to become a <strong>License Manager</strong> for "
+            f"<strong>{escape(organization_name)}</strong>.</p>"
+            f"<p>Sign in with <strong>{escape(invitation.email)}</strong> and "
+            f"<a href=\"{escape(accept_url, quote=True)}\">accept the invitation</a>.</p>"
+            f"<p>This invitation expires on "
+            f"{timezone.localtime(invitation.expires_at):%d %b %Y %H:%M}.</p>"
+        )
+        send_application_email(
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+            recipients=[invitation.email],
+        )
 
     @classmethod
     @transaction.atomic
@@ -784,6 +949,7 @@ class InvitationService:
             actor=invited_by,
             metadata={"email": normalized_email, "role": invitation.role},
         )
+        cls.send_email(invitation=invitation, token=raw_token)
         return invitation, raw_token
 
     @classmethod
@@ -1243,6 +1409,14 @@ class LicenseExpiryService:
                 "recipient_ids": recipient_ids,
             },
         )
+        from core.notifications import publish_license_expiry
+
+        transaction.on_commit(
+            lambda license_id=locked.pk, days=remaining_days: publish_license_expiry(
+                license_id=license_id,
+                remaining_days=days,
+            )
+        )
         return locked, True
 
     @classmethod
@@ -1261,6 +1435,83 @@ class LicenseExpiryService:
             notified += int(was_notified)
         return {"processed": len(license_ids), "notified": notified}
 
+
+
+class LicenseRenewalOrderService:
+    RENEWAL_WINDOW_DAYS = 60
+
+    @classmethod
+    def resolve(cls, *, user, license_number, organization_id=None, lock=False):
+        membership = OrganizationSummaryService.membership_for_user(
+            user,
+            organization_id=organization_id,
+        )
+        if membership is None:
+            raise PermissionDenied("Organization license access is required.")
+        licenses = License.objects
+        if lock:
+            licenses = licenses.select_for_update()
+        license = (
+            licenses
+            .select_related("organization", "license_product")
+            .filter(
+                organization=membership.organization,
+                license_number=license_number,
+                status__in=(License.Status.ACTIVE, License.Status.EXPIRING_SOON, License.Status.EXPIRED),
+            )
+            .first()
+        )
+        if license is None:
+            raise ValidationError({"license": "This license cannot be renewed."})
+        if not OrganizationAccessPolicy.can_manage_billing(user=user, organization=license.organization):
+            raise PermissionDenied("Only an Owner or License Manager can renew this license.")
+        remaining_days = license.calculate_remaining_days(timezone.localdate())
+        is_marked_for_renewal = license.status in {
+            License.Status.EXPIRING_SOON,
+            License.Status.EXPIRED,
+        }
+        if (
+            remaining_days is None
+            or (
+                remaining_days > cls.RENEWAL_WINDOW_DAYS
+                and not is_marked_for_renewal
+            )
+        ):
+            raise ValidationError({"license": "Renewal becomes available within 60 days of expiry."})
+
+        from products.models import Product
+
+        product = Product.objects.select_for_update().public().filter(
+            pk=license.license_product_id,
+            licensing_role=Product.LicensingRole.LICENSE_PRODUCT,
+        ).first()
+        if product is None:
+            raise ValidationError({"license": "The renewal product is not currently available for purchase."})
+        return license, product
+
+    @classmethod
+    def summary(cls, *, user, license_number, organization_id=None):
+        license, product = cls.resolve(
+            user=user,
+            license_number=license_number,
+            organization_id=organization_id,
+        )
+        current_expiry = license.expires_on
+        base_date = max(timezone.localdate(), current_expiry or timezone.localdate())
+        return {
+            "license_number": license.license_number,
+            "license_name": license.name,
+            "organization_id": license.organization_id,
+            "organization_name": license.organization.name,
+            "current_expires_on": current_expiry,
+            "projected_expires_on": base_date + timedelta(days=product.license_term_days),
+            "term_days": product.license_term_days,
+            "product_id": product.pk,
+            "product_name": product.name,
+            "product_sku": product.sku,
+            "product_image_url": product.images.order_by("id").values_list("image_url", flat=True).first() or "",
+            "amount": product.price_for_quantity(1),
+        }
 
 
 @dataclass(frozen=True)
@@ -1328,7 +1579,7 @@ class PaymentSuccessProvisioningService:
 
         order = (
             Order.objects.select_for_update()
-            .select_related("user")
+            .select_related("user", "organization", "renewal_license")
             .prefetch_related("items__product__required_license_product")
             .get(pk=payment.order_id)
         )
@@ -1362,7 +1613,9 @@ class PaymentSuccessProvisioningService:
 
             User = get_user_model()
             purchaser = User.objects.select_for_update().get(pk=purchaser.pk)
-            organization = CartLicenseService.organization_for_user(purchaser)
+            # The checkout organization is authoritative. Falling back keeps
+            # legacy orders working until staff associates them in Django Admin.
+            organization = order.organization or CartLicenseService.organization_for_user(purchaser)
             if organization is None:
                 organization = OrganizationService.create(
                     name=cls._organization_name(order=order, purchaser=purchaser),
@@ -1373,6 +1626,9 @@ class PaymentSuccessProvisioningService:
                 organization = Organization.objects.select_for_update().get(
                     pk=organization.pk
                 )
+            if order.organization_id != organization.pk:
+                order.organization = organization
+                order.save(update_fields=["organization", "updated_at"])
 
             license_order_items = [
                 item
@@ -1386,9 +1642,6 @@ class PaymentSuccessProvisioningService:
                 if item.product.licensing_role
                 == item.product.LicensingRole.LICENSED_PRODUCT
             ]
-            is_license_only_order = bool(license_order_items) and len(
-                license_order_items
-            ) == len(items)
             for order_item in license_order_items:
                 provisioning_record = (
                     LicenseOrderItemProvisioning.objects.select_for_update()
@@ -1425,30 +1678,26 @@ class PaymentSuccessProvisioningService:
                     .order_by("pk")
                 )
                 renewal_candidates = []
-                if is_license_only_order:
-                    renewal_candidates = list(
+                if order.renewal_license_id:
+                    renewal_candidate = (
                         License.objects.select_for_update()
                         .filter(
+                            pk=order.renewal_license_id,
                             organization=organization,
                             license_product=order_item.product,
-                            used_capacity__gt=0,
                             status__in=(
                                 License.Status.ACTIVE,
                                 License.Status.EXPIRING_SOON,
                                 License.Status.EXPIRED,
                             ),
                         )
-                        .exclude(
-                            pk__in=[
-                                license.pk
-                                for license in (*existing, *renewed_licenses)
-                            ]
-                        )
-                        .order_by(
-                            models.F("expires_on").asc(nulls_last=True),
-                            "pk",
-                        )
+                        .first()
                     )
+                    if renewal_candidate is None:
+                        raise ValidationError(
+                            {"license": "The selected license is no longer available for renewal."}
+                        )
+                    renewal_candidates = [renewal_candidate]
                 for unit_index in range(len(existing), order_item.quantity):
                     if renewal_candidates:
                         renewed_licenses.append(

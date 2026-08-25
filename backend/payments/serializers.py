@@ -31,8 +31,9 @@ class StorefrontPaymentProviderSerializer(serializers.ModelSerializer):
 class PaymentAttemptSerializer(serializers.ModelSerializer):
     session_id = serializers.UUIDField(source="idempotency_key", read_only=True)
     checkout_url = serializers.SerializerMethodField()
-    order_number = serializers.CharField(source="order.order_number", read_only=True)
-    order_status = serializers.CharField(source="order.status", read_only=True)
+    order_number = serializers.CharField(source="order.order_number", read_only=True, allow_null=True)
+    order_status = serializers.CharField(source="order.status", read_only=True, allow_null=True)
+    renewal_license_number = serializers.CharField(source="renewal_license.license_number", read_only=True, allow_null=True)
     provider_code = serializers.CharField(source="provider.code", read_only=True)
     provider_name = serializers.CharField(source="provider.display_name", read_only=True)
     created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
@@ -40,7 +41,7 @@ class PaymentAttemptSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentAttempt
         fields = (
-            "id", "reference", "session_id", "checkout_url", "order_number", "order_status", "provider_code",
+            "id", "reference", "session_id", "checkout_url", "order_number", "order_status", "renewal_license_number", "provider_code",
             "provider_name", "amount", "currency", "status", "is_test", "external_reference",
             "failure_message", "created_by_email", "expires_at", "paid_at", "created_at",
         )
@@ -69,6 +70,17 @@ class BillingDetailsSerializer(serializers.Serializer):
 
 class CheckoutSessionCreateSerializer(serializers.Serializer):
     order_number = serializers.CharField(max_length=40)
+    provider = serializers.SlugRelatedField(
+        slug_field="code",
+        queryset=PaymentProvider.objects.filter(is_enabled=True),
+    )
+    idempotency_key = serializers.UUIDField()
+    billing = BillingDetailsSerializer()
+
+
+class LicenseRenewalCheckoutSessionCreateSerializer(serializers.Serializer):
+    license_number = serializers.CharField(max_length=64)
+    organization = serializers.IntegerField(required=False, allow_null=True)
     provider = serializers.SlugRelatedField(
         slug_field="code",
         queryset=PaymentProvider.objects.filter(is_enabled=True),

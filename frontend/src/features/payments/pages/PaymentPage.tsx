@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { AlertTriangle, ArrowLeft, Check, CreditCard, ExternalLink, Landmark, LockKeyhole, QrCode, ShieldCheck, WalletCards, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Check, CreditCard, ExternalLink, KeyRound, Landmark, LockKeyhole, QrCode, ShieldCheck, WalletCards, X } from 'lucide-react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -67,14 +67,22 @@ export function PaymentPage() {
   const queryClient = useQueryClient()
   const [searchParams] = useSearchParams()
   const requestedOrder = searchParams.get('order')?.trim() ?? ''
+  const requestedRenewalLicense = searchParams.get('renewal_license')?.trim() ?? ''
+  const requestedOrganizationId = Number(searchParams.get('org')) || null
   const returnedSessionId = searchParams.get('session')?.trim() ?? ''
   const staffPreview = location.pathname === '/payment-preview'
   const [provider, setProvider] = useState<PaymentProviderCode>('stripe')
+  const [checkoutOrganizationId, setCheckoutOrganizationId] = useState<number | null>(requestedOrganizationId)
   const [createdOrder, setCreatedOrder] = useState<Order | null>(null)
   const idempotencyKey = useRef(newIdempotencyKey())
   const checkoutKey = useRef(newIdempotencyKey())
 
   const statusQuery = useQuery({ queryKey: ['storefront-payment-status'], queryFn: api.storefrontPaymentStatus })
+  const workspacesQuery = useQuery({
+    queryKey: ['licensing', 'organization', 'workspaces'],
+    queryFn: api.organizationWorkspaces,
+    enabled: Boolean(auth.user && !auth.user.is_staff),
+  })
   const returnedSessionQuery = useQuery({
     queryKey: ['payment-session', returnedSessionId],
     queryFn: () => api.paymentSession(returnedSessionId),
@@ -91,12 +99,21 @@ export function PaymentPage() {
     },
     enabled: Boolean(resolvedOrderNumber || staffPreview),
   })
+  const renewalSummaryQuery = useQuery({
+    queryKey: ['licensing', 'renewal-summary', requestedRenewalLicense, requestedOrganizationId],
+    queryFn: () => api.licenseRenewalSummary(requestedRenewalLicense, requestedOrganizationId),
+    enabled: Boolean(requestedRenewalLicense),
+  })
   const existingOrder = orderQuery.data ? unwrap(orderQuery.data)[0] : undefined
   const order = existingOrder ?? createdOrder ?? undefined
+  const renewal = renewalSummaryQuery.data
+  const isRenewalPayment = Boolean(requestedRenewalLicense)
+  const selectedOrganizationId = checkoutOrganizationId ?? requestedOrganizationId ?? workspacesQuery.data?.default_organization_id ?? null
   const enabledProviders = statusQuery.data?.providers ?? []
   const activeProvider = enabledProviders.some((item) => item.code === provider) ? provider : enabledProviders[0]?.code ?? provider
   const selectedProvider = providerContent[activeProvider]
   const SelectedProviderIcon = selectedProvider.icon
+  const newLicenseItems = order?.items.filter((item) => item.licensing_role === 'license_product') ?? []
 
   const { register, handleSubmit, reset, setError, formState: { errors } } = useForm<BillingForm>({
     defaultValues: billingDefaults(auth.user),
@@ -118,6 +135,15 @@ export function PaymentPage() {
 
   const createSession = useMutation({
     mutationFn: async (billing: BillingDetails) => {
+      if (renewal) {
+        return api.createLicenseRenewalPaymentSession({
+          license_number: renewal.license_number,
+          organization: renewal.organization_id,
+          provider: activeProvider,
+          idempotency_key: idempotencyKey.current,
+          billing,
+        })
+      }
       let payableOrder = order
       if (!payableOrder) {
         payableOrder = await api.checkout({
@@ -133,6 +159,7 @@ export function PaymentPage() {
           shipping_postal_code: billing.postal_code,
           shipping_country: billing.country,
           notes: '',
+          organization: selectedOrganizationId ?? undefined,
           items: cart.items.map(({ product, quantity, is_automatic }) => ({
             product: product.id,
             quantity,
@@ -170,17 +197,17 @@ export function PaymentPage() {
     confirmSession.reset()
   }
 
-  if (statusQuery.isLoading || returnedSessionQuery.isLoading || orderQuery.isLoading) return <main className={tw('route-loading')}>Preparing secure payment...</main>
-  if (statusQuery.isError || returnedSessionQuery.isError || orderQuery.isError) return <main className={tw('route-message')}><AlertTriangle size={34} /><h1>Payment is unavailable</h1><p>Confirm the backend is running and your account session is active.</p></main>
+  if (statusQuery.isLoading || returnedSessionQuery.isLoading || orderQuery.isLoading || renewalSummaryQuery.isLoading) return <main className={tw('route-loading')}>Preparing secure payment...</main>
+  if (statusQuery.isError || returnedSessionQuery.isError || orderQuery.isError || renewalSummaryQuery.isError) return <main className={tw('route-message')}><AlertTriangle size={34} /><h1>Payment is unavailable</h1><p>Confirm the backend is running and your account session is active.</p></main>
   if (!statusQuery.data?.storefront_enabled) return <main className={tw('route-message')}><CreditCard size={34} /><h1>Online payment is coming soon</h1><p>Your quote and order history remain available in your account.</p><Link className={tw('primary-action')} to="/account">Return to account</Link></main>
 
-  if (activeSession?.status === 'succeeded') return <main className={tw('client-payment-complete')}><span><Check size={28} /></span><p className={tw('eyebrow')}>{activeSession.is_test ? 'TEST PAYMENT CONFIRMED' : 'PAYMENT CONFIRMED'}</p><h1>Payment received.</h1><p>Payment <strong>{activeSession.reference}</strong> was confirmed for order <strong>{activeSession.order_number}</strong>. The order is now {orderStatusLabel(activeSession.order_status)}.</p><div><Link to="/account?tab=orders">View your orders</Link></div></main>
+  if (activeSession?.status === 'succeeded') return <main className={tw('client-payment-complete')}><span><Check size={28} /></span><p className={tw('eyebrow')}>{activeSession.is_test ? 'TEST PAYMENT CONFIRMED' : 'PAYMENT CONFIRMED'}</p><h1>Payment received.</h1><p>Payment <strong>{activeSession.reference}</strong> was confirmed{activeSession.order_number ? <> for order <strong>{activeSession.order_number}</strong>. The order is now {orderStatusLabel(activeSession.order_status ?? 'completed')}.</> : ' and the selected license was extended.'}</p><div><Link to="/account?tab=orders">View your orders</Link></div></main>
 
   if (activeSession && ['failed', 'expired', 'cancelled'].includes(activeSession.status)) return <main className={tw('client-payment-complete client-payment-failed')}><span><X size={28} /></span><p className={tw('eyebrow')}>PAYMENT NOT COMPLETED</p><h1>{activeSession.status === 'expired' ? 'The payment session expired.' : 'The payment was declined.'}</h1><p>{activeSession.failure_message || 'No charge was made. You can return and start a new secure payment session.'}</p><div><button type="button" onClick={resetAttempt}>Try again</button><Link to="/account?tab=orders">View your orders</Link></div></main>
 
-  if (activeSession && statusQuery.data.development_simulator) return <main className={tw('client-payment-simulator')}><span><SelectedProviderIcon size={28} /></span><p className={tw('eyebrow')}>DEVELOPMENT PROVIDER SANDBOX</p><h1>{selectedProvider.title}</h1><p>This represents the external provider handoff. Choose a test response to exercise the verified return path. No real payment credentials or funds are involved.</p><dl><div><dt>Order</dt><dd>{activeSession.order_number}</dd></div><div><dt>Amount</dt><dd>{money(activeSession.amount, activeSession.currency)}</dd></div><div><dt>Session</dt><dd>{activeSession.reference}</dd></div></dl><div><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'failed' })}>Simulate decline</button><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'succeeded' })}>{confirmSession.isPending ? 'Confirming...' : 'Simulate successful payment'}</button></div></main>
+  if (activeSession && statusQuery.data.development_simulator) return <main className={tw('client-payment-simulator')}><span><SelectedProviderIcon size={28} /></span><p className={tw('eyebrow')}>DEVELOPMENT PROVIDER SANDBOX</p><h1>{selectedProvider.title}</h1><p>This represents the external provider handoff. Choose a test response to exercise the verified return path. No real payment credentials or funds are involved.</p><dl><div><dt>{activeSession.order_number ? 'Order' : 'License renewal'}</dt><dd>{activeSession.order_number ?? activeSession.renewal_license_number}</dd></div><div><dt>Amount</dt><dd>{money(activeSession.amount, activeSession.currency)}</dd></div><div><dt>Session</dt><dd>{activeSession.reference}</dd></div></dl><div><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'failed' })}>Simulate decline</button><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'succeeded' })}>{confirmSession.isPending ? 'Confirming...' : 'Simulate successful payment'}</button></div></main>
 
-  if (!order && !cart.items.length) return <main className={tw('route-message')}><CreditCard size={34} /><h1>No products are ready for payment</h1><p>Add products to your cart, or open a pending invoice from your account.</p><Link className={tw('primary-action')} to="/shop">Browse products</Link></main>
+  if (!order && !renewal && !cart.items.length) return <main className={tw('route-message')}><CreditCard size={34} /><h1>No products are ready for payment</h1><p>Add products to your cart, or open a pending invoice from your account.</p><Link className={tw('primary-action')} to="/shop">Browse products</Link></main>
   if (order && order.status !== 'pending') return <main className={tw('route-message')}><ShieldCheck size={34} /><h1>This order is not payable</h1><p>Only pending orders and invoices can start a payment session.</p><Link className={tw('primary-action')} to="/account?tab=orders">View your orders</Link></main>
 
   const submit = handleSubmit((values) => {
@@ -199,6 +226,7 @@ export function PaymentPage() {
       <form className={tw('client-payment-grid')} onSubmit={submit}>
         <div className={tw('client-payment-fields')}>
           <fieldset className={tw('client-payment-panel')}><legend>Billing information</legend><div className={tw('client-payment-field-grid')}>
+            {!order && workspacesQuery.data?.organizations.length ? <label className="wide">Organization workspace<select value={selectedOrganizationId ?? ''} onChange={(event) => setCheckoutOrganizationId(Number(event.target.value) || null)}>{workspacesQuery.data.organizations.map((organization) => <option key={organization.id} value={organization.id}>{organization.name} ({organization.role === 'owner' ? 'Owner' : 'License Manager'})</option>)}</select><small>The order and license capacity will be managed in this organization.</small></label> : null}
             <label className="wide">Email address<input type="email" autoComplete="email" {...register('email')} /><small>{errors.email?.message}</small></label>
             <label>First name<input autoComplete="given-name" {...register('first_name')} /><small>{errors.first_name?.message}</small></label>
             <label>Last name<input autoComplete="family-name" {...register('last_name')} /><small>{errors.last_name?.message}</small></label>
@@ -217,15 +245,21 @@ export function PaymentPage() {
         </div>
         <aside className={tw('client-payment-summary')}>
           <h2>Your order</h2>
+          {(order?.renewal || renewal) ? <section className="mb-4 rounded-control border border-[#bfd5f5] bg-info-soft p-4 text-sm text-[#19395d]"><div className="flex items-start gap-2"><KeyRound className="mt-0.5 shrink-0 text-brand" size={18} /><div><p className="text-xs font-bold tracking-[.1em] text-brand">LICENSE EXTENSION</p><h3 className="mt-1 text-base font-bold text-ink">Extending {(order?.renewal ?? renewal)?.license_name}</h3><dl className="mt-3 grid gap-2 text-xs"><div className="flex justify-between gap-3"><dt className="text-muted">License ID</dt><dd className="font-semibold text-ink">{(order?.renewal ?? renewal)?.license_number}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Organization</dt><dd className="text-right font-semibold text-ink">{(order?.renewal ?? renewal)?.organization_name}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Current expiry</dt><dd className="font-semibold text-ink">{formatDate((order?.renewal ?? renewal)?.current_expires_on ?? null)}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Expiry after payment</dt><dd className="font-semibold text-success">{formatDate((order?.renewal ?? renewal)?.projected_expires_on ?? null)}</dd></div></dl><p className="mt-3 border-t border-[#bfd5f5] pt-3 text-xs leading-5">Payment extends this selected license by {(order?.renewal ?? renewal)?.term_days ?? 'the configured'} days. It will not create a new license.</p></div></div></section> : null}
+          {!order?.renewal && newLicenseItems.length ? <section className="mb-4 rounded-control border border-[#bde4d0] bg-success-soft p-4 text-sm text-[#16472d]"><div className="flex items-start gap-2"><KeyRound className="mt-0.5 shrink-0 text-success" size={18} /><div><p className="text-xs font-bold tracking-[.1em] text-success">NEW LICENSE PURCHASE</p><h3 className="mt-1 text-base font-bold text-ink">Creates {newLicenseItems.length === 1 ? `a new ${newLicenseItems[0].product_name}` : `${newLicenseItems.length} new licenses`}</h3><dl className="mt-3 grid gap-2 text-xs"><div className="flex justify-between gap-3"><dt className="text-muted">Capacity</dt><dd className="font-semibold text-ink">{newLicenseItems.map((item) => item.license_capacity ? `${item.license_capacity} products` : 'Configured capacity').join(', ')}</dd></div><div className="flex justify-between gap-3"><dt className="text-muted">Term</dt><dd className="font-semibold text-ink">{newLicenseItems.map((item) => item.license_term_days ? `${item.license_term_days} days` : 'Configured term').join(', ')}</dd></div></dl><p className="mt-3 border-t border-[#bde4d0] pt-3 text-xs leading-5">This purchase creates a new license. It will not extend any existing organization license.</p></div></div></section> : null}
           <div className={tw('client-payment-order')}>
-            {order ? order.items.map((item) => <div key={item.id}><img src={mediaUrl(item.image_url)} alt="" /><span>{item.product_name}<small>{item.sku || 'Product'} - Qty {item.quantity}</small></span><strong>{money(item.line_total)}</strong></div>) : cart.items.map(({ product, quantity, is_automatic }) => <div key={`${product.id}-${is_automatic ? 'automatic' : 'manual'}`}><img src={mediaUrl(product.images?.[0]?.image_url)} alt="" /><span>{product.name}<small>{product.sku || 'Product'} - Qty {quantity}</small>{is_automatic ? <small className={tw('automatic-license-label')}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}</span><strong>{money(unitPriceForQuantity(product, quantity) * quantity)}</strong></div>)}
+            {order ? order.items.map((item) => <div key={item.id}><img src={mediaUrl(item.image_url)} alt="" /><span>{item.product_name}<small>{item.sku || 'Product'} - Qty {item.quantity}</small></span><strong>{money(item.line_total)}</strong></div>) : renewal ? <div><img src={mediaUrl(renewal.product_image_url)} alt="" /><span>{renewal.product_name}<small>{renewal.product_sku} - License extension</small></span><strong>{money(renewal.amount)}</strong></div> : cart.items.map(({ product, quantity, is_automatic }) => <div key={`${product.id}-${is_automatic ? 'automatic' : 'manual'}`}><img src={mediaUrl(product.images?.[0]?.image_url)} alt="" /><span>{product.name}<small>{product.sku || 'Product'} - Qty {quantity}</small>{is_automatic ? <small className={tw('automatic-license-label')}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}</span><strong>{money(unitPriceForQuantity(product, quantity) * quantity)}</strong></div>)}
           </div>
-          <dl className={tw('client-payment-totals')}><div><dt>Subtotal</dt><dd>{money(order?.subtotal ?? cart.subtotal)}</dd></div><div><dt>Shipping</dt><dd>{order ? money(order.shipping_fee) : money(0)}</dd></div><div><dt>Total</dt><dd>{money(order?.total ?? cart.subtotal)}</dd></div></dl>
-          <button className={tw('client-payment-submit')} type="submit" disabled={createSession.isPending || !enabledProviders.length}><LockKeyhole size={16} />{createSession.isPending ? 'Creating order...' : `Place order with ${selectedProvider.title}`}</button>
-          <p className={tw('client-payment-security')}><ShieldCheck size={14} />Your order is created at the server-confirmed catalog price, then handed to the selected payment provider.</p>
-          <Link className={tw('text-link')} to={order ? '/account?tab=orders' : '/cart'}><ArrowLeft size={15} />{order ? 'Back to your orders' : 'Back to cart'}</Link>
+          <dl className={tw('client-payment-totals')}><div><dt>Subtotal</dt><dd>{money(renewal?.amount ?? order?.subtotal ?? cart.subtotal)}</dd></div><div><dt>Shipping</dt><dd>{order ? money(order.shipping_fee) : money(0)}</dd></div><div><dt>Total</dt><dd>{money(renewal?.amount ?? order?.total ?? cart.subtotal)}</dd></div></dl>
+          <button className={tw('client-payment-submit')} type="submit" disabled={createSession.isPending || !enabledProviders.length}><LockKeyhole size={16} />{createSession.isPending ? 'Starting payment...' : `${isRenewalPayment ? 'Extend license with' : 'Place order with'} ${selectedProvider.title}`}</button>
+          <p className={tw('client-payment-security')}><ShieldCheck size={14} />{isRenewalPayment ? 'A completed payment creates the renewal record and extends this exact license.' : 'Your order is created at the server-confirmed catalog price, then handed to the selected payment provider.'}</p>
+          <Link className={tw('text-link')} to={order ? '/account?tab=orders' : isRenewalPayment ? '/account?tab=licenses' : '/cart'}><ArrowLeft size={15} />{order ? 'Back to your orders' : isRenewalPayment ? 'Back to organization licenses' : 'Back to cart'}</Link>
         </aside>
       </form>
     </section>
   </main>
+}
+
+function formatDate(value: string | null) {
+  return value ? new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(value)) : 'Not set'
 }

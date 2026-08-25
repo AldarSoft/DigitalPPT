@@ -6,6 +6,12 @@ from licensing.admin_views import (
     AdminOrganizationLicenseHistoryView,
     AdminOrganizationLicenseListView,
     AdminOrganizationLicenseNotificationView,
+    AdminOrganizationRenewalInvoiceView,
+    AdminOrganizationUsersView,
+    AdminOrganizationInvitationCreateView,
+    AdminOrganizationInvitationResendView,
+    AdminOrganizationInvitationRevokeView,
+    AdminOrganizationOwnershipTransferView,
 )
 
 
@@ -29,6 +35,38 @@ urlpatterns = [
         "organizations/<int:organization_id>/notifications/",
         AdminOrganizationLicenseNotificationView.as_view(),
         name="admin-licensing-organization-notifications",
+    ),
+    path(
+        "organizations/<int:organization_id>/renewal-invoice/",
+        AdminOrganizationRenewalInvoiceView.as_view(),
+        name="admin-licensing-organization-renewal-invoice",
+    ),
+    path(
+        "organizations/<int:organization_id>/users/",
+        AdminOrganizationUsersView.as_view(),
+        name="admin-licensing-organization-users",
+    ),
+    path(
+        "organizations/<int:organization_id>/users/invitations/",
+        AdminOrganizationInvitationCreateView.as_view(),
+        name="admin-licensing-organization-invitation-create",
+    ),
+    path(
+        "organizations/<int:organization_id>/users/ownership-transfer/",
+        AdminOrganizationOwnershipTransferView.as_view(),
+        name="admin-licensing-organization-ownership-transfer",
+    ),
+    path(
+        "organizations/<int:organization_id>/users/invitations/"
+        "<int:invitation_id>/resend/",
+        AdminOrganizationInvitationResendView.as_view(),
+        name="admin-licensing-organization-invitation-resend",
+    ),
+    path(
+        "organizations/<int:organization_id>/users/invitations/"
+        "<int:invitation_id>/revoke/",
+        AdminOrganizationInvitationRevokeView.as_view(),
+        name="admin-licensing-organization-invitation-revoke",
     ),
     path(
         "organizations/<int:organization_id>/licenses/"

@@ -5,14 +5,18 @@ import type {
   AdminLicenseFilters,
   AdminOrganizationLicenseDetail,
   AdminOrganizationLicenseListResponse,
+  AdminOrganizationUsers,
   ClientLicenseDetail,
+  LicenseRenewalSummary,
   ClientLicenseListResponse,
   LicenseAdjustmentInput,
   LicenseSummary,
   OrganizationInvitation,
+  OrganizationInvitationAcceptance,
   OrganizationNotificationInput,
   OrganizationSummaryResponse,
   OrganizationTeamResponse,
+  OrganizationWorkspaceListResponse,
 } from '../features/licensing/types'
 
 const localApiHost =
@@ -105,35 +109,62 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ items }),
     }),
-  organizationSummary: () =>
-    request<OrganizationSummaryResponse>('/licensing/organization/summary/'),
-  organizationLicenses: () =>
-    request<ClientLicenseListResponse>('/licensing/organization/licenses/'),
-  organizationLicense: (licenseNumber: string) =>
-    request<ClientLicenseDetail>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/`),
-  organizationTeam: () =>
-    request<OrganizationTeamResponse>('/licensing/organization/team/'),
-  inviteLicenseManager: (email: string) =>
-    request<OrganizationInvitation>('/licensing/organization/invitations/', {
+  organizationWorkspaces: () => request<OrganizationWorkspaceListResponse>('/licensing/organizations/'),
+  organizationSummary: (organizationId?: number | null) =>
+    request<OrganizationSummaryResponse>(`/licensing/organization/summary/${organizationQuery(organizationId)}`),
+  organizationLicenses: (organizationId?: number | null) =>
+    request<ClientLicenseListResponse>(`/licensing/organization/licenses/${organizationQuery(organizationId)}`),
+  organizationLicense: (licenseNumber: string, organizationId?: number | null) =>
+    request<ClientLicenseDetail>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/${organizationQuery(organizationId)}`),
+  licenseRenewalSummary: (licenseNumber: string, organizationId?: number | null) =>
+    request<LicenseRenewalSummary>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/renew/${organizationQuery(organizationId)}`),
+  organizationTeam: (organizationId?: number | null) =>
+    request<OrganizationTeamResponse>(`/licensing/organization/team/${organizationQuery(organizationId)}`),
+  inviteLicenseManager: (email: string, organizationId?: number | null) =>
+    request<OrganizationInvitation>(`/licensing/organization/invitations/${organizationQuery(organizationId)}`, {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
-  resendOrganizationInvitation: (invitationId: number) =>
-    request<OrganizationInvitation>(`/licensing/organization/invitations/${invitationId}/resend/`, { method: 'POST' }),
-  revokeOrganizationInvitation: (invitationId: number) =>
-    request<OrganizationInvitation>(`/licensing/organization/invitations/${invitationId}/revoke/`, { method: 'POST' }),
+  resendOrganizationInvitation: ({ invitationId, organizationId }: { invitationId: number; organizationId?: number | null }) =>
+    request<OrganizationInvitation>(`/licensing/organization/invitations/${invitationId}/resend/${organizationQuery(organizationId)}`, { method: 'POST' }),
+  revokeOrganizationInvitation: ({ invitationId, organizationId }: { invitationId: number; organizationId?: number | null }) =>
+    request<OrganizationInvitation>(`/licensing/organization/invitations/${invitationId}/revoke/${organizationQuery(organizationId)}`, { method: 'POST' }),
+  transferOrganizationOwnership: ({ membershipId, organizationId }: { membershipId: number; organizationId?: number | null }) =>
+    request<OrganizationTeamResponse>(`/licensing/organization/ownership-transfer/${organizationQuery(organizationId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ membership_id: membershipId }),
+    }),
+  acceptOrganizationInvitation: (token: string) =>
+    request<OrganizationInvitationAcceptance>('/licensing/organization/invitations/accept/', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
   adminLicenseOrganizations: (filters: AdminLicenseFilters = {}) =>
     request<AdminOrganizationLicenseListResponse>(`/admin/licensing/organizations/${licenseQuery(filters)}`),
   adminLicenseOrganization: (organizationId: number) =>
     request<AdminOrganizationLicenseDetail>(`/admin/licensing/organizations/${organizationId}/`),
-  adminLicenseHistory: (organizationId: number, page = 1) =>
-    request<AdminLicenseEventListResponse>(`/admin/licensing/organizations/${organizationId}/history/?page=${page}`),
+  adminOrganizationUsers: (organizationId: number) =>
+    request<AdminOrganizationUsers>(`/admin/licensing/organizations/${organizationId}/users/`),
+  inviteAdminOrganizationLicenseManager: (organizationId: number, email: string) =>
+    request<OrganizationInvitation>(`/admin/licensing/organizations/${organizationId}/users/invitations/`, { method: 'POST', body: JSON.stringify({ email }) }),
+  transferAdminOrganizationOwnership: (organizationId: number, membershipId: number) =>
+    request<AdminOrganizationUsers>(`/admin/licensing/organizations/${organizationId}/users/ownership-transfer/`, { method: 'POST', body: JSON.stringify({ membership_id: membershipId }) }),
+  resendAdminOrganizationInvitation: (organizationId: number, invitationId: number) =>
+    request<OrganizationInvitation>(`/admin/licensing/organizations/${organizationId}/users/invitations/${invitationId}/resend/`, { method: 'POST' }),
+  revokeAdminOrganizationInvitation: (organizationId: number, invitationId: number) =>
+    request<OrganizationInvitation>(`/admin/licensing/organizations/${organizationId}/users/invitations/${invitationId}/revoke/`, { method: 'POST' }),
+  adminLicenseHistory: (organizationId: number, page = 1, pageSize = 5) =>
+    request<AdminLicenseEventListResponse>(`/admin/licensing/organizations/${organizationId}/history/?page=${page}&page_size=${pageSize}`),
   adminLicenseNotifications: (organizationId: number, page = 1) =>
     request<AdminLicenseEventListResponse>(`/admin/licensing/organizations/${organizationId}/notifications/?page=${page}`),
   sendAdminLicenseNotification: (organizationId: number, data: OrganizationNotificationInput) =>
     request<AdminLicenseEvent>(`/admin/licensing/organizations/${organizationId}/notifications/`, {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  sendAdminRenewalInvoice: (organizationId: number) =>
+    request<AdminLicenseEvent>(`/admin/licensing/organizations/${organizationId}/renewal-invoice/`, {
+      method: 'POST',
     }),
   adjustAdminLicense: (organizationId: number, licenseNumber: string, data: LicenseAdjustmentInput) =>
     request<LicenseSummary>(`/admin/licensing/organizations/${organizationId}/licenses/${encodeURIComponent(licenseNumber)}/adjust/`, {
@@ -206,6 +237,16 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
+  createLicenseRenewalPaymentSession: (data: {
+    license_number: string
+    organization?: number | null
+    provider: PaymentProviderCode
+    idempotency_key: string
+    billing: BillingDetails
+  }) => request<PaymentAttempt>('/payments/license-renewal-sessions/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
   paymentSession: (sessionId: string) =>
     request<PaymentAttempt>(`/payments/checkout-sessions/${sessionId}/`),
   simulatePaymentSession: (sessionId: string, outcome: 'succeeded' | 'failed') =>
@@ -274,6 +315,10 @@ export const api = {
   siteSettings: () => request<SiteSettings>('/core/site-settings/'),
   updateSiteSettings: (data: unknown) =>
     request<SiteSettings>('/core/site-settings/', { method: 'PATCH', body: JSON.stringify(data) }),
+}
+
+function organizationQuery(organizationId?: number | null) {
+  return organizationId ? `?organization=${organizationId}` : ''
 }
 
 function licenseQuery(filters: AdminLicenseFilters) {

@@ -3,6 +3,7 @@ from rest_framework.routers import DefaultRouter
 
 from payments.views import (
     CheckoutSessionCreateView,
+    LicenseRenewalCheckoutSessionCreateView,
     PaymentAttemptViewSet,
     PaymentProviderViewSet,
     PaymentSessionDetailView,
@@ -19,6 +20,7 @@ urlpatterns = [
     path("status/", PaymentStatusView.as_view(), name="payment-status"),
     path("storefront-status/", StorefrontPaymentStatusView.as_view(), name="storefront-payment-status"),
     path("checkout-sessions/", CheckoutSessionCreateView.as_view(), name="checkout-session-create"),
+    path("license-renewal-sessions/", LicenseRenewalCheckoutSessionCreateView.as_view(), name="license-renewal-session-create"),
     path("checkout-sessions/<uuid:session_id>/", PaymentSessionDetailView.as_view(), name="checkout-session-detail"),
     path("checkout-sessions/<uuid:session_id>/simulate/", PaymentSessionSimulateView.as_view(), name="checkout-session-simulate"),
     *router.urls,

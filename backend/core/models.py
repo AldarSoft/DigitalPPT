@@ -176,6 +176,7 @@ class NotificationJob(TimeStampedModel):
         QUOTE_MESSAGE_EMAIL = "quote_message_email", "Quote message email"
         ORDER_STATUS_EMAIL = "order_status_email", "Order status email"
         ORDER_STATUS_WEBHOOK = "order_status_webhook", "Order status webhook"
+        LICENSE_EXPIRY_EMAIL = "license_expiry_email", "License expiry email"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

@@ -44,6 +44,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
       return []
     }
   })
+  const [storedProductsRefreshed, setStoredProductsRefreshed] = useState(
+    () => manualItems.length === 0,
+  )
   const [licenseCalculation, setLicenseCalculation] = useState<LicenseCalculation>({
     signature: '',
     automaticItems: [],
@@ -69,6 +72,41 @@ export function CartProvider({ children }: { children: ReactNode }) {
     ],
     [calculationIsCurrent, licenseCalculation.automaticItems, manualItems, needsLicensing],
   )
+
+  useEffect(() => {
+    if (storedProductsRefreshed) return
+
+    const storedProducts = manualItems.map((item) => item.product)
+    if (!storedProducts.length) return
+
+    let active = true
+    Promise.all(
+      storedProducts.map(async (product) => {
+        try {
+          return await api.product(product.slug)
+        } catch {
+          return null
+        }
+      }),
+    ).then((products) => {
+      if (!active) return
+      const refreshedById = new Map(
+        products.filter((product): product is Product => product !== null)
+          .map((product) => [product.id, product]),
+      )
+      if (refreshedById.size) {
+        setManualItems((current) => current.map((item) => {
+          const product = refreshedById.get(item.product.id)
+          return product ? { ...item, product } : item
+        }))
+      }
+      setStoredProductsRefreshed(true)
+    })
+
+    return () => {
+      active = false
+    }
+  }, [manualItems, storedProductsRefreshed])
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(manualItems))

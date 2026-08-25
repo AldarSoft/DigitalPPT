@@ -3,11 +3,12 @@ from datetime import timedelta
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.core import mail
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from core.models import UserNotification
+from core.models import NotificationJob, UserNotification
 from licensing.models import Organization, OrganizationInvitation, OrganizationMembership
 from licensing.permissions import OrganizationAccessPolicy
 from licensing.models import License, LicenseEvent, ProductLicenseAllocation
@@ -16,6 +17,7 @@ from licensing.services import (
     LicenseCapacityService,
     LicenseExpiryService,
     LicenseLifecycleService,
+    LicenseRenewalOrderService,
     OrganizationService,
     ProductLicenseCompatibilityService,
 )
@@ -175,6 +177,8 @@ class OrganizationInvitationTests(TestCase):
         self.assertNotEqual(invitation.token_hash, token)
         self.assertEqual(invitation.token_hash, InvitationService.hash_token(token))
         self.assertEqual(invitation.status, "pending")
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("/invite?token=", mail.outbox[0].body)
 
     def test_issue_rejects_an_invalid_email(self):
         with self.assertRaises(ValidationError):
@@ -211,6 +215,23 @@ class OrganizationInvitationTests(TestCase):
             ).count(),
             1,
         )
+
+    def test_authenticated_user_can_accept_an_invitation_through_the_api(self):
+        invitation, token = self.issue()
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.manager)
+
+        response = api_client.post(
+            "/api/v1/licensing/organization/invitations/accept/",
+            {"token": token},
+            format="json",
+        )
+
+        invitation.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["organization_id"], self.organization.pk)
+        self.assertEqual(response.data["role"], "license_manager")
+        self.assertEqual(invitation.accepted_by, self.manager)
 
     def test_wrong_email_cannot_accept_invitation(self):
         _, token = self.issue()
@@ -580,6 +601,45 @@ class LicenseLifecycleTests(TestCase):
             1,
         )
 
+    @override_settings(NOTIFICATIONS_ASYNC=True)
+    def test_expiry_reconciliation_queues_email_for_owner_and_license_manager(self):
+        license = self.provision()
+        expiry = timezone.localdate() + timedelta(days=60)
+        License.objects.filter(pk=license.pk).update(
+            expires_on=expiry,
+            renews_on=expiry + timedelta(days=1),
+        )
+        license.refresh_from_db()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            LicenseExpiryService.reconcile(license=license)
+
+        job = NotificationJob.objects.get(
+            kind=NotificationJob.Kind.LICENSE_EXPIRY_EMAIL,
+        )
+        self.assertEqual(job.payload["license_id"], license.pk)
+        self.assertEqual(job.payload["remaining_days"], 60)
+
+    def test_license_manager_can_prepare_an_exact_renewal_summary(self):
+        license = self.provision()
+        expiry = timezone.localdate() + timedelta(days=30)
+        License.objects.filter(pk=license.pk).update(
+            expires_on=expiry,
+            renews_on=expiry + timedelta(days=1),
+        )
+        license.refresh_from_db()
+
+        summary = LicenseRenewalOrderService.summary(
+            user=self.manager,
+            license_number=license.license_number,
+            organization_id=self.organization.pk,
+        )
+
+        self.assertEqual(summary["organization_id"], self.organization.pk)
+        self.assertEqual(summary["license_number"], license.license_number)
+        self.assertEqual(summary["product_id"], self.license_product.pk)
+        self.assertEqual(Order.objects.filter(renewal_license=license).count(), 0)
+
     def test_expired_license_notifies_without_disabling_allocated_products(self):
         license = self.provision()
         License.objects.filter(pk=license.pk).update(
@@ -718,6 +778,41 @@ class LicenseLifecycleTests(TestCase):
             "license_manager",
         )
 
+    def test_user_can_list_and_select_an_organization_workspace(self):
+        second_organization = OrganizationService.create(
+            name="Second Workspace Organization",
+            owner=self.outsider,
+        )
+        OrganizationMembership.objects.create(
+            organization=second_organization,
+            user=self.owner,
+            role=OrganizationMembership.Role.LICENSE_MANAGER,
+        )
+        second_license = LicenseLifecycleService.provision(
+            organization=second_organization,
+            license_product=self.license_product,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.owner)
+
+        workspaces = api_client.get("/api/v1/licensing/organizations/")
+        selected = api_client.get(
+            f"/api/v1/licensing/organization/licenses/?organization={second_organization.pk}"
+        )
+        unavailable = api_client.get(
+            "/api/v1/licensing/organization/licenses/?organization=999999"
+        )
+
+        self.assertEqual(workspaces.status_code, 200)
+        self.assertEqual(
+            {workspace["id"] for workspace in workspaces.data["organizations"]},
+            {self.organization.pk, second_organization.pk},
+        )
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(selected.data["organization"]["id"], second_organization.pk)
+        self.assertEqual(selected.data["licenses"][0]["license_number"], second_license.license_number)
+        self.assertEqual(unavailable.status_code, 404)
+
     def test_organization_summary_is_scoped_and_requires_membership(self):
         other_organization = OrganizationService.create(
             name="Other Summary Organization",
@@ -792,6 +887,8 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(active_payload["available_capacity"], 1)
         self.assertEqual(active_payload["capacity_percentage"], 67)
         self.assertEqual(active_payload["remaining_days"], 30)
+        self.assertFalse(response.data["renewal_request"]["issued"])
+        self.assertIsNone(response.data["renewal_request"]["issued_at"])
         self.assertEqual(
             active_payload["expires_on"],
             (today + timedelta(days=30)).isoformat(),
@@ -966,12 +1063,69 @@ class LicenseLifecycleTests(TestCase):
 
         self.assertEqual(created.status_code, 201)
         self.assertEqual(created.data["status"], "pending")
+        self.assertIn("/invite?token=", created.data["accept_url"])
         self.assertEqual(resent.status_code, 200)
+        self.assertIn("/invite?token=", resent.data["accept_url"])
+        self.assertNotEqual(created.data["accept_url"], resent.data["accept_url"])
         self.assertNotEqual(replacement.pk, first_invitation.pk)
         self.assertIsNotNone(first_invitation.revoked_at)
         self.assertEqual(revoked.status_code, 200)
         self.assertEqual(revoked.data["status"], "revoked")
         self.assertIsNotNone(replacement.revoked_at)
+
+    def test_owner_can_transfer_ownership_to_an_active_license_manager(self):
+        manager_membership = OrganizationMembership.objects.get(
+            organization=self.organization,
+            user=self.manager,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.owner)
+
+        response = api_client.post(
+            "/api/v1/licensing/organization/ownership-transfer/",
+            {"membership_id": manager_membership.pk},
+            format="json",
+        )
+
+        previous_owner = OrganizationMembership.objects.get(
+            organization=self.organization,
+            user=self.owner,
+        )
+        manager_membership.refresh_from_db()
+        event = LicenseEvent.objects.get(
+            organization=self.organization,
+            event_type=LicenseEvent.Type.OWNERSHIP_TRANSFERRED,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["current_user_role"], "license_manager")
+        self.assertEqual(response.data["owner"]["email"], self.manager.email)
+        self.assertEqual(previous_owner.role, OrganizationMembership.Role.LICENSE_MANAGER)
+        self.assertEqual(manager_membership.role, OrganizationMembership.Role.OWNER)
+        self.assertEqual(event.metadata["previous_owner_email"], self.owner.email)
+        self.assertEqual(event.metadata["new_owner_email"], self.manager.email)
+
+        blocked = api_client.post(
+            "/api/v1/licensing/organization/invitations/",
+            {"email": "blocked@example.com"},
+            format="json",
+        )
+        self.assertEqual(blocked.status_code, 403)
+
+    def test_license_manager_cannot_transfer_organization_ownership(self):
+        manager_membership = OrganizationMembership.objects.get(
+            organization=self.organization,
+            user=self.manager,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.manager)
+
+        response = api_client.post(
+            "/api/v1/licensing/organization/ownership-transfer/",
+            {"membership_id": manager_membership.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
 
     def test_manager_and_other_organization_cannot_manage_invitations(self):
         invitation, _token = InvitationService.issue(
@@ -1152,6 +1306,74 @@ class LicenseLifecycleTests(TestCase):
             "Please review the upcoming annual renewal.",
         )
         self.assertEqual(forbidden.status_code, 403)
+
+    def test_admin_can_send_an_audited_renewal_invoice_notice(self):
+        license = self.provision(name="Renewal Invoice License")
+        License.objects.filter(pk=license.pk).update(
+            status=License.Status.EXPIRING_SOON,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+        renewal_url = (
+            f"/api/v1/admin/licensing/organizations/"
+            f"{self.organization.pk}/renewal-invoice/"
+        )
+
+        sent = api_client.post(renewal_url)
+        detail = api_client.get(
+            f"/api/v1/admin/licensing/organizations/{self.organization.pk}/"
+        )
+
+        self.assertEqual(sent.status_code, 201)
+        self.assertEqual(sent.data["kind"], LicenseEvent.Type.NOTIFICATION_SENT)
+        self.assertEqual(sent.data["message"], "Renewal invoice notice sent.")
+        self.assertEqual(UserNotification.objects.count(), 2)
+        self.assertTrue(
+            LicenseEvent.objects.filter(
+                organization=self.organization,
+                event_type=LicenseEvent.Type.NOTIFICATION_SENT,
+                metadata__notification_type="renewal_invoice",
+            ).exists()
+        )
+        self.assertEqual(detail.data["notifications"]["renewal_invoice_status"], "issued")
+        api_client.force_authenticate(user=self.owner)
+        client_licenses = api_client.get("/api/v1/licensing/organization/licenses/")
+        self.assertEqual(client_licenses.status_code, 200)
+        self.assertTrue(client_licenses.data["renewal_request"]["issued"])
+        self.assertIsNotNone(client_licenses.data["renewal_request"]["issued_at"])
+
+        # The notification remains in history, but the page-level warning is
+        # removed as soon as staff restores the license to Active.
+        License.objects.filter(pk=license.pk).update(status=License.Status.ACTIVE)
+        client_licenses = api_client.get("/api/v1/licensing/organization/licenses/")
+        self.assertFalse(client_licenses.data["renewal_request"]["issued"])
+        self.assertIsNone(client_licenses.data["renewal_request"]["issued_at"])
+
+    def test_staff_can_manage_organization_users(self):
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+        users_url = f"/api/v1/admin/licensing/organizations/{self.organization.pk}/users/"
+
+        listed = api_client.get(users_url)
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data["owner"]["email"], self.owner.email)
+        self.assertEqual(listed.data["license_managers"][0]["email"], self.manager.email)
+
+        transfer = api_client.post(
+            f"{users_url}ownership-transfer/",
+            {"membership_id": listed.data["license_managers"][0]["membership_id"]},
+            format="json",
+        )
+        self.assertEqual(transfer.status_code, 200)
+        self.assertEqual(transfer.data["owner"]["email"], self.manager.email)
+
+        invited = api_client.post(
+            f"{users_url}invitations/",
+            {"email": self.outsider.email},
+            format="json",
+        )
+        self.assertEqual(invited.status_code, 201)
+        self.assertEqual(invited.data["email"], self.outsider.email)
 
     def test_admin_adjustment_is_audited_and_scoped_to_organization(self):
         license = self.provision(name="Adjustable License")

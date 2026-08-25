@@ -43,8 +43,17 @@ class PaymentAttempt(TimeStampedModel):
     idempotency_key = models.UUIDField(default=uuid4, unique=True, editable=False)
     order = models.ForeignKey(
         "orders.Order",
+        null=True,
+        blank=True,
         on_delete=models.PROTECT,
         related_name="payment_attempts",
+    )
+    renewal_license = models.ForeignKey(
+        "licensing.License",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="renewal_payment_attempts",
     )
     provider = models.ForeignKey(
         PaymentProvider,
@@ -72,6 +81,7 @@ class PaymentAttempt(TimeStampedModel):
         ordering = ("-created_at", "-id")
         indexes = [
             models.Index(fields=["order", "status"]),
+            models.Index(fields=["renewal_license", "status"]),
             models.Index(fields=["provider", "created_at"]),
         ]
         constraints = [

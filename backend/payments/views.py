@@ -13,6 +13,7 @@ from payments.models import PaymentAttempt, PaymentProvider
 from payments.serializers import (
     CheckoutSessionCreateSerializer,
     DevelopmentConfirmationSerializer,
+    LicenseRenewalCheckoutSessionCreateSerializer,
     PaymentAttemptSerializer,
     PaymentProviderSerializer,
     PaymentSimulationSerializer,
@@ -77,16 +78,44 @@ class CheckoutSessionCreateView(APIView):
             raise NotFound()
         serializer = CheckoutSessionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        order_queryset = Order.objects.select_related("user", "quote_request")
-        if not request.user.is_staff:
-            order_queryset = order_queryset.filter(user=request.user)
+        order_queryset = Order.objects.select_related("user", "organization", "quote_request")
         order = get_object_or_404(
             order_queryset,
             order_number=serializer.validated_data["order_number"],
         )
+        if not PaymentService.can_pay_order(user=request.user, order=order):
+            raise NotFound()
         attempt, created = PaymentService.start_checkout(
             user=request.user,
             order=order,
+            provider=serializer.validated_data["provider"],
+            idempotency_key=serializer.validated_data["idempotency_key"],
+            billing=serializer.validated_data["billing"],
+        )
+        return Response(
+            PaymentAttemptSerializer(attempt, context={"request": request}).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+
+class LicenseRenewalCheckoutSessionCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_scope = "payment_test"
+
+    @extend_schema(
+        summary="Create or reuse a selected-license renewal payment session",
+        request=LicenseRenewalCheckoutSessionCreateSerializer,
+        responses={200: PaymentAttemptSerializer, 201: PaymentAttemptSerializer},
+    )
+    def post(self, request):
+        if not settings.PAYMENTS_STOREFRONT_ENABLED:
+            raise NotFound()
+        serializer = LicenseRenewalCheckoutSessionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        attempt, created = PaymentService.start_license_renewal_checkout(
+            user=request.user,
+            license_number=serializer.validated_data["license_number"],
+            organization_id=serializer.validated_data.get("organization"),
             provider=serializer.validated_data["provider"],
             idempotency_key=serializer.validated_data["idempotency_key"],
             billing=serializer.validated_data["billing"],
@@ -101,10 +130,13 @@ class PaymentSessionDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get_attempt(self, request, session_id):
-        queryset = PaymentAttempt.objects.select_related("order", "provider", "created_by")
-        if not request.user.is_staff:
-            queryset = queryset.filter(created_by=request.user, order__user=request.user)
-        return get_object_or_404(queryset, idempotency_key=session_id)
+        attempt = get_object_or_404(
+            PaymentAttempt.objects.select_related("order__organization", "renewal_license__organization", "provider", "created_by"),
+            idempotency_key=session_id,
+        )
+        if not PaymentService.can_pay_attempt(user=request.user, attempt=attempt) and attempt.created_by_id != request.user.id:
+            raise NotFound()
+        return attempt
 
     @extend_schema(
         summary="Get a payment checkout session",

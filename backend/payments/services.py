@@ -16,6 +16,34 @@ from payments.providers import provider_is_available
 
 class PaymentService:
     @staticmethod
+    def can_pay_order(*, user, order):
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_staff or order.user_id == user.id:
+            return True
+        if not order.organization_id:
+            return False
+        from licensing.permissions import OrganizationAccessPolicy
+
+        return OrganizationAccessPolicy.can_manage_billing(
+            user=user,
+            organization=order.organization,
+        )
+
+    @staticmethod
+    def can_pay_attempt(*, user, attempt):
+        if attempt.order_id:
+            return PaymentService.can_pay_order(user=user, order=attempt.order)
+        if not attempt.renewal_license_id:
+            return False
+        from licensing.permissions import OrganizationAccessPolicy
+
+        return OrganizationAccessPolicy.can_manage_billing(
+            user=user,
+            organization=attempt.renewal_license.organization,
+        )
+
+    @staticmethod
     def close_pending_attempts(*, order, exclude_attempt_id=None, reason):
         attempts = PaymentAttempt.objects.filter(
             order=order,
@@ -47,8 +75,8 @@ class PaymentService:
                 raise ValidationError({"idempotency_key": "This key is already in use."})
             return existing, False
 
-        locked_order = Order.objects.select_for_update().get(pk=order.pk)
-        if not user.is_staff and locked_order.user_id != user.id:
+        locked_order = Order.objects.select_for_update().select_related("organization").get(pk=order.pk)
+        if not PaymentService.can_pay_order(user=user, order=locked_order):
             raise ValidationError({"order_number": "This order is not available."})
         if locked_order.status != Order.Status.PENDING:
             raise ValidationError({"order_number": "Only pending orders can be paid."})
@@ -95,6 +123,64 @@ class PaymentService:
             idempotency_key=idempotency_key,
             expires_at=timezone.now() + timedelta(minutes=settings.PAYMENT_SESSION_TTL_MINUTES),
             metadata={"source": "storefront", "billing": billing},
+            created_by=user,
+        )
+        return attempt, True
+
+    @staticmethod
+    @transaction.atomic
+    def start_license_renewal_checkout(*, user, license_number, organization_id, provider, idempotency_key, billing):
+        from licensing.services import LicenseRenewalOrderService
+
+        existing = (
+            PaymentAttempt.objects.select_for_update()
+            .select_related("renewal_license__organization", "provider", "created_by")
+            .filter(idempotency_key=idempotency_key)
+            .first()
+        )
+        if existing:
+            if (
+                existing.created_by_id != user.id
+                or not existing.renewal_license_id
+                or existing.renewal_license.license_number != license_number
+                or existing.provider_id != provider.id
+            ):
+                raise ValidationError({"idempotency_key": "This key is already in use."})
+            return existing, False
+
+        renewal_license, product = LicenseRenewalOrderService.resolve(
+            user=user,
+            license_number=license_number,
+            organization_id=organization_id,
+            lock=True,
+        )
+        if not provider_is_available(provider):
+            raise ValidationError({"provider": "This payment provider is unavailable."})
+
+        PaymentAttempt.objects.filter(
+            renewal_license=renewal_license,
+            status=PaymentAttempt.Status.PENDING,
+        ).update(
+            status=PaymentAttempt.Status.CANCELLED,
+            failure_message="Replaced by a newer renewal checkout session.",
+            updated_at=timezone.now(),
+        )
+        site_settings = SiteSetting.get_solo()
+        attempt = PaymentAttempt.objects.create(
+            renewal_license=renewal_license,
+            provider=provider,
+            amount=product.price_for_quantity(1),
+            currency=site_settings.default_currency or "USD",
+            status=PaymentAttempt.Status.PENDING,
+            is_test=provider.test_mode,
+            idempotency_key=idempotency_key,
+            expires_at=timezone.now() + timedelta(minutes=settings.PAYMENT_SESSION_TTL_MINUTES),
+            metadata={
+                "source": "license_renewal",
+                "billing": billing,
+                "renewal_product_id": product.pk,
+                "renewal_expires_on": renewal_license.expires_on.isoformat() if renewal_license.expires_on else None,
+            },
             created_by=user,
         )
         return attempt, True
@@ -157,18 +243,41 @@ class PaymentService:
 
         locked = (
             PaymentAttempt.objects.select_for_update()
-            .select_related("order", "provider", "created_by")
+            .select_related("order", "renewal_license__organization", "provider", "created_by")
             .get(pk=attempt.pk)
         )
         if locked.status == PaymentAttempt.Status.SUCCEEDED:
+            if locked.renewal_license_id and not locked.order_id:
+                PaymentService._create_renewal_order(attempt=locked)
             PaymentSuccessProvisioningService.provision(
                 payment_attempt=locked,
                 actor=actor,
             )
+            locked_order = Order.objects.select_for_update().get(pk=locked.order_id)
+            target_status = OrderService.status_after_successful_payment(
+                order=locked_order
+            )
+            if locked_order.status in {
+                Order.Status.PENDING,
+                Order.Status.PROCESSING,
+                Order.Status.SCHEDULED,
+            } and locked_order.status != target_status:
+                OrderService.update_status(
+                    order=locked_order,
+                    new_status=target_status,
+                    exclude_pending_payment_attempt_id=locked.pk,
+                )
             locked.refresh_from_db()
             return locked
         if locked.status != PaymentAttempt.Status.PENDING:
             return locked
+
+        if locked.renewal_license_id and not locked.order_id:
+            return PaymentService._complete_renewal_success(
+                attempt=locked,
+                actor=actor,
+                external_reference=external_reference,
+            )
 
         locked_order = Order.objects.select_for_update().get(pk=locked.order_id)
         another_success = PaymentAttempt.objects.filter(
@@ -183,12 +292,6 @@ class PaymentService:
             locked.save(update_fields=["status", "failure_message", "updated_at"])
             return locked
 
-        next_status = (
-            Order.Status.SCHEDULED
-            if locked_order.source == Order.Source.QUOTE
-            else Order.Status.PROCESSING
-        )
-        OrderService.update_status(order=locked_order, new_status=next_status)
         locked.status = PaymentAttempt.Status.SUCCEEDED
         locked.failure_message = ""
         locked.external_reference = external_reference
@@ -206,6 +309,12 @@ class PaymentService:
             payment_attempt=locked,
             actor=actor,
         )
+        next_status = OrderService.status_after_successful_payment(order=locked_order)
+        OrderService.update_status(
+            order=locked_order,
+            new_status=next_status,
+            exclude_pending_payment_attempt_id=locked.pk,
+        )
         PaymentService.close_pending_attempts(
             order=locked_order,
             exclude_attempt_id=locked.pk,
@@ -215,14 +324,100 @@ class PaymentService:
         return locked
 
     @staticmethod
+    def _create_renewal_order(*, attempt):
+        from orders.models import OrderItem
+        from products.models import Product
+
+        renewal_license = attempt.renewal_license
+        billing = (attempt.metadata or {}).get("billing", {})
+        product = Product.objects.select_for_update().get(
+            pk=(attempt.metadata or {}).get("renewal_product_id") or renewal_license.license_product_id
+        )
+        order = Order.objects.create(
+            user=attempt.created_by,
+            organization=renewal_license.organization,
+            renewal_license=renewal_license,
+            source=Order.Source.DIRECT,
+            customer_first_name=billing.get("first_name", ""),
+            customer_last_name=billing.get("last_name", ""),
+            customer_email=billing.get("email", renewal_license.organization.billing_email),
+            customer_phone=billing.get("phone", ""),
+            company_name=billing.get("company", renewal_license.organization.name),
+            shipping_address=billing.get("address", ""),
+            shipping_city=billing.get("city", ""),
+            shipping_state=billing.get("state", ""),
+            shipping_postal_code=billing.get("postal_code", ""),
+            shipping_country=billing.get("country", ""),
+            subtotal=attempt.amount,
+            total=attempt.amount,
+            notes=f"Renewal for license {renewal_license.license_number}.",
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.name,
+            sku=product.sku,
+            unit_price=attempt.amount,
+            quantity=1,
+            line_total=attempt.amount,
+        )
+        attempt.order = order
+        attempt.save(update_fields=["order", "updated_at"])
+        return order
+
+    @staticmethod
+    def _complete_renewal_success(*, attempt, actor, external_reference):
+        from licensing.services import PaymentSuccessProvisioningService
+
+        renewal_cycle = (attempt.metadata or {}).get("renewal_expires_on")
+        another_success = PaymentAttempt.objects.filter(
+            renewal_license=attempt.renewal_license,
+            status=PaymentAttempt.Status.SUCCEEDED,
+            metadata__renewal_expires_on=renewal_cycle,
+        ).exists()
+        if another_success:
+            attempt.status = PaymentAttempt.Status.CANCELLED
+            attempt.failure_message = "This license renewal was already paid."
+            attempt.save(update_fields=["status", "failure_message", "updated_at"])
+            return attempt
+
+        order = PaymentService._create_renewal_order(attempt=attempt)
+        attempt.status = PaymentAttempt.Status.SUCCEEDED
+        attempt.failure_message = ""
+        attempt.external_reference = external_reference
+        attempt.paid_at = timezone.now()
+        attempt.save(update_fields=["status", "failure_message", "external_reference", "paid_at", "updated_at"])
+        PaymentSuccessProvisioningService.provision(payment_attempt=attempt, actor=actor)
+        OrderService.update_status(
+            order=order,
+            new_status=OrderService.status_after_successful_payment(order=order),
+            exclude_pending_payment_attempt_id=attempt.pk,
+        )
+        PaymentService.close_pending_attempts(
+            order=order,
+            exclude_attempt_id=attempt.pk,
+            reason="Closed after successful renewal payment.",
+        )
+        PaymentAttempt.objects.filter(
+            renewal_license=attempt.renewal_license,
+            status=PaymentAttempt.Status.PENDING,
+        ).exclude(pk=attempt.pk).update(
+            status=PaymentAttempt.Status.CANCELLED,
+            failure_message="Closed after successful renewal payment.",
+            updated_at=timezone.now(),
+        )
+        attempt.refresh_from_db()
+        return attempt
+
+    @staticmethod
     @transaction.atomic
     def simulate_checkout(*, attempt, user, outcome):
         locked = (
             PaymentAttempt.objects.select_for_update()
-            .select_related("order", "provider", "created_by")
+            .select_related("order", "renewal_license__organization", "provider", "created_by")
             .get(pk=attempt.pk)
         )
-        if not user.is_staff and locked.created_by_id != user.id:
+        if not PaymentService.can_pay_attempt(user=user, attempt=locked) and locked.created_by_id != user.id:
             raise ValidationError({"session": "This payment session is not available."})
         if locked.status == PaymentAttempt.Status.SUCCEEDED:
             return PaymentService.complete_success(

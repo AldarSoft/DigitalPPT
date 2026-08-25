@@ -42,6 +42,7 @@ export interface ClientLicenseListResponse {
   organization: { id: number; public_id: string; name: string; role: OrganizationRole }
   summary: OrganizationLicenseSummary
   licenses: ClientLicenseListItem[]
+  renewal_request: { issued: boolean; issued_at: string | null }
 }
 
 export interface ClientLicenseDetail {
@@ -61,12 +62,45 @@ export interface ClientLicenseDetail {
   allocations: Array<{ id: number; product: { id: number; name: string; sku: string }; quantity: number; source_order: SourceOrder }>
 }
 
+export interface LicenseRenewalSummary {
+  license_number: string
+  license_name: string
+  organization_id: number
+  organization_name: string
+  current_expires_on: string | null
+  projected_expires_on: string
+  term_days: number
+  product_id: number
+  product_name: string
+  product_sku: string
+  product_image_url: string
+  amount: string
+}
+
 export interface OrganizationInvitation {
   invitation_id: number
   email: string
   role: 'license_manager'
   status: string
   expires_at: string
+  accept_url?: string
+}
+
+export interface OrganizationInvitationAcceptance {
+  organization_id: number
+  organization_name: string
+  role: 'license_manager'
+}
+
+export interface OrganizationWorkspace {
+  id: number
+  name: string
+  role: 'owner' | 'license_manager'
+}
+
+export interface OrganizationWorkspaceListResponse {
+  organizations: OrganizationWorkspace[]
+  default_organization_id: number | null
 }
 
 export interface OrganizationTeamResponse {
@@ -111,6 +145,13 @@ export interface AdminOrganizationLicenseDetail {
   notifications: { renewal_reminder_scheduled_for: string | null; renewal_invoice_status: string }
   events: AdminLicenseEvent[]
   permissions: { can_adjust: boolean; can_send_renewal_invoice: boolean; can_send_notification: boolean }
+}
+
+export interface AdminOrganizationUsers {
+  organization: { id: number; name: string }
+  owner: { membership_id: number; user_id: number; name: string; email: string; role: 'owner'; status: 'active' } | null
+  license_managers: Array<{ membership_id: number; user_id: number; name: string; email: string; role: 'license_manager'; status: 'active' }>
+  pending_invitations: OrganizationInvitation[]
 }
 
 export interface AdminLicenseEventListResponse {

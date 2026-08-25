@@ -493,6 +493,7 @@ class LicenseEvent(TimeStampedModel):
         INVITATION_SENT = "invitation_sent", "Invitation sent"
         INVITATION_ACCEPTED = "invitation_accepted", "Invitation accepted"
         INVITATION_REVOKED = "invitation_revoked", "Invitation revoked"
+        OWNERSHIP_TRANSFERRED = "ownership_transferred", "Organization ownership transferred"
         ADJUSTED = "adjusted", "Manual adjustment"
         ALLOCATED = "allocated", "Product capacity allocated"
         ALLOCATION_RELEASED = "allocation_released", "Product allocation released"

@@ -330,6 +330,54 @@ def _send_order_status_webhook(payload: dict) -> None:
         raise RuntimeError("Power Automate did not accept the order status event.")
 
 
+def _send_license_expiry_email(payload: dict) -> None:
+    from licensing.models import License
+
+    license = License.objects.select_related("organization").get(pk=payload["license_id"])
+    User = get_user_model()
+    recipients = list(
+        User.objects.filter(
+            organization_memberships__organization=license.organization,
+            organization_memberships__is_active=True,
+            is_active=True,
+        )
+        .exclude(email="")
+        .values_list("email", flat=True)
+        .distinct()
+    )
+    if not recipients:
+        return
+    remaining_days = payload["remaining_days"]
+    when = license.expires_on.strftime("%d %b %Y") if license.expires_on else "the renewal date"
+    if remaining_days < 0:
+        subject = f"License renewal overdue: {license.name}"
+        lead = f"The {license.name} license expired {abs(remaining_days)} day(s) ago."
+    elif remaining_days == 0:
+        subject = f"License renewal due today: {license.name}"
+        lead = f"The {license.name} license expires today."
+    else:
+        subject = f"License renewal due in {remaining_days} days: {license.name}"
+        lead = f"The {license.name} license expires on {when}."
+    renewal_url = (
+        f"{settings.FRONTEND_URL.rstrip('/')}/account?tab=licenses"
+        f"&org={license.organization_id}&license={quote(license.license_number, safe='')}"
+    )
+    send_application_email(
+        subject=subject,
+        text_body=(
+            f"{lead}\n\nOpen the license details and select Renew license to create a "
+            f"payment-ready renewal order:\n{renewal_url}\n\n{settings.SITE_NAME}"
+        ),
+        html_body=(
+            f"<p>{escape(lead)}</p><p>Open the license details and select "
+            "<strong>Renew license</strong> to create a payment-ready renewal order.</p>"
+            f'<p><a href="{escape(renewal_url, quote=True)}">Renew license</a></p>'
+            f"<p>{escape(settings.SITE_NAME)}</p>"
+        ),
+        recipients=recipients,
+    )
+
+
 HANDLERS = {
     NotificationJob.Kind.QUOTE_CUSTOMER_EMAIL: _send_quote_customer_email,
     NotificationJob.Kind.QUOTE_STAFF_EMAIL: _send_quote_staff_email,
@@ -338,6 +386,7 @@ HANDLERS = {
     NotificationJob.Kind.QUOTE_MESSAGE_EMAIL: _send_quote_message_email,
     NotificationJob.Kind.ORDER_STATUS_EMAIL: _send_order_status_email,
     NotificationJob.Kind.ORDER_STATUS_WEBHOOK: _send_order_status_webhook,
+    NotificationJob.Kind.LICENSE_EXPIRY_EMAIL: _send_license_expiry_email,
 }
 
 
@@ -367,6 +416,13 @@ def publish_quote_created(quote_id: int) -> None:
         _dispatch(NotificationJob.Kind.QUOTE_STAFF_EMAIL, payload)
     if settings.POWER_AUTOMATE_ENABLED:
         _dispatch(NotificationJob.Kind.QUOTE_WEBHOOK, payload)
+
+
+def publish_license_expiry(*, license_id: int, remaining_days: int) -> None:
+    _dispatch(
+        NotificationJob.Kind.LICENSE_EXPIRY_EMAIL,
+        {"license_id": license_id, "remaining_days": remaining_days},
+    )
 
 
 def publish_quote_ready(quote_id: int) -> None:

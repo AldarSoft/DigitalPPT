@@ -131,10 +131,16 @@ class ClientLicenseListItemSerializer(serializers.Serializer):
     remaining_days = serializers.IntegerField(allow_null=True)
 
 
+class ClientRenewalRequestSerializer(serializers.Serializer):
+    issued = serializers.BooleanField()
+    issued_at = serializers.DateTimeField(allow_null=True)
+
+
 class ClientLicenseListSerializer(serializers.Serializer):
     organization = ClientLicenseListOrganizationSerializer()
     summary = OrganizationLicenseSummarySerializer()
     licenses = ClientLicenseListItemSerializer(many=True)
+    renewal_request = ClientRenewalRequestSerializer()
 
 
 class SourceOrderSerializer(serializers.Serializer):
@@ -181,6 +187,21 @@ class ClientLicenseDetailSerializer(serializers.Serializer):
     allocations = ClientLicenseAllocationSerializer(many=True)
 
 
+class LicenseRenewalSummarySerializer(serializers.Serializer):
+    license_number = serializers.CharField()
+    license_name = serializers.CharField()
+    organization_id = serializers.IntegerField()
+    organization_name = serializers.CharField()
+    current_expires_on = serializers.DateField(allow_null=True)
+    projected_expires_on = serializers.DateField()
+    term_days = serializers.IntegerField()
+    product_id = serializers.IntegerField()
+    product_name = serializers.CharField()
+    product_sku = serializers.CharField()
+    product_image_url = serializers.CharField(allow_blank=True)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
 class OrganizationTeamIdentitySerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
@@ -206,6 +227,7 @@ class OrganizationInvitationSerializer(serializers.Serializer):
     role = serializers.ChoiceField(choices=("license_manager",))
     status = serializers.CharField()
     expires_at = serializers.DateTimeField()
+    accept_url = serializers.URLField(required=False)
 
 
 class OrganizationTeamPermissionsSerializer(serializers.Serializer):
@@ -225,8 +247,49 @@ class OrganizationTeamSerializer(serializers.Serializer):
     permissions = OrganizationTeamPermissionsSerializer()
 
 
+class AdminOrganizationMemberSerializer(serializers.Serializer):
+    membership_id = serializers.IntegerField()
+    user_id = serializers.IntegerField()
+    name = serializers.CharField()
+    email = serializers.EmailField()
+    role = serializers.ChoiceField(choices=("owner", "license_manager"))
+    status = serializers.ChoiceField(choices=("active",))
+
+
+class AdminOrganizationUsersSerializer(serializers.Serializer):
+    organization = OrganizationTeamIdentitySerializer()
+    owner = AdminOrganizationMemberSerializer(allow_null=True)
+    license_managers = AdminOrganizationMemberSerializer(many=True)
+    pending_invitations = OrganizationInvitationSerializer(many=True)
+
+
+class OrganizationOwnershipTransferSerializer(serializers.Serializer):
+    membership_id = serializers.IntegerField(min_value=1)
+
+
 class OrganizationInvitationCreateSerializer(serializers.Serializer):
     email = serializers.EmailField(max_length=254)
+
+
+class OrganizationWorkspaceSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    role = serializers.ChoiceField(choices=("owner", "license_manager"))
+
+
+class OrganizationWorkspaceListSerializer(serializers.Serializer):
+    organizations = OrganizationWorkspaceSerializer(many=True)
+    default_organization_id = serializers.IntegerField(allow_null=True)
+
+
+class OrganizationInvitationAcceptSerializer(serializers.Serializer):
+    token = serializers.CharField(min_length=20, max_length=255)
+
+
+class OrganizationInvitationAcceptanceSerializer(serializers.Serializer):
+    organization_id = serializers.IntegerField()
+    organization_name = serializers.CharField()
+    role = serializers.ChoiceField(choices=("license_manager",))
 
 
 class AdminOrganizationLicenseQuerySerializer(serializers.Serializer):

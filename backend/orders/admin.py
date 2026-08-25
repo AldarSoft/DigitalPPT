@@ -41,18 +41,20 @@ class OrderAdmin(admin.ModelAdmin):
     list_display = (
         "order_number",
         "quote_request",
+        "organization",
         "customer_email",
         "status",
         "subtotal",
         "total",
         "created_at",
     )
-    list_filter = ("status", "created_at", "shipping_country")
+    list_filter = ("status", "organization", "created_at", "shipping_country")
     search_fields = (
         "order_number",
         "customer_email",
         "customer_first_name",
         "customer_last_name",
+        "organization__name",
     )
     readonly_fields = (
         "order_number",

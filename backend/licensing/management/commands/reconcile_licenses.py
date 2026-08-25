@@ -4,7 +4,7 @@ from licensing.services import LicenseExpiryService
 
 
 class Command(BaseCommand):
-    help = "Reconcile license expiry statuses and create due portal notifications."
+    help = "Reconcile license expiry statuses and create due portal and email notifications."
 
     def handle(self, *args, **options):
         result = LicenseExpiryService.reconcile_all()
