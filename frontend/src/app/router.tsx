@@ -1,33 +1,34 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { Route, Routes, useLocation } from 'react-router-dom'
 import { RequireAuth } from './guards/RequireAuth'
 import { RequireStaff } from './guards/RequireStaff'
-import { AccountPage } from '../features/account/pages/AccountPage'
-import { AdminAnalyticsPage } from '../features/admin/pages/AdminAnalyticsPage'
-import { AdminCustomersPage } from '../features/admin/pages/AdminCustomersPage'
-import { AdminDashboardPage } from '../features/admin/pages/AdminDashboardPage'
-import { AdminInventoryPage } from '../features/admin/pages/AdminInventoryPage'
-import { AdminOrdersPage } from '../features/admin/pages/AdminOrdersPage'
-import { AdminPaymentsPage } from '../features/admin/pages/AdminPaymentsPage'
-import { AdminProductsPage } from '../features/admin/pages/AdminProductsPage'
-import { AdminQuotesPage } from '../features/admin/pages/AdminQuotesPage'
-import { AdminSiteSettingsPage } from '../features/admin/pages/AdminSiteSettingsPage'
-import { LoginPage } from '../features/auth/pages/LoginPage'
-import { RegisterPage } from '../features/auth/pages/RegisterPage'
-import { ResetPasswordPage } from '../features/auth/pages/ResetPasswordPage'
-import { ClaimQuotePage } from '../features/auth/pages/ClaimQuotePage'
-import { CartPage } from '../features/cart/pages/CartPage'
-import { CheckoutPage } from '../features/checkout/pages/CheckoutPage'
-import { PaymentPage } from '../features/payments/pages/PaymentPage'
-import { ProductDetailsPage } from '../features/products/pages/ProductDetailsPage'
-import { ShopPage } from '../features/products/pages/ShopPage'
-import { AdminLicenseDetailPage } from '../features/licensing/pages/AdminLicenseDetailPage'
-import { AdminLicensesPage } from '../features/licensing/pages/AdminLicensesPage'
-import { AcceptOrganizationInvitationPage } from '../features/licensing/pages/AcceptOrganizationInvitationPage'
 import { AdminLayout } from '../layouts/AdminLayout'
 import { PublicLayout } from '../layouts/PublicLayout'
 import { HomePage } from '../pages/HomePage'
-import { NotFoundPage } from '../pages/NotFoundPage'
+
+const AccountPage = lazy(() => import('../features/account/pages/AccountPage').then((module) => ({ default: module.AccountPage })))
+const AdminAnalyticsPage = lazy(() => import('../features/admin/pages/AdminAnalyticsPage').then((module) => ({ default: module.AdminAnalyticsPage })))
+const AdminCustomersPage = lazy(() => import('../features/admin/pages/AdminCustomersPage').then((module) => ({ default: module.AdminCustomersPage })))
+const AdminDashboardPage = lazy(() => import('../features/admin/pages/AdminDashboardPage').then((module) => ({ default: module.AdminDashboardPage })))
+const AdminInventoryPage = lazy(() => import('../features/admin/pages/AdminInventoryPage').then((module) => ({ default: module.AdminInventoryPage })))
+const AdminOrdersPage = lazy(() => import('../features/admin/pages/AdminOrdersPage').then((module) => ({ default: module.AdminOrdersPage })))
+const AdminPaymentsPage = lazy(() => import('../features/admin/pages/AdminPaymentsPage').then((module) => ({ default: module.AdminPaymentsPage })))
+const AdminProductsPage = lazy(() => import('../features/admin/pages/AdminProductsPage').then((module) => ({ default: module.AdminProductsPage })))
+const AdminQuotesPage = lazy(() => import('../features/admin/pages/AdminQuotesPage').then((module) => ({ default: module.AdminQuotesPage })))
+const AdminSiteSettingsPage = lazy(() => import('../features/admin/pages/AdminSiteSettingsPage').then((module) => ({ default: module.AdminSiteSettingsPage })))
+const LoginPage = lazy(() => import('../features/auth/pages/LoginPage').then((module) => ({ default: module.LoginPage })))
+const RegisterPage = lazy(() => import('../features/auth/pages/RegisterPage').then((module) => ({ default: module.RegisterPage })))
+const ResetPasswordPage = lazy(() => import('../features/auth/pages/ResetPasswordPage').then((module) => ({ default: module.ResetPasswordPage })))
+const ClaimQuotePage = lazy(() => import('../features/auth/pages/ClaimQuotePage').then((module) => ({ default: module.ClaimQuotePage })))
+const CartPage = lazy(() => import('../features/cart/pages/CartPage').then((module) => ({ default: module.CartPage })))
+const CheckoutPage = lazy(() => import('../features/checkout/pages/CheckoutPage').then((module) => ({ default: module.CheckoutPage })))
+const PaymentPage = lazy(() => import('../features/payments/pages/PaymentPage').then((module) => ({ default: module.PaymentPage })))
+const ProductDetailsPage = lazy(() => import('../features/products/pages/ProductDetailsPage').then((module) => ({ default: module.ProductDetailsPage })))
+const ShopPage = lazy(() => import('../features/products/pages/ShopPage').then((module) => ({ default: module.ShopPage })))
+const AdminLicenseDetailPage = lazy(() => import('../features/licensing/pages/AdminLicenseDetailPage').then((module) => ({ default: module.AdminLicenseDetailPage })))
+const AdminLicensesPage = lazy(() => import('../features/licensing/pages/AdminLicensesPage').then((module) => ({ default: module.AdminLicensesPage })))
+const AcceptOrganizationInvitationPage = lazy(() => import('../features/licensing/pages/AcceptOrganizationInvitationPage').then((module) => ({ default: module.AcceptOrganizationInvitationPage })))
+const NotFoundPage = lazy(() => import('../pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })))
 
 function RouteScrollReset() {
   const location = useLocation()
@@ -43,6 +44,7 @@ export function AppRouter() {
   return (
     <>
       <RouteScrollReset />
+      <Suspense fallback={<main className="route-loading">Loading page...</main>}>
       <Routes>
         <Route element={<PublicLayout />}>
           <Route index element={<HomePage />} />
@@ -80,6 +82,7 @@ export function AppRouter() {
           </Route>
         </Route>
       </Routes>
+      </Suspense>
     </>
   )
 }

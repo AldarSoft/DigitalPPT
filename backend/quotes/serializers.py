@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from rest_framework import serializers
+from drf_spectacular.utils import extend_schema_field
 
 from common.validators import validate_phone
 from products.models import Product
@@ -37,7 +38,8 @@ class QuoteRequestItemSerializer(serializers.ModelSerializer):
             and obj.quantity >= product.bulk_minimum_quantity
         )
 
-    def get_suggested_unit_price(self, obj):
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2))
+    def get_suggested_unit_price(self, obj) -> Decimal:
         product = obj.product
         if not product:
             return None

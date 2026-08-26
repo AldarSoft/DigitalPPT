@@ -261,6 +261,7 @@ class AdminOrganizationRenewalInvoiceView(APIView):
     @extend_schema(
         operation_id="admin_licensing_organization_renewal_invoice",
         summary="Send an audited renewal invoice notice to an organization",
+        request=None,
         responses={201: AdminLicenseEventSerializer},
     )
     def post(self, request, organization_id):
@@ -420,6 +421,24 @@ class AdminOrganizationInvitationActionView(APIView):
 class AdminOrganizationInvitationResendView(AdminOrganizationInvitationActionView):
     action = "resend"
 
+    @extend_schema(
+        operation_id="admin_licensing_organization_invitation_resend",
+        summary="Resend an organization invitation as staff",
+        request=None,
+        responses=OrganizationInvitationSerializer,
+    )
+    def post(self, request, organization_id, invitation_id):
+        return super().post(request, organization_id, invitation_id)
+
 
 class AdminOrganizationInvitationRevokeView(AdminOrganizationInvitationActionView):
     action = "revoke"
+
+    @extend_schema(
+        operation_id="admin_licensing_organization_invitation_revoke",
+        summary="Revoke an organization invitation as staff",
+        request=None,
+        responses=OrganizationInvitationSerializer,
+    )
+    def post(self, request, organization_id, invitation_id):
+        return super().post(request, organization_id, invitation_id)

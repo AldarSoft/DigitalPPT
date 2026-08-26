@@ -210,6 +210,32 @@ class NotificationJob(TimeStampedModel):
         return f"{self.get_kind_display()} ({self.status})"
 
 
+class OperationalRun(TimeStampedModel):
+    class Kind(models.TextChoices):
+        LICENSE_RECONCILIATION = "license_reconciliation", "License reconciliation"
+        NOTIFICATION_DELIVERY = "notification_delivery", "Notification delivery"
+
+    class Status(models.TextChoices):
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    kind = models.CharField(max_length=40, choices=Kind.choices, db_index=True)
+    status = models.CharField(max_length=20, choices=Status.choices, db_index=True)
+    started_at = models.DateTimeField(db_index=True)
+    finished_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    details = models.JSONField(default=dict, blank=True)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ("-started_at", "-id")
+        indexes = [
+            models.Index(fields=["kind", "status", "finished_at"], name="core_opsrun_kind_status_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} ({self.status})"
+
+
 class UserNotification(TimeStampedModel):
     recipient = models.ForeignKey(
         settings.AUTH_USER_MODEL,

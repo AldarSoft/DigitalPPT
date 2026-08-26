@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from rest_framework import serializers
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from quotes.models import QuoteRequest
 
 from orders.models import Order, OrderItem
@@ -119,7 +120,8 @@ class OrderSerializer(serializers.ModelSerializer):
             status=PaymentAttempt.Status.SUCCEEDED
         ).exists()
 
-    def get_renewal(self, obj):
+    @extend_schema_field(serializers.DictField)
+    def get_renewal(self, obj) -> dict | None:
         license = obj.renewal_license
         if license is None:
             return None

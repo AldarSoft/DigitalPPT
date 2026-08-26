@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from core.models import Banner, ContactMessage, NotificationJob, SiteSetting, UserNotification
+from core.models import Banner, ContactMessage, NotificationJob, OperationalRun, SiteSetting, UserNotification
 
 
 @admin.register(Banner)
@@ -41,6 +41,16 @@ class NotificationJobAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
+
+    def has_add_permission(self, request):
+        return False
+
+
+@admin.register(OperationalRun)
+class OperationalRunAdmin(admin.ModelAdmin):
+    list_display = ("kind", "status", "started_at", "finished_at")
+    list_filter = ("kind", "status")
+    readonly_fields = ("kind", "status", "started_at", "finished_at", "details", "error", "created_at", "updated_at")
 
     def has_add_permission(self, request):
         return False

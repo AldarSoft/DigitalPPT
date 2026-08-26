@@ -1,4 +1,5 @@
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from core.models import Banner, ContactMessage, Promotion, SiteSetting, UserNotification
@@ -123,7 +124,8 @@ class PromotionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"ends_at": "End date must be after start date."})
         return attrs
 
-    def get_status(self, obj):
+    @extend_schema_field(serializers.CharField)
+    def get_status(self, obj) -> str:
         now = timezone.now()
         if not obj.is_active:
             return "inactive"

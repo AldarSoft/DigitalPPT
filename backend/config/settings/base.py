@@ -239,6 +239,8 @@ POWER_AUTOMATE_SHARED_SECRET = env("POWER_AUTOMATE_SHARED_SECRET", default="")
 NOTIFICATIONS_ASYNC = env("NOTIFICATIONS_ASYNC", default=False, cast=bool)
 NOTIFICATION_MAX_ATTEMPTS = env("NOTIFICATION_MAX_ATTEMPTS", default=5, cast=int)
 NOTIFICATION_RETRY_SECONDS = env("NOTIFICATION_RETRY_SECONDS", default=60, cast=int)
+LICENSE_RECONCILIATION_MAX_AGE_HOURS = env("LICENSE_RECONCILIATION_MAX_AGE_HOURS", default=26, cast=int)
+NOTIFICATION_WORKER_MAX_AGE_MINUTES = env("NOTIFICATION_WORKER_MAX_AGE_MINUTES", default=10, cast=int)
 
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 PASSWORD_RESET_TIMEOUT = env("PASSWORD_RESET_TIMEOUT", default=3600, cast=int)
@@ -388,5 +390,19 @@ SPECTACULAR_SETTINGS = {
         "ProductStatusEnum": "products.models.Product.Status",
         "OrderStatusEnum": "orders.models.Order.Status",
         "QuoteStatusEnum": "quotes.models.QuoteRequest.Status",
+        "PaymentProviderCode": "payments.models.PaymentProvider.Code",
+        "OrganizationMembershipRole": ("owner", "license_manager"),
+        "OrganizationMembershipStatus": ("active",),
+        "LicenseStatus": "licensing.models.License.Status",
+        "LicenseManagementStatus": (
+            ("pending_payment", "Pending payment"),
+            ("active", "Active"),
+            ("expiring_soon", "Expiring soon"),
+            ("expired", "Expired"),
+            ("cancelled", "Cancelled"),
+            ("draft", "Draft"),
+        ),
+        "OrganizationStatus": "licensing.models.Organization.Status",
+        "OrderOrganizationMode": ("existing", "new"),
     },
 }

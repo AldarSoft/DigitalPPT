@@ -9,8 +9,9 @@ from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from core.models import NotificationJob
+from core.models import NotificationJob, OperationalRun
 from core.notifications import mark_job_sent, process_notification
+from core.operations import record_run
 
 
 class Command(BaseCommand):
@@ -22,13 +23,25 @@ class Command(BaseCommand):
         parser.add_argument("--poll-seconds", type=float, default=5.0)
 
     def handle(self, *args, **options):
+        if options["once"]:
+            _, result = record_run(
+                kind=OperationalRun.Kind.NOTIFICATION_DELIVERY,
+                operation=lambda: self._run_once(options["limit"]),
+            )
+            self.stdout.write(self.style.SUCCESS(f"Processed {result['processed']} notification job(s)."))
+            return
         while True:
             processed = self._process_batch(options["limit"])
-            if options["once"]:
-                self.stdout.write(self.style.SUCCESS(f"Processed {processed} notification job(s)."))
-                return
             if processed == 0:
                 time.sleep(max(options["poll_seconds"], 0.5))
+
+    def _run_once(self, limit):
+        processed = self._process_batch(limit)
+        return {
+            "processed": processed,
+            "pending_count": NotificationJob.objects.filter(status=NotificationJob.Status.PENDING).count(),
+            "failed_count": NotificationJob.objects.filter(status=NotificationJob.Status.FAILED).count(),
+        }
 
     def _process_batch(self, limit: int) -> int:
         processed = 0
