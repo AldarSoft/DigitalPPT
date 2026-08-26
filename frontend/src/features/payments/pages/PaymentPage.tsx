@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { AlertTriangle, ArrowLeft, Building2, Check, CreditCard, ExternalLink, KeyRound, Landmark, LockKeyhole, QrCode, ShieldCheck, WalletCards, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Building2, Check, Clock3, CreditCard, ExternalLink, KeyRound, Landmark, LockKeyhole, QrCode, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -60,6 +60,13 @@ function newIdempotencyKey() {
   return window.crypto.randomUUID()
 }
 
+const paymentOutcomeCopy = {
+  failed: { title: 'The payment was declined.', eyebrow: 'PAYMENT NOT COMPLETED' },
+  cancelled: { title: 'The payment was cancelled.', eyebrow: 'PAYMENT CANCELLED' },
+  expired: { title: 'The payment session expired.', eyebrow: 'PAYMENT SESSION EXPIRED' },
+  refunded: { title: 'The payment was refunded.', eyebrow: 'PAYMENT REFUNDED' },
+} as const
+
 export function PaymentPage() {
   const auth = useAuth()
   const cart = useCart()
@@ -89,6 +96,7 @@ export function PaymentPage() {
     queryKey: ['payment-session', returnedSessionId],
     queryFn: () => api.paymentSession(returnedSessionId),
     enabled: Boolean(returnedSessionId && statusQuery.data?.storefront_enabled),
+    refetchInterval: returnedSessionId ? 10_000 : false,
   })
   const resolvedOrderNumber = requestedOrder || returnedSessionQuery.data?.order_number || ''
   const orderQuery = useQuery({
@@ -200,6 +208,8 @@ export function PaymentPage() {
   })
 
   const activeSession: PaymentAttempt | undefined = confirmSession.data ?? createSession.data ?? returnedSessionQuery.data
+  const paymentTarget = activeSession?.order_number ? `order ${activeSession.order_number}` : `license ${activeSession?.renewal_license_number}`
+  const paymentSummary = activeSession ? `${paymentTarget} - ${money(activeSession.amount, activeSession.currency)} ${activeSession.currency}` : ''
   const resetAttempt = () => {
     idempotencyKey.current = newIdempotencyKey()
     createSession.reset()
@@ -209,10 +219,18 @@ export function PaymentPage() {
   if (statusQuery.isLoading || returnedSessionQuery.isLoading || orderQuery.isLoading || renewalSummaryQuery.isLoading) return <main className={tw('route-loading')}>Preparing secure payment...</main>
   if (statusQuery.isError || returnedSessionQuery.isError || orderQuery.isError || renewalSummaryQuery.isError) return <main className={tw('route-message')}><AlertTriangle size={34} /><h1>Payment is unavailable</h1><p>Confirm the backend is running and your account session is active.</p></main>
   if (!statusQuery.data?.storefront_enabled) return <main className={tw('route-message')}><CreditCard size={34} /><h1>Online payment is coming soon</h1><p>Your quote and order history remain available in your account.</p><Link className={tw('primary-action')} to="/account">Return to account</Link></main>
+  if (!order && !renewal && cart.isCatalogRefreshing) return <main className={tw('route-loading')}>Checking saved cart products...</main>
+  if (!order && !renewal && cart.catalogRefreshError) return <main className={tw('route-message')}><AlertTriangle size={34}/><h1>Cart needs to be refreshed</h1><p>We could not verify the current products, prices, or availability in your saved cart.</p><button className={tw('action-button action-button-secondary')} type="button" onClick={cart.retryCatalogRefresh}>Try again</button><Link className={tw('text-link')} to="/cart">Back to cart</Link></main>
 
-  if (activeSession?.status === 'succeeded') return <main className={tw('client-payment-complete')}><span><Check size={28} /></span><p className={tw('eyebrow')}>{activeSession.is_test ? 'TEST PAYMENT CONFIRMED' : 'PAYMENT CONFIRMED'}</p><h1>Payment received.</h1><p>Payment <strong>{activeSession.reference}</strong> was confirmed{activeSession.order_number ? <> for order <strong>{activeSession.order_number}</strong>. The order is now {orderStatusLabel(activeSession.order_status ?? 'completed')}.</> : ' and the selected license was extended.'}</p><div><Link to="/account?tab=orders">View your orders</Link></div></main>
+  if (activeSession?.status === 'succeeded') return <main className={tw('client-payment-complete')}><span><Check size={28} /></span><p className={tw('eyebrow')}>{activeSession.is_test ? 'TEST PAYMENT CONFIRMED' : 'PAYMENT CONFIRMED'}</p><h1>Payment received.</h1><p>Payment <strong>{activeSession.reference}</strong> was confirmed for <strong>{paymentSummary}</strong>{activeSession.order_number ? <>. The order is now {orderStatusLabel(activeSession.order_status ?? 'completed')}.</> : '. The selected license was extended.'}</p><div><Link to="/account?tab=orders">View your orders</Link></div></main>
 
-  if (activeSession && ['failed', 'expired', 'cancelled'].includes(activeSession.status)) return <main className={tw('client-payment-complete client-payment-failed')}><span><X size={28} /></span><p className={tw('eyebrow')}>PAYMENT NOT COMPLETED</p><h1>{activeSession.status === 'expired' ? 'The payment session expired.' : 'The payment was declined.'}</h1><p>{activeSession.failure_message || 'No charge was made. You can return and start a new secure payment session.'}</p><div><button type="button" onClick={resetAttempt}>Try again</button><Link to="/account?tab=orders">View your orders</Link></div></main>
+  if (activeSession?.status === 'pending' && !statusQuery.data.development_simulator) return <main className={tw('client-payment-complete client-payment-pending')}><span><Clock3 size={28} /></span><p className={tw('eyebrow')}>PAYMENT AWAITING CONFIRMATION</p><h1>We are waiting for {activeSession.provider_name}.</h1><p>Payment <strong>{activeSession.reference}</strong> for <strong>{paymentSummary}</strong> is still pending. This page checks for confirmation automatically. Do not place the order again while the provider is processing it.</p><div><button type="button" onClick={() => void returnedSessionQuery.refetch()}><RefreshCw size={16} />Check status</button><Link to="/account?tab=orders">View your orders</Link></div></main>
+
+  if (activeSession && ['failed', 'cancelled', 'expired', 'refunded'].includes(activeSession.status)) {
+    const copy = paymentOutcomeCopy[activeSession.status as keyof typeof paymentOutcomeCopy]
+    const isRefunded = activeSession.status === 'refunded'
+    return <main className={tw(`client-payment-complete ${isRefunded ? 'client-payment-refunded' : 'client-payment-failed'}`)}><span><X size={28} /></span><p className={tw('eyebrow')}>{copy.eyebrow}</p><h1>{copy.title}</h1><p>Payment <strong>{activeSession.reference}</strong> for <strong>{paymentSummary}</strong>. {activeSession.failure_message || (isRefunded ? 'The provider recorded a refund for this payment.' : 'No charge was made. You can return and start a new secure payment session.')}</p><div>{!isRefunded ? <button type="button" onClick={resetAttempt}>Try again</button> : null}<Link to="/account?tab=orders">View your orders</Link></div></main>
+  }
 
   if (activeSession && statusQuery.data.development_simulator) return <main className={tw('client-payment-simulator')}><span><SelectedProviderIcon size={28} /></span><p className={tw('eyebrow')}>DEVELOPMENT PROVIDER SANDBOX</p><h1>{selectedProvider.title}</h1><p>This represents the external provider handoff. Choose a test response to exercise the verified return path. No real payment credentials or funds are involved.</p><dl><div><dt>{activeSession.order_number ? 'Order' : 'License renewal'}</dt><dd>{activeSession.order_number ?? activeSession.renewal_license_number}</dd></div><div><dt>Amount</dt><dd>{money(activeSession.amount, activeSession.currency)}</dd></div><div><dt>Session</dt><dd>{activeSession.reference}</dd></div></dl><div><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'failed' })}>Simulate decline</button><button type="button" disabled={confirmSession.isPending} onClick={() => confirmSession.mutate({ sessionId: activeSession.session_id, outcome: 'succeeded' })}>{confirmSession.isPending ? 'Confirming...' : 'Simulate successful payment'}</button></div></main>
 

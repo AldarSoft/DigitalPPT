@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { toast } from 'sonner'
 import { api } from '../lib/api'
+import { refreshPersistedCartProducts } from '../lib/catalog-validation'
 import { unitPriceForQuantity } from '../lib/pricing'
 import type { CartItem, Product } from '../types'
 import { useAuth } from './AuthContext'
@@ -16,8 +17,11 @@ interface CartContextValue {
   items: CartItem[]
   count: number
   subtotal: number
+  isCatalogRefreshing: boolean
+  catalogRefreshError: boolean
   isLicenseCalculating: boolean
   licenseCalculationError: boolean
+  retryCatalogRefresh: () => void
   add: (product: Product, quantity?: number) => void
   setQuantity: (productId: number, quantity: number) => void
   remove: (productId: number) => void
@@ -47,6 +51,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const [storedProductsRefreshed, setStoredProductsRefreshed] = useState(
     () => manualItems.length === 0,
   )
+  const [catalogRefreshError, setCatalogRefreshError] = useState(false)
   const [licenseCalculation, setLicenseCalculation] = useState<LicenseCalculation>({
     signature: '',
     automaticItems: [],
@@ -76,30 +81,16 @@ export function CartProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (storedProductsRefreshed) return
 
-    const storedProducts = manualItems.map((item) => item.product)
-    if (!storedProducts.length) return
-
     let active = true
-    Promise.all(
-      storedProducts.map(async (product) => {
-        try {
-          return await api.product(product.slug)
-        } catch {
-          return null
-        }
-      }),
-    ).then((products) => {
+    refreshPersistedCartProducts(manualItems, api.product).then(({ productsById, unavailableProductIds }) => {
       if (!active) return
-      const refreshedById = new Map(
-        products.filter((product): product is Product => product !== null)
-          .map((product) => [product.id, product]),
-      )
-      if (refreshedById.size) {
+      if (!unavailableProductIds.length) {
         setManualItems((current) => current.map((item) => {
-          const product = refreshedById.get(item.product.id)
+          const product = productsById.get(item.product.id)
           return product ? { ...item, product } : item
         }))
       }
+      setCatalogRefreshError(unavailableProductIds.length > 0)
       setStoredProductsRefreshed(true)
     })
 
@@ -162,8 +153,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
       (total, item) => total + unitPriceForQuantity(item.product, item.quantity) * item.quantity,
       0,
     ),
+    isCatalogRefreshing: !storedProductsRefreshed,
+    catalogRefreshError,
     isLicenseCalculating,
     licenseCalculationError,
+    retryCatalogRefresh() {
+      setCatalogRefreshError(false)
+      setStoredProductsRefreshed(false)
+    },
     add(product, quantity = 1) {
       if (product.is_stock_tracked !== false && product.inventory_quantity < 1) {
         toast.error(`${product.name} is currently out of stock`)
@@ -187,6 +184,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         }
         return [...current, { product, quantity: safeQuantity }]
       })
+      if (!catalogRefreshError) setStoredProductsRefreshed(true)
       toast.success(`${product.name} added to cart`)
     },
     setQuantity(productId, quantity) {
@@ -205,12 +203,19 @@ export function CartProvider({ children }: { children: ReactNode }) {
       )
     },
     remove(productId) {
+      const removesLastManualItem = manualItems.filter((item) => item.product.id !== productId).length === 0
       setManualItems((current) => current.filter((item) => item.product.id !== productId))
+      if (removesLastManualItem) {
+        setCatalogRefreshError(false)
+        setStoredProductsRefreshed(true)
+      }
     },
     clear() {
       setManualItems([])
+      setCatalogRefreshError(false)
+      setStoredProductsRefreshed(true)
     },
-  }), [isLicenseCalculating, items, licenseCalculationError])
+  }), [catalogRefreshError, isLicenseCalculating, items, licenseCalculationError, manualItems, storedProductsRefreshed])
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>
 }

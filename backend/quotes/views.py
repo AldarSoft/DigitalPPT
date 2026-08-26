@@ -1,4 +1,3 @@
-from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
@@ -6,6 +5,7 @@ from rest_framework.response import Response
 
 from quotes.models import QuoteRequest
 from quotes.serializers import (
+    QuoteClaimSerializer,
     QuoteMessageCreateSerializer,
     QuoteInvoiceSerializer,
     QuoteRequestCreateSerializer,
@@ -35,7 +35,7 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
             return [AllowAny()]
         if self.action in {"partial_update", "update", "destroy"}:
             return [IsAdminUser()]
-        if self.action in {"messages", "cancel"}:
+        if self.action in {"messages", "cancel", "claim"}:
             return [IsAuthenticated()]
         if self.action == "invoice":
             return [IsAdminUser()]
@@ -66,15 +66,15 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         if not user or not user.is_authenticated:
             return queryset.none()
 
-        return queryset.filter(
-            Q(user=user) | Q(requester_email__iexact=user.email)
-        ).distinct()
+        return queryset.filter(user=user)
 
     def get_serializer_class(self):
         if self.action == "create":
             return QuoteRequestCreateSerializer
         if self.action in {"partial_update", "update"}:
             return QuoteRequestStatusSerializer
+        if self.action == "claim":
+            return QuoteClaimSerializer
         return QuoteRequestSerializer
 
     def create(self, request, *args, **kwargs):
@@ -97,6 +97,18 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
             quote_request,
             context=self.get_serializer_context(),
         ).data)
+
+    @action(detail=True, methods=["post"])
+    def claim(self, request, quote_number=None):
+        quote_request = self.queryset.filter(quote_number=quote_number).first()
+        if not quote_request:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = self.get_serializer(
+            data=request.data,
+            context={**self.get_serializer_context(), "quote_request": quote_request},
+        )
+        serializer.is_valid(raise_exception=True)
+        return self._serialize(serializer.save())
 
     @action(detail=True, methods=["post"])
     def messages(self, request, quote_number=None):

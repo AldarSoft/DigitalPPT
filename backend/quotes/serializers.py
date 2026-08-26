@@ -134,11 +134,36 @@ class QuoteRequestCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Add at least one product.")
         return value
 
+    def validate(self, attrs):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if (
+            user
+            and user.is_authenticated
+            and not user.is_staff
+            and attrs["requester_email"].lower() != user.email.lower()
+        ):
+            raise serializers.ValidationError({
+                "requester_email": "Use the email address on your signed-in account."
+            })
+        return attrs
+
     def create(self, validated_data):
         request = self.context.get("request")
         return QuoteService.create_quote_request(
             validated_data=validated_data,
             user=getattr(request, "user", None),
+        )
+
+
+class QuoteClaimSerializer(serializers.Serializer):
+    token = serializers.CharField(trim_whitespace=True)
+
+    def save(self, **kwargs):
+        return QuoteService.claim_guest_quote(
+            quote_request=self.context["quote_request"],
+            user=self.context["request"].user,
+            token=self.validated_data["token"],
         )
 
 

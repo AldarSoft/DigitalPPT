@@ -4,9 +4,9 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, BadgeCheck, Check, CreditCard, Headphones, MapPin, MessageSquare, Package, Plus, Radio, RadioTower, ShieldCheck, Truck } from 'lucide-react'
 import { useCart } from '../contexts/CartContext'
 import { api, mediaUrl, unwrap } from '../lib/api'
-import { fallbackProducts } from '../lib/fallback-data'
 import { tw } from '../lib/tailwind-styles'
-import type { Banner, Product as ApiProduct, SiteSettings } from '../types'
+import { toast } from 'sonner'
+import type { Banner, SiteSettings } from '../types'
 
 const FleetVisualization = lazy(() => import('../components/FleetVisualization'));
 
@@ -357,24 +357,9 @@ export function HomePage() {
     const settingsQuery = useQuery({ queryKey: ['site-settings'], queryFn: api.siteSettings });
     const banner = bannersQuery.data ? unwrap(bannersQuery.data).find((item) => item.is_active) : undefined;
     const addToCart = (product: Product) => {
-        const fallbackProduct = fallbackProducts.find((item) => item.name.includes(product.name) || item.sku === product.name) ?? {
-            ...fallbackProducts[0],
-            id: product.id,
-            name: product.name,
-            slug: product.name.toLowerCase().replaceAll(/[^a-z0-9]+/g, '-'),
-            sku: product.name,
-            price: product.price.toFixed(2),
-            current_price: product.price.toFixed(2),
-            images: [{
-                image_url: product.image,
-                alt_text: product.name,
-                is_primary: true,
-                sort_order: 0,
-            }],
-        } satisfies ApiProduct;
-        api.product(fallbackProduct.slug)
+        api.product(product.slug)
             .then((liveProduct) => cart.add(liveProduct))
-            .catch(() => cart.add(fallbackProduct));
+            .catch(() => toast.error('This product could not be verified. Please try again.'));
     };
     return (<main>
       <Hero banner={banner} settings={settingsQuery.data} />

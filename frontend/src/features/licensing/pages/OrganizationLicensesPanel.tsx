@@ -7,7 +7,7 @@ import { ApiError, api } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
 import { LicenseStatusBadge } from '../components/LicenseStatusBadge'
 import { licensingKeys } from '../queryKeys'
-import type { ClientLicenseDetail } from '../types'
+import type { ClientLicenseDetail, LicenseStatus } from '../types'
 
 export function OrganizationLicensesPanel({ organizationId, workspaceLoading, workspaceError, onWorkspaceRetry }: { organizationId: number | null; workspaceLoading: boolean; workspaceError: unknown; onWorkspaceRetry: () => void }) {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -172,14 +172,16 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Please try again.'
 }
 
-function StatusFeedback({ status, remainingDays }: { status: 'pending_payment' | 'active' | 'expiring_soon' | 'expired' | 'cancelled'; remainingDays: number | null }) {
-  const feedback = {
+function StatusFeedback({ status, remainingDays }: { status: LicenseStatus; remainingDays: number | null }) {
+  const feedbackByStatus: Record<LicenseStatus, { tone: string; text: string }> = {
+    draft: { tone: 'bg-surface-muted text-muted', text: 'This license is a draft and is not active yet.' },
     active: { tone: 'bg-success-soft text-success', text: remainingDays === null ? 'License is active.' : `License is active with ${remainingDays} days remaining.` },
     expiring_soon: { tone: 'bg-warning-soft text-warning', text: remainingDays === null || remainingDays > 60 ? 'This license is marked for renewal. You can extend it now.' : `Renewal is due in ${remainingDays} days.` },
     pending_payment: { tone: 'bg-brand-soft text-brand', text: 'License activation is waiting for payment confirmation.' },
     expired: { tone: 'bg-danger-soft text-danger', text: 'This license has expired. Extend it to renew the subscription.' },
     cancelled: { tone: 'bg-surface-muted text-muted', text: 'This license is cancelled.' },
-  }[status]
+  }
+  const feedback = feedbackByStatus[status]
   return <p className={`mt-5 rounded-control px-3 py-2.5 text-sm font-semibold ${feedback.tone}`}>{feedback.text}</p>
 }
 

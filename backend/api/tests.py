@@ -2,26 +2,30 @@ import json
 import tempfile
 from uuid import uuid4
 from decimal import Decimal
+from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
-from django.core import mail
+from django.core import mail, signing
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
+from django.utils import timezone
 from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from products.models import Category, Product, ProductImage, ProductSpecification
 from quotes.models import QuoteRequest
+from quotes.claims import make_guest_quote_claim_token
 from orders.models import Order
 from payments.models import PaymentAttempt, PaymentProvider
 from common.integrations.power_automate import send_power_automate_event
 from core.models import NotificationJob, Promotion, UserNotification
 from licensing.services import OrganizationService
+from users.services import AccountSetupService
 
 
 class ActiveApiPermissionTests(APITestCase):
@@ -140,6 +144,91 @@ class ActiveApiPermissionTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(mail.outbox), 1)
+
+    def test_admin_created_account_can_set_its_password_once(self):
+        user = AccountSetupService.create_user(
+            email="setup-client@example.com",
+            first_name="Setup",
+            last_name="Client",
+        )
+        self.assertFalse(user.has_usable_password())
+
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        token = default_token_generator.make_token(user)
+        payload = {
+            "uid": uid,
+            "token": token,
+            "new_password": "NewStrongPass456!",
+            "confirm_password": "NewStrongPass456!",
+        }
+
+        first_response = self.client.post(
+            "/api/v1/users/auth/password-reset/confirm/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(first_response.status_code, status.HTTP_200_OK)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("NewStrongPass456!"))
+
+        reused_response = self.client.post(
+            "/api/v1/users/auth/password-reset/confirm/",
+            payload,
+            format="json",
+        )
+        self.assertEqual(reused_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @override_settings(PASSWORD_RESET_TIMEOUT=60)
+    def test_password_reset_rejects_an_expired_token(self):
+        issued_at = (timezone.now() - timedelta(minutes=2)).replace(tzinfo=None)
+        with patch.object(default_token_generator, "_now", return_value=issued_at):
+            token = default_token_generator.make_token(self.customer)
+
+        response = self.client.post(
+            "/api/v1/users/auth/password-reset/confirm/",
+            {
+                "uid": urlsafe_base64_encode(force_bytes(self.customer.pk)),
+                "token": token,
+                "new_password": "NewStrongPass456!",
+                "confirm_password": "NewStrongPass456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_password_reset_rejects_an_invalid_token(self):
+        response = self.client.post(
+            "/api/v1/users/auth/password-reset/confirm/",
+            {
+                "uid": urlsafe_base64_encode(force_bytes(self.customer.pk)),
+                "token": "invalid-token",
+                "new_password": "NewStrongPass456!",
+                "confirm_password": "NewStrongPass456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @override_settings(PASSWORD_RESET_TIMEOUT=60)
+    def test_password_reset_rejects_an_expired_token(self):
+        issued_at = (timezone.now() - timedelta(minutes=2)).replace(tzinfo=None)
+        with patch.object(default_token_generator, "_now", return_value=issued_at):
+            token = default_token_generator.make_token(self.customer)
+
+        response = self.client.post(
+            "/api/v1/users/auth/password-reset/confirm/",
+            {
+                "uid": urlsafe_base64_encode(force_bytes(self.customer.pk)),
+                "token": token,
+                "new_password": "NewStrongPass456!",
+                "confirm_password": "NewStrongPass456!",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_customer_direct_checkout_uses_server_price(self):
         payload = self.order_payload()
@@ -300,6 +389,10 @@ class ActiveApiPermissionTests(APITestCase):
             staff_message.body,
         )
         self.assertEqual(staff_message.reply_to, ["customer@example.com"])
+        customer_message = next(
+            message for message in mail.outbox if message.to == ["customer@example.com"]
+        )
+        self.assertIn("/auth/claim-quote?quote=", customer_message.body)
         event_sender.assert_called_once()
         event_name, event_data = event_sender.call_args.args
         self.assertEqual(event_name, "quote.created")
@@ -326,7 +419,14 @@ class ActiveApiPermissionTests(APITestCase):
             "admin_message": "Valid while stock lasts.",
         }
         self.client.force_authenticate(self.customer)
+        claim_response = self.client.post(
+            f"{quote_url}claim/",
+            {"token": make_guest_quote_claim_token(quote)},
+            format="json",
+        )
+        self.assertEqual(claim_response.status_code, status.HTTP_200_OK)
         hidden_draft = self.client.get(quote_url)
+        self.assertEqual(hidden_draft.status_code, status.HTTP_200_OK)
         self.assertIsNone(hidden_draft.data["quoted_total"])
         self.assertIsNone(hidden_draft.data["items"][0]["quoted_unit_price"])
 
@@ -730,17 +830,104 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(request.get_header("X-webhook-secret"), "test-secret")
         self.assertEqual(mocked_urlopen.call_args.kwargs["timeout"], 7)
 
-    def test_customer_only_sees_own_email_quotes(self):
+    def test_registered_email_cannot_read_unclaimed_guest_quotes(self):
         QuoteRequest.objects.create(
-            requester_company_name="Other Co",
-            requester_contact_person="Other User",
-            requester_email="other@example.com",
+            requester_company_name="Example Co",
+            requester_contact_person="Test Customer",
+            requester_email=self.customer.email,
             requester_phone="+1 555 111 2222",
         )
         self.client.force_authenticate(self.customer)
         response = self.client.get("/api/v1/quotes/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["count"], 0)
+
+    def test_guest_quote_claim_link_attaches_quote_and_matching_order(self):
+        quote_request = QuoteRequest.objects.create(
+            requester_company_name="Example Co",
+            requester_contact_person="Test Customer",
+            requester_email=self.customer.email,
+            requester_phone="+1 555 111 2222",
+        )
+        order = Order.objects.create(
+            user=self.admin,
+            quote_request=quote_request,
+            source=Order.Source.QUOTE,
+            customer_first_name="Test",
+            customer_last_name="Customer",
+            customer_email=self.customer.email,
+            customer_phone="+1 555 111 2222",
+            shipping_address="",
+            shipping_city="",
+            shipping_country="",
+        )
+        token = make_guest_quote_claim_token(quote_request)
+
+        self.client.force_authenticate(self.customer)
+        response = self.client.post(
+            f"/api/v1/quotes/{quote_request.quote_number}/claim/",
+            {"token": token},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        quote_request.refresh_from_db()
+        order.refresh_from_db()
+        self.assertEqual(quote_request.user, self.customer)
+        self.assertEqual(order.user, self.customer)
+        self.assertEqual(self.client.get("/api/v1/quotes/").data["count"], 1)
+
+    def test_guest_quote_claim_rejects_a_different_account(self):
+        User = get_user_model()
+        intruder = User.objects.create_user(
+            username="intruder@example.com",
+            email="intruder@example.com",
+            password="StrongPass123!",
+        )
+        quote_request = QuoteRequest.objects.create(
+            requester_company_name="Example Co",
+            requester_contact_person="Test Customer",
+            requester_email=self.customer.email,
+            requester_phone="+1 555 111 2222",
+        )
+
+        self.client.force_authenticate(intruder)
+        response = self.client.post(
+            f"/api/v1/quotes/{quote_request.quote_number}/claim/",
+            {"token": make_guest_quote_claim_token(quote_request)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        quote_request.refresh_from_db()
+        self.assertIsNone(quote_request.user)
+
+    @patch("quotes.claims.signing.loads", side_effect=signing.SignatureExpired("expired"))
+    def test_guest_quote_claim_rejects_an_expired_link(self, _loads):
+        quote_request = QuoteRequest.objects.create(
+            requester_company_name="Example Co",
+            requester_contact_person="Test Customer",
+            requester_email=self.customer.email,
+            requester_phone="+1 555 111 2222",
+        )
+        self.client.force_authenticate(self.customer)
+
+        response = self.client.post(
+            f"/api/v1/quotes/{quote_request.quote_number}/claim/",
+            {"token": "expired"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_signed_in_customer_quote_is_available_without_a_claim_link(self):
+        self.client.force_authenticate(self.customer)
+        response = self.client.post("/api/v1/quotes/", self.quote_payload(), format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        quote_request = QuoteRequest.objects.get(quote_number=response.data["quote_number"])
+        self.assertEqual(quote_request.user, self.customer)
+        self.assertEqual(self.client.get("/api/v1/quotes/").data["count"], 1)
 
     def test_staff_can_update_structured_homepage_content(self):
         self.client.force_authenticate(self.admin)

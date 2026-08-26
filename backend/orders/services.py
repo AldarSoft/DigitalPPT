@@ -6,12 +6,140 @@ from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Sum
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from orders.models import Order, OrderItem
+from orders.models import InventoryReservation, Order, OrderItem
 from products.models import Product
 
 logger = logging.getLogger(__name__)
+
+
+class InventoryReservationService:
+    @staticmethod
+    def reserved_quantities(*, product_ids):
+        rows = (
+            InventoryReservation.objects.filter(
+                product_id__in=product_ids,
+                status=InventoryReservation.Status.RESERVED,
+            )
+            .values("product_id")
+            .annotate(quantity=Sum("quantity"))
+        )
+        return {row["product_id"]: row["quantity"] for row in rows}
+
+    @staticmethod
+    def item_quantities(*, order):
+        quantities = {}
+        for item in order.items.all():
+            if item.product_id and item.product.is_stock_tracked:
+                quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
+        return quantities
+
+    @staticmethod
+    def available_quantity(*, product, reserved_quantity=0):
+        return max(0, product.inventory_quantity - reserved_quantity)
+
+    @staticmethod
+    def reserve_for_order(*, order):
+        if order.stock_deducted:
+            return []
+
+        items = list(
+            OrderItem.objects.select_for_update()
+            .select_related("product")
+            .filter(order=order)
+        )
+        physical_items = [item for item in items if item.product_id and item.product.is_stock_tracked]
+        if not physical_items:
+            return []
+
+        product_ids = {item.product_id for item in physical_items}
+        products = Product.objects.select_for_update().in_bulk(product_ids)
+        existing = {
+            reservation.order_item_id: reservation
+            for reservation in InventoryReservation.objects.select_for_update().filter(
+                order_item_id__in=[item.pk for item in physical_items]
+            )
+        }
+        pending_items = [item for item in physical_items if item.pk not in existing]
+        if not pending_items:
+            return list(existing.values())
+
+        reserved = InventoryReservationService.reserved_quantities(product_ids=product_ids)
+        required = {}
+        for item in pending_items:
+            required[item.product_id] = required.get(item.product_id, 0) + item.quantity
+
+        stock_errors = {}
+        for product_id, quantity in required.items():
+            product = products.get(product_id)
+            available = InventoryReservationService.available_quantity(
+                product=product,
+                reserved_quantity=reserved.get(product_id, 0),
+            ) if product else 0
+            if available < quantity:
+                stock_errors[str(product_id)] = (
+                    f"Only {available} units are available to reserve; {quantity} requested."
+                )
+        if stock_errors:
+            raise ValidationError({"inventory": stock_errors})
+
+        created = InventoryReservation.objects.bulk_create([
+            InventoryReservation(order_item=item, product=products[item.product_id], quantity=item.quantity)
+            for item in pending_items
+        ])
+        return [*existing.values(), *created]
+
+    @staticmethod
+    def consume_for_order(*, order):
+        reservations = list(
+            InventoryReservation.objects.select_for_update()
+            .select_related("product")
+            .filter(
+                order_item__order=order,
+                status=InventoryReservation.Status.RESERVED,
+            )
+        )
+        if not reservations:
+            return False
+
+        quantities = {}
+        for reservation in reservations:
+            quantities[reservation.product_id] = quantities.get(reservation.product_id, 0) + reservation.quantity
+        products = Product.objects.select_for_update().in_bulk(quantities)
+        stock_errors = {}
+        for product_id, quantity in quantities.items():
+            product = products.get(product_id)
+            available = product.inventory_quantity if product else 0
+            if available < quantity:
+                stock_errors[str(product_id)] = f"Only {available} units remain on hand; {quantity} required."
+        if stock_errors:
+            raise ValidationError({"inventory": stock_errors})
+
+        for product_id, quantity in quantities.items():
+            product = products[product_id]
+            product.inventory_quantity -= quantity
+            product.save(update_fields=["inventory_quantity", "updated_at"])
+        InventoryReservation.objects.filter(pk__in=[reservation.pk for reservation in reservations]).update(
+            status=InventoryReservation.Status.CONSUMED,
+            consumed_at=timezone.now(),
+            updated_at=timezone.now(),
+        )
+        return True
+
+    @staticmethod
+    def release_for_order(*, order, reason):
+        return InventoryReservation.objects.filter(
+            order_item__order=order,
+            status=InventoryReservation.Status.RESERVED,
+        ).update(
+            status=InventoryReservation.Status.RELEASED,
+            released_at=timezone.now(),
+            release_reason=reason[:255],
+            updated_at=timezone.now(),
+        )
 
 
 class OrderService:
@@ -145,14 +273,19 @@ class OrderService:
 
         subtotal = Decimal("0.00")
         prepared_items = []
+        reserved_quantities = InventoryReservationService.reserved_quantities(product_ids=product_ids)
         inventory_errors = {}
         for requested_product, quantity in normalized_items:
             product = products.get(requested_product.pk)
             if not product:
                 raise ValidationError({"items": "A product is no longer available."})
-            if product.is_stock_tracked and product.inventory_quantity < quantity:
+            available = InventoryReservationService.available_quantity(
+                product=product,
+                reserved_quantity=reserved_quantities.get(product.pk, 0),
+            )
+            if product.is_stock_tracked and available < quantity:
                 inventory_errors[str(product.pk)] = (
-                    f"Only {product.inventory_quantity} units are available."
+                    f"Only {available} units are available."
                 )
                 continue
             unit_price = product.price_for_quantity(quantity)
@@ -207,15 +340,17 @@ class OrderService:
         )
         if is_digital_only:
             return Order.Status.COMPLETED
-        if order.source == Order.Source.QUOTE or (
-            order.source == Order.Source.ADMIN and order.created_by_id
-        ):
-            return Order.Status.SCHEDULED
-        return Order.Status.PROCESSING
+        return Order.Status.SCHEDULED
 
     @staticmethod
     @transaction.atomic
-    def update_status(*, order, new_status, exclude_pending_payment_attempt_id=None):
+    def update_status(
+        *,
+        order,
+        new_status,
+        exclude_pending_payment_attempt_id=None,
+        allow_paid_cancellation=False,
+    ):
         locked_order = (
             Order.objects.select_for_update()
             .prefetch_related("items__product")
@@ -229,7 +364,7 @@ class OrderService:
         if new_status == Order.Status.CANCELLED:
             from payments.models import PaymentAttempt
 
-            if PaymentAttempt.objects.filter(
+            if not allow_paid_cancellation and PaymentAttempt.objects.filter(
                 order=locked_order,
                 status=PaymentAttempt.Status.SUCCEEDED,
             ).exists():
@@ -241,12 +376,7 @@ class OrderService:
                 {"status": f"Cannot change order from {locked_order.status} to {new_status}."}
             )
 
-        item_quantities = {}
-        for item in locked_order.items.all():
-            if item.product_id and item.product.is_stock_tracked:
-                item_quantities[item.product_id] = (
-                    item_quantities.get(item.product_id, 0) + item.quantity
-                )
+        item_quantities = InventoryReservationService.item_quantities(order=locked_order)
 
         should_deduct = (
             new_status in {Order.Status.PROCESSING, Order.Status.COMPLETED}
@@ -257,22 +387,26 @@ class OrderService:
         )
 
         if should_deduct and item_quantities:
-            products = Product.objects.select_for_update().in_bulk(item_quantities)
-            stock_errors = {}
-            for product_id, quantity in item_quantities.items():
-                product = products.get(product_id)
-                if not product or product.inventory_quantity < quantity:
-                    available = product.inventory_quantity if product else 0
-                    stock_errors[str(product_id)] = (
-                        f"Only {available} units are available; {quantity} requested."
-                    )
-            if stock_errors:
-                raise ValidationError({"inventory": stock_errors})
+            reservation_consumed = InventoryReservationService.consume_for_order(order=locked_order)
+            if not reservation_consumed:
+                # Legacy and unpaid staff workflows have no reservation. They
+                # retain the existing guarded stock-deduction behavior.
+                products = Product.objects.select_for_update().in_bulk(item_quantities)
+                stock_errors = {}
+                for product_id, quantity in item_quantities.items():
+                    product = products.get(product_id)
+                    if not product or product.inventory_quantity < quantity:
+                        available = product.inventory_quantity if product else 0
+                        stock_errors[str(product_id)] = (
+                            f"Only {available} units are available; {quantity} requested."
+                        )
+                if stock_errors:
+                    raise ValidationError({"inventory": stock_errors})
 
-            for product_id, quantity in item_quantities.items():
-                product = products[product_id]
-                product.inventory_quantity -= quantity
-                product.save(update_fields=["inventory_quantity", "updated_at"])
+                for product_id, quantity in item_quantities.items():
+                    product = products[product_id]
+                    product.inventory_quantity -= quantity
+                    product.save(update_fields=["inventory_quantity", "updated_at"])
             locked_order.stock_deducted = True
 
         if should_restore and item_quantities:
@@ -283,6 +417,12 @@ class OrderService:
                     product.inventory_quantity += quantity
                     product.save(update_fields=["inventory_quantity", "updated_at"])
             locked_order.stock_deducted = False
+
+        if new_status == Order.Status.CANCELLED and not locked_order.stock_deducted:
+            InventoryReservationService.release_for_order(
+                order=locked_order,
+                reason="Order cancelled before fulfillment.",
+            )
 
         locked_order.status = new_status
         locked_order.save(update_fields=["status", "stock_deducted", "updated_at"])

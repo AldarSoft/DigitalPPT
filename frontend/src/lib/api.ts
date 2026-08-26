@@ -1,4 +1,5 @@
 import type { Banner, BillingDetails, CartCapacityResponse, Category, NotificationInbox, Order, Paginated, PaymentAttempt, PaymentProvider, PaymentProviderCode, PaymentStatus, Product, Promotion, QuoteRequest, SiteSettings, StorefrontPaymentStatus, User, UserNotification } from '../types'
+import { createRefreshCoordinator } from './session-refresh'
 import type {
   AdminLicenseEvent,
   AdminLicenseEventListResponse,
@@ -23,15 +24,12 @@ import type {
   OrganizationSettings,
 } from '../features/licensing/types'
 
-const localApiHost =
-  typeof window !== 'undefined' &&
-  ['localhost', '127.0.0.1'].includes(window.location.hostname)
-    ? window.location.hostname
-    : '127.0.0.1'
-
-export const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ?? `http://${localApiHost}:8000/api/v1`
-export const API_ORIGIN = new URL(API_BASE).origin
+const configuredApiBase = import.meta.env.VITE_API_BASE_URL?.trim()
+export const API_BASE = (configuredApiBase || '/api/v1').replace(/\/$/, '')
+export const API_ORIGIN = new URL(
+  API_BASE,
+  typeof window === 'undefined' ? 'http://localhost' : window.location.origin,
+).origin
 
 let accessToken: string | null = null
 
@@ -61,6 +59,27 @@ export function setAccessToken(token: string | null) {
   accessToken = token
 }
 
+const refreshAccessToken = createRefreshCoordinator(async () => {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE}/users/auth/refresh/`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+  } catch {
+    throw new ApiError(0, { detail: 'Cannot connect to the API server.' })
+  }
+
+  const data = await response.json().catch(() => null)
+  if (!response.ok || !data || typeof data !== 'object' || !('access' in data)) {
+    throw new ApiError(response.status, data)
+  }
+
+  const token = String(data.access)
+  setAccessToken(token)
+  return token
+})
+
 export function mediaUrl(value?: string) {
   if (!value) return '/images/radio-510.png'
   if (value.startsWith('/images/')) return value
@@ -89,16 +108,12 @@ async function request<T>(
   }
 
   if (response.status === 401 && accessToken && retry) {
-    const refreshed = await fetch(`${API_BASE}/users/auth/refresh/`, {
-      method: 'POST',
-      credentials: 'include',
-    })
-    if (refreshed.ok) {
-      const payload = (await refreshed.json()) as { access: string }
-      setAccessToken(payload.access)
+    try {
+      await refreshAccessToken()
       return request<T>(path, init, false)
+    } catch {
+      setAccessToken(null)
     }
-    setAccessToken(null)
   }
 
   const data = response.status === 204 ? null : await response.json().catch(() => null)
@@ -213,8 +228,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  refresh: () =>
-    request<{ access: string }>('/users/auth/refresh/', { method: 'POST' }, false),
+  refresh: async () => ({ access: await refreshAccessToken() }),
   me: () => request<User>('/users/auth/me/'),
   updateMe: (data: unknown) =>
     request<User>('/users/auth/me/', { method: 'PATCH', body: JSON.stringify(data) }),
@@ -232,6 +246,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
+  confirmPasswordReset: (data: {
+    uid: string
+    token: string
+    new_password: string
+    confirm_password: string
+  }) => request<{ detail: string }>('/users/auth/password-reset/confirm/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
   orders: (query = '') =>
     request<Paginated<Order> | Order[]>(`/orders/${query ? `?${query}` : ''}`),
   checkout: (data: unknown) =>
@@ -294,6 +317,11 @@ export const api = {
   quote: (quoteNumber: string) => request<QuoteRequest>(`/quotes/${quoteNumber}/`),
   createQuote: (data: unknown) =>
     request<QuoteRequest>('/quotes/', { method: 'POST', body: JSON.stringify(data) }),
+  claimQuote: (quoteNumber: string, token: string) =>
+    request<QuoteRequest>(`/quotes/${encodeURIComponent(quoteNumber)}/claim/`, {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
   updateQuote: (quoteNumber: string, data: { status: QuoteRequest['status'] }) =>
     request<QuoteRequest>(`/quotes/${quoteNumber}/`, {
       method: 'PATCH',

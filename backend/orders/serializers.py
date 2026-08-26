@@ -44,7 +44,15 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return image.image_url if image else ""
 
     def get_available_stock(self, obj) -> int | None:
-        return obj.product.inventory_quantity if obj.product else None
+        if not obj.product:
+            return None
+        from orders.services import InventoryReservationService
+
+        reserved = InventoryReservationService.reserved_quantities(product_ids=[obj.product_id])
+        return InventoryReservationService.available_quantity(
+            product=obj.product,
+            reserved_quantity=reserved.get(obj.product_id, 0),
+        )
 
     def get_licensing_role(self, obj) -> str | None:
         return obj.product.licensing_role if obj.product else None
@@ -249,15 +257,6 @@ class CheckoutSerializer(serializers.ModelSerializer):
     def validate_items(self, value):
         if not value:
             raise serializers.ValidationError("Add at least one product.")
-        inventory_errors = {}
-        for item in value:
-            product = item["product"]
-            if product.is_stock_tracked and product.inventory_quantity < item["quantity"]:
-                inventory_errors[str(product.pk)] = (
-                    f"Only {product.inventory_quantity} units are available."
-                )
-        if inventory_errors:
-            raise serializers.ValidationError(inventory_errors)
         return value
 
     def create(self, validated_data):

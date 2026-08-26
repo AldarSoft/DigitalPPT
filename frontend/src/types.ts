@@ -55,6 +55,8 @@ export interface Product {
   bulk_unit_price: string | null
   current_price: string
   inventory_quantity: number
+  on_hand_inventory_quantity?: number
+  reserved_inventory_quantity?: number
   licensing_role: 'standard' | 'licensed_product' | 'license_product'
   required_license_product: LicenseProductSummary | null
   license_capacity: number | null
@@ -331,6 +333,7 @@ export interface PaymentProvider {
   is_enabled: boolean
   test_mode: boolean
   api_connected: boolean
+  integration_state: 'disabled' | 'development_simulator' | 'development_unavailable' | 'credentials_missing' | 'adapter_not_implemented' | 'ready'
   sort_order: number
 }
 

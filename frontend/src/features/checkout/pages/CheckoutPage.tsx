@@ -63,6 +63,8 @@ export function CheckoutPage() {
   })
 
   if (!cart.items.length && !completedQuote) return <Navigate to="/cart" replace />
+  if (!completedQuote && cart.isCatalogRefreshing) return <main className={tw('route-loading')}>Checking saved cart products...</main>
+  if (!completedQuote && cart.catalogRefreshError) return <main className={tw('route-message')}><FileText size={34}/><h1>Cart needs to be refreshed</h1><p>We could not verify the current products, prices, or availability in your saved cart.</p><button className={tw('action-button action-button-secondary')} type="button" onClick={cart.retryCatalogRefresh}>Try again</button><Link className={tw('text-link')} to="/cart">Back to cart</Link></main>
 
   if (completedQuote) {
     return (

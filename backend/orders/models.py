@@ -159,3 +159,47 @@ class OrderItem(TimeStampedModel):
 
     def __str__(self):
         return f"{self.order} - {self.product_name}"
+
+
+class InventoryReservation(TimeStampedModel):
+    class Status(models.TextChoices):
+        RESERVED = "reserved", "Reserved"
+        CONSUMED = "consumed", "Consumed"
+        RELEASED = "released", "Released"
+
+    order_item = models.OneToOneField(
+        OrderItem,
+        on_delete=models.PROTECT,
+        related_name="inventory_reservation",
+    )
+    product = models.ForeignKey(
+        "products.Product",
+        on_delete=models.PROTECT,
+        related_name="inventory_reservations",
+    )
+    quantity = models.PositiveIntegerField()
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.RESERVED,
+        db_index=True,
+    )
+    consumed_at = models.DateTimeField(null=True, blank=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    release_reason = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(fields=["product", "status"]),
+            models.Index(fields=["status", "created_at"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name="orders_inventory_reservation_positive_quantity",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.product} x {self.quantity} for {self.order_item.order}"

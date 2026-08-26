@@ -18,6 +18,15 @@ const providerDetails = {
   bank_transfer: { icon: Landmark, description: 'Bank transfer will use manual instructions and reconciliation.' },
 } as const
 
+const providerStateLabel = {
+  disabled: 'Disabled',
+  development_simulator: 'Development simulator',
+  development_unavailable: 'Development simulator unavailable',
+  credentials_missing: 'Credentials missing',
+  adapter_not_implemented: 'Bank adapter not implemented',
+  ready: 'Ready for live processing',
+} as const
+
 function money(value: number | string, currency: string) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency }).format(Number(value))
 }
@@ -27,6 +36,7 @@ export function AdminPaymentsPage() {
   const [orderNumber, setOrderNumber] = useState('')
   const [provider, setProvider] = useState<PaymentProviderCode>('stripe')
   const [outcome, setOutcome] = useState<PaymentAttempt['status']>('succeeded')
+  const [attemptSearch, setAttemptSearch] = useState('')
   const statusQuery = useQuery({ queryKey: ['payment-status'], queryFn: api.paymentStatus })
   const attemptsQuery = useQuery({
     queryKey: ['payment-attempts'],
@@ -43,7 +53,20 @@ export function AdminPaymentsPage() {
   const enabledProviders = providers.filter((item) => item.is_enabled)
   const selectedOrder = orders.find((order) => order.order_number === orderNumber)
   const successful = attempts.filter((attempt) => attempt.status === 'succeeded').length
-  const connected = providers.filter((item) => item.api_connected).length
+  const configured = providers.filter((item) => item.api_connected).length
+  const ready = providers.filter((item) => item.integration_state === 'ready').length
+  const visibleAttempts = attempts.filter((attempt) => {
+    const query = attemptSearch.trim().toLowerCase()
+    if (!query) return true
+    return [
+      attempt.reference,
+      attempt.order_number,
+      attempt.renewal_license_number,
+      attempt.provider_name,
+      attempt.external_reference,
+      attempt.status,
+    ].some((value) => value?.toLowerCase().includes(query))
+  })
 
   const toggleProvider = useMutation({
     mutationFn: ({ id, is_enabled }: { id: number; is_enabled: boolean }) => api.updatePaymentProvider(id, { is_enabled }),
@@ -79,14 +102,15 @@ export function AdminPaymentsPage() {
 
       <div className={tw('payment-alert')}>
         <ShieldCheck size={20} />
-        <div><strong>Development payment environment</strong><p>Direct purchases create their own orders before provider handoff. Quote requests remain separate until a customer accepts a priced quote.</p></div>
+        <div><strong>{statusQuery.data?.live_processing_available ? 'Live provider processing is enabled' : 'No live provider is enabled'}</strong><p>{statusQuery.data?.live_processing_available ? 'Provider callbacks, reconciliation, and payment attempts should be monitored here.' : 'The development simulator can be used for testing. Credentials alone do not enable a bank provider.'}</p></div>
       </div>
 
       <section className={tw('admin-stats')}>
         <Metric label="Providers" value={String(providers.length)} icon={CreditCard} />
-        <Metric label="API connected" value={String(connected)} icon={ShieldCheck} />
+        <Metric label="Credentials configured" value={String(configured)} icon={ShieldCheck} />
+        <Metric label="Live ready" value={String(ready)} icon={CircleDollarSign} />
         <Metric label="Test attempts" value={String(attempts.length)} icon={FlaskConical} />
-        <Metric label="Test successes" value={String(successful)} icon={CircleDollarSign} />
+        <Metric label="Successful attempts" value={String(successful)} icon={CircleDollarSign} />
       </section>
 
       <section className={tw('payment-provider-grid')} aria-label="Payment providers">
@@ -94,9 +118,9 @@ export function AdminPaymentsPage() {
           const detail = providerDetails[item.code]
           const Icon = detail.icon
           return <article className={tw('payment-provider-card')} key={item.id}>
-            <header><span><Icon size={19} /></span><div><h2>{item.display_name}</h2><p>{item.api_connected ? 'API configuration detected' : 'API not connected'}</p></div></header>
+            <header><span><Icon size={19} /></span><div><h2>{item.display_name}</h2><p>{providerStateLabel[item.integration_state]}</p></div></header>
             <p>{detail.description}</p>
-            <footer><span>{item.test_mode ? 'TEST MODE' : 'LIVE MODE'}</span><button className={tw(`payment-toggle ${item.is_enabled ? 'active' : ''}`)} type="button" role="switch" aria-checked={item.is_enabled} aria-label={`${item.is_enabled ? 'Disable' : 'Enable'} ${item.display_name} for testing`} disabled={toggleProvider.isPending} onClick={() => toggleProvider.mutate({ id: item.id, is_enabled: !item.is_enabled })} /></footer>
+            <footer><span>{item.test_mode ? 'TEST MODE' : item.integration_state === 'ready' ? 'LIVE READY' : 'NOT LIVE'}</span><button className={tw(`payment-toggle ${item.is_enabled ? 'active' : ''}`)} type="button" role="switch" aria-checked={item.is_enabled} aria-label={`${item.is_enabled ? 'Disable' : 'Enable'} ${item.display_name}`} disabled={toggleProvider.isPending} onClick={() => toggleProvider.mutate({ id: item.id, is_enabled: !item.is_enabled })} /></footer>
           </article>
         })}
       </section>
@@ -117,11 +141,11 @@ export function AdminPaymentsPage() {
         </form>
 
         <div className={tw('admin-panel')}>
-          <div className={tw('payment-table-head')}><h2>Recent attempts</h2><span>TEST DATA ONLY</span></div>
+          <div className={tw('payment-table-head')}><div><h2>Recent attempts</h2><input aria-label="Search payment attempts" placeholder="Search payment or order" value={attemptSearch} onChange={(event) => setAttemptSearch(event.target.value)} /></div><span>{statusQuery.data?.live_processing_available ? 'MONITOR PROVIDER RESULTS' : 'TEST DATA ONLY'}</span></div>
           <div className={tw('admin-table-wrap')}>
-            <table className={tw('admin-table admin-table-compact')}><thead><tr><th>Reference</th><th>Order</th><th>Provider</th><th>Amount</th><th>Status</th><th>Created</th></tr></thead><tbody>
-              {attempts.map((attempt) => <tr key={attempt.id}><td><strong>{attempt.reference}</strong></td><td>{attempt.order_number}</td><td>{attempt.provider_name}</td><td>{money(attempt.amount, attempt.currency)}</td><td><span className={tw(`status status-${paymentStatusKey(attempt.status)}`)}>{paymentStatusLabel(attempt.status)}</span></td><td>{new Date(attempt.created_at).toLocaleString()}</td></tr>)}
-              {!attempts.length ? <tr><td colSpan={6}>No test payment attempts yet.</td></tr> : null}
+            <table className={tw('admin-table admin-table-compact')}><thead><tr><th>Reference</th><th>Order</th><th>Provider</th><th>Amount</th><th>Status</th><th>Provider reference</th><th>Updated</th></tr></thead><tbody>
+              {visibleAttempts.map((attempt) => <tr key={attempt.id}><td><strong>{attempt.reference}</strong></td><td>{attempt.order_number ?? attempt.renewal_license_number ?? 'License renewal'}</td><td>{attempt.provider_name}</td><td>{money(attempt.amount, attempt.currency)}</td><td><span className={tw(`status status-${paymentStatusKey(attempt.status)}`)}>{paymentStatusLabel(attempt.status)}</span></td><td>{attempt.external_reference || 'Awaiting provider'}</td><td>{attempt.paid_at ? new Date(attempt.paid_at).toLocaleString() : new Date(attempt.created_at).toLocaleString()}</td></tr>)}
+              {!visibleAttempts.length ? <tr><td colSpan={7}>{attempts.length ? 'No payment attempts match this search.' : 'No payment attempts yet.'}</td></tr> : null}
             </tbody></table>
           </div>
         </div>

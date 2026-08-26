@@ -2,11 +2,11 @@ import { tw } from "../../../lib/tailwind-styles";
 import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowUpRight, BatteryCharging, CreditCard, Info, LockKeyhole, MapPinned, MessageCircle, Minus, PackageCheck, Plus, ShieldCheck, ShoppingBag, Truck, UsersRound, } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, BatteryCharging, CreditCard, Info, LockKeyhole, MapPinned, MessageCircle, Minus, PackageCheck, Plus, ShieldCheck, ShoppingBag, Truck, UsersRound, } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCart } from '../../../contexts/CartContext';
 import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api';
-import { fallbackProducts } from '../../../lib/fallback-data';
+import { productRequestState } from '../../../lib/catalog-request-state';
 import { unitPriceForQuantity } from '../../../lib/pricing';
 import type { Product } from '../../../types';
 import { orderedProductImages, primaryProductImage } from '../../../lib/product-images';
@@ -89,20 +89,32 @@ export function ProductDetailsPage() {
         queryFn: () => api.product(slug),
         retry: (failureCount, error) => !(error instanceof ApiError && error.status === 404) && failureCount < 2,
     });
-    const fallbackProduct = fallbackProducts.find((item) => item.slug === slug);
-    const resolvedProduct = productQuery.data ?? fallbackProduct;
-    const product = resolvedProduct ?? fallbackProducts[0];
-    const [galleryState, setGalleryState] = useState({ productId: product.id, index: 0 });
-    const relatedQuery = useQuery({
-        queryKey: ['related-products', product.category.slug],
-        queryFn: () => api.products(`category=${encodeURIComponent(product.category.slug)}`),
-        enabled: Boolean(resolvedProduct),
+    const product = productQuery.data;
+    const requestState = productRequestState({
+        hasData: Boolean(product),
+        isLoading: productQuery.isLoading,
+        status: productQuery.error instanceof ApiError ? productQuery.error.status : undefined,
     });
+    const [galleryState, setGalleryState] = useState({ productId: 0, index: 0 });
+    const relatedQuery = useQuery({
+        queryKey: ['related-products', product?.category.slug],
+        queryFn: () => api.products(`category=${encodeURIComponent(product?.category.slug ?? '')}`),
+        enabled: Boolean(product),
+    });
+    const [quantityState, setQuantityState] = useState({ productId: 0, value: 1 });
+    if (!product) {
+        const notFound = requestState === 'not-found';
+        return (<main className={tw("route-message shell")}>
+          {notFound ? <MessageCircle size={32}/> : <AlertTriangle size={32}/>}
+          <h1>{requestState === 'loading' ? 'Loading product...' : notFound ? 'Product not found' : 'Product temporarily unavailable'}</h1>
+          <p>{requestState === 'loading' ? 'Fetching the latest product information.' : notFound ? 'This product may have been removed or its address may have changed.' : 'We could not verify this product, price, or availability. Please try again.'}</p>
+          {requestState === 'loading' ? null : notFound ? <Link className={tw("primary-action")} to="/shop">Browse the catalog <ArrowUpRight size={17}/></Link> : <button className={tw("primary-action")} type="button" onClick={() => void productQuery.refetch()}>Try again</button>}
+        </main>);
+    }
     const isLicenseProduct = product.licensing_role === 'license_product';
     const availableStock = Math.max(0, product.inventory_quantity);
     const maximumQuantity = product.is_stock_tracked === false ? 1000 : availableStock;
     const isOutOfStock = product.is_stock_tracked !== false && availableStock === 0;
-    const [quantityState, setQuantityState] = useState({ productId: product.id, value: 1 });
     const quantity = quantityState.productId === product.id
         ? (isOutOfStock ? 0 : Math.min(Math.max(quantityState.value, 1), maximumQuantity))
         : (isOutOfStock ? 0 : 1);
@@ -129,7 +141,7 @@ export function ProductDetailsPage() {
         : 0;
     const isRadio = product.category.slug.includes('radio') && !product.category.slug.includes('holster');
     const quoteHref = `mailto:sales@digitalptt.com?subject=${encodeURIComponent(`Quote request: ${product.name}`)}&body=${encodeURIComponent(`Hello, I would like a quote for ${product.name} (SKU: ${product.sku}).`)}`;
-    const relatedProducts = (relatedQuery.data ? unwrap(relatedQuery.data) : fallbackProducts)
+    const relatedProducts = (relatedQuery.data ? unwrap(relatedQuery.data) : [])
         .filter((item) => item.category.slug === product.category.slug && item.id !== product.id)
         .slice(0, 3);
     const detailItems = [
@@ -140,14 +152,6 @@ export function ProductDetailsPage() {
         ...product.specifications,
     ];
     const detailRows = Array.from({ length: Math.ceil(detailItems.length / 2) }, (_, index) => detailItems.slice(index * 2, index * 2 + 2));
-    if (!resolvedProduct) {
-        return (<main className={tw("route-message shell")}>
-          <MessageCircle size={32}/>
-          <h1>{productQuery.isLoading ? 'Loading product...' : 'Product not found'}</h1>
-          <p>{productQuery.isLoading ? 'Fetching the latest product information.' : 'This product may have been removed or its address may have changed.'}</p>
-          {productQuery.isLoading ? null : <Link className={tw("primary-action")} to="/shop">Browse the catalog <ArrowUpRight size={17}/></Link>}
-        </main>);
-    }
     return (<main className={tw("product-page")}>
       <nav className={tw("product-breadcrumb")} aria-label="Breadcrumb">
         <div className={tw("shell")}>

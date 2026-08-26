@@ -3,16 +3,19 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from orders.models import Order, OrderItem
+from orders.models import InventoryReservation, Order, OrderItem
 from orders.services import OrderService
 from licensing.services import OrganizationService
 from licensing.models import OrganizationMembership
-from payments.models import PaymentAttempt, PaymentProvider
+from payments.models import PaymentAttempt, PaymentProvider, PaymentProviderEvent
+from payments.providers import VerifiedProviderCallback
+from payments.services import PaymentProviderCallbackService
 from products.models import Category, Product
 from quotes.models import QuoteRequest
 
@@ -54,8 +57,100 @@ class PaymentFoundationTests(APITestCase):
         self.assertEqual(response.data["storefront_enabled"], settings.PAYMENTS_STOREFRONT_ENABLED)
         self.assertFalse(response.data["live_processing_available"])
         self.assertEqual(len(response.data["providers"]), 4)
+        self.assertTrue(all("integration_state" in provider for provider in response.data["providers"]))
 
-    def test_admin_successful_payment_processes_order_and_deducts_inventory(self):
+    def test_live_callback_route_stays_hidden_without_a_registered_adapter(self):
+        PaymentProvider.objects.filter(code="qpay").update(test_mode=False)
+
+        response = self.client.post(
+            "/api/v1/payments/provider-callbacks/qpay/",
+            b"unverified callback",
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_verified_callback_is_idempotent_and_completes_the_matching_attempt(self):
+        provider = PaymentProvider.objects.get(code="stripe")
+        attempt = PaymentAttempt.objects.create(
+            order=self.order,
+            provider=provider,
+            amount=self.order.total,
+            currency="USD",
+            created_by=self.customer,
+        )
+        callback = VerifiedProviderCallback(
+            event_id="provider-event-1",
+            payment_reference=attempt.reference,
+            transaction_id="provider-transaction-1",
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+            amount="680.00",
+            currency="USD",
+        )
+
+        event, created = PaymentProviderCallbackService.process(
+            provider=provider,
+            callback=callback,
+            payload=b'{"event":"paid"}',
+        )
+        repeated, repeated_created = PaymentProviderCallbackService.process(
+            provider=provider,
+            callback=callback,
+            payload=b'{"event":"paid"}',
+        )
+
+        attempt.refresh_from_db()
+        self.order.refresh_from_db()
+        self.assertTrue(created)
+        self.assertFalse(repeated_created)
+        self.assertEqual(event.pk, repeated.pk)
+        self.assertEqual(event.status, PaymentProviderEvent.Status.PROCESSED)
+        self.assertEqual(attempt.status, PaymentAttempt.Status.SUCCEEDED)
+        self.assertEqual(self.order.status, Order.Status.SCHEDULED)
+
+    def test_reconciliation_command_expires_stale_payment_sessions(self):
+        attempt = PaymentAttempt.objects.create(
+            order=self.order,
+            provider=PaymentProvider.objects.get(code="stripe"),
+            amount=self.order.total,
+            expires_at=timezone.now() - timedelta(minutes=1),
+            created_by=self.customer,
+        )
+
+        call_command("reconcile_payments")
+
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, PaymentAttempt.Status.EXPIRED)
+
+    def test_verified_callback_preserves_a_provider_cancellation_status(self):
+        provider = PaymentProvider.objects.get(code="stripe")
+        attempt = PaymentAttempt.objects.create(
+            order=self.order,
+            provider=provider,
+            amount=self.order.total,
+            currency="USD",
+            created_by=self.customer,
+        )
+        callback = VerifiedProviderCallback(
+            event_id="provider-event-cancelled",
+            payment_reference=attempt.reference,
+            transaction_id="provider-transaction-cancelled",
+            outcome=PaymentAttempt.Status.CANCELLED,
+            amount="680.00",
+            currency="USD",
+        )
+
+        event, _ = PaymentProviderCallbackService.process(
+            provider=provider,
+            callback=callback,
+            payload=b'{"event":"cancelled"}',
+        )
+
+        attempt.refresh_from_db()
+        self.assertEqual(event.status, PaymentProviderEvent.Status.PROCESSED)
+        self.assertEqual(attempt.status, PaymentAttempt.Status.CANCELLED)
+
+    def test_admin_successful_payment_schedules_order_and_reserves_inventory(self):
         category = Category.objects.create(name="Payment products")
         product = Product.objects.create(
             category=category,
@@ -87,9 +182,12 @@ class PaymentFoundationTests(APITestCase):
         self.assertEqual(response.data["status"], PaymentAttempt.Status.SUCCEEDED)
         self.order.refresh_from_db()
         product.refresh_from_db()
-        self.assertEqual(self.order.status, Order.Status.PROCESSING)
-        self.assertTrue(self.order.stock_deducted)
-        self.assertEqual(product.inventory_quantity, 3)
+        self.assertEqual(self.order.status, Order.Status.SCHEDULED)
+        self.assertFalse(self.order.stock_deducted)
+        self.assertEqual(product.inventory_quantity, 5)
+        reservation = InventoryReservation.objects.get(order_item__order=self.order)
+        self.assertEqual(reservation.status, InventoryReservation.Status.RESERVED)
+        self.assertEqual(reservation.quantity, 2)
 
     def test_customer_cannot_list_or_simulate_payments(self):
         self.client.force_authenticate(self.customer)
@@ -334,7 +432,7 @@ class PaymentFoundationTests(APITestCase):
         self.assertEqual(response.data["status"], PaymentAttempt.Status.SUCCEEDED)
         self.assertIsNotNone(response.data["paid_at"])
         self.order.refresh_from_db()
-        self.assertEqual(self.order.status, Order.Status.PROCESSING)
+        self.assertEqual(self.order.status, Order.Status.SCHEDULED)
 
     @override_settings(
         DEBUG=True,

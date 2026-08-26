@@ -151,7 +151,7 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             sale_price: product.sale_price ?? '',
             bulk_minimum_quantity: product.bulk_minimum_quantity?.toString() ?? '',
             bulk_unit_price: product.bulk_unit_price ?? '',
-            inventory_quantity: product.inventory_quantity,
+            inventory_quantity: product.on_hand_inventory_quantity ?? product.inventory_quantity,
             licensing_role: product.licensing_role,
             required_license_product_id: product.required_license_product?.id ?? null,
             license_capacity: product.license_capacity?.toString() ?? '',

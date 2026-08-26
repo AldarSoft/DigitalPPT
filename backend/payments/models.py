@@ -100,3 +100,51 @@ class PaymentAttempt(TimeStampedModel):
 
     def __str__(self):
         return self.reference or f"Payment attempt {self.pk}"
+
+
+class PaymentProviderEvent(TimeStampedModel):
+    class Status(models.TextChoices):
+        RECEIVED = "received", "Received"
+        PROCESSED = "processed", "Processed"
+        IGNORED = "ignored", "Ignored"
+        FAILED = "failed", "Failed"
+
+    provider = models.ForeignKey(
+        PaymentProvider,
+        on_delete=models.PROTECT,
+        related_name="events",
+    )
+    event_id = models.CharField(max_length=255)
+    payment_attempt = models.ForeignKey(
+        PaymentAttempt,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="provider_events",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.RECEIVED,
+        db_index=True,
+    )
+    payload_sha256 = models.CharField(max_length=64)
+    provider_transaction_id = models.CharField(max_length=255, blank=True)
+    outcome = models.CharField(max_length=32, blank=True)
+    error_message = models.CharField(max_length=500, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "event_id"],
+                name="payments_provider_event_unique_provider_event",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["provider", "status", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.provider.code}: {self.event_id}"

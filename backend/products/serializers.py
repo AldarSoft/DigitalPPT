@@ -66,6 +66,9 @@ class ProductSerializer(serializers.ModelSerializer):
     images = ProductImageSerializer(many=True, read_only=True)
     specifications = ProductSpecificationSerializer(many=True, read_only=True)
     current_price = serializers.SerializerMethodField()
+    inventory_quantity = serializers.SerializerMethodField()
+    on_hand_inventory_quantity = serializers.IntegerField(source="inventory_quantity", read_only=True)
+    reserved_inventory_quantity = serializers.SerializerMethodField()
     required_license_product = LicenseProductSummarySerializer(read_only=True)
     is_stock_tracked = serializers.BooleanField(read_only=True)
 
@@ -85,6 +88,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "bulk_unit_price",
             "current_price",
             "inventory_quantity",
+            "on_hand_inventory_quantity",
+            "reserved_inventory_quantity",
             "licensing_role",
             "required_license_product",
             "license_capacity",
@@ -102,6 +107,12 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_current_price(self, obj) -> Decimal:
         return obj.current_price
+
+    def get_inventory_quantity(self, obj) -> int:
+        return max(0, getattr(obj, "sellable_inventory_quantity", obj.inventory_quantity))
+
+    def get_reserved_inventory_quantity(self, obj) -> int:
+        return max(0, getattr(obj, "reserved_inventory_quantity", 0))
 
 
 class AdminProductSerializer(ProductSerializer):

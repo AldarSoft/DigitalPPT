@@ -21,7 +21,7 @@ export function CartPage() {
       refetchOnMount: 'always',
     });
     if (auth.user?.is_staff) return <Navigate to="/admin" replace />
-    const canContinue = cart.items.length > 0 && !cart.isLicenseCalculating && !cart.licenseCalculationError;
+    const canContinue = cart.items.length > 0 && !cart.isCatalogRefreshing && !cart.catalogRefreshError && !cart.isLicenseCalculating && !cart.licenseCalculationError;
     const canPurchase = canContinue && cart.items.every(({ product, quantity }) => product.is_stock_tracked === false || product.inventory_quantity >= quantity);
     const hasOrganization = Boolean(workspacesQuery.data?.organizations.length);
     const organizationReady = !requiresOrganization || Boolean(auth.user && workspacesQuery.isSuccess && hasOrganization);
@@ -30,7 +30,11 @@ export function CartPage() {
     const needsOrganization = requiresOrganization && auth.ready && Boolean(auth.user) && workspacesQuery.isSuccess && !hasOrganization;
     const needsSignIn = requiresOrganization && auth.ready && !auth.user;
     const canStartPayment = canPurchase && organizationReady;
-    const paymentDisabledReason = !organizationReady
+    const paymentDisabledReason = cart.catalogRefreshError
+      ? 'Current catalog details could not be verified. Retry the saved-cart check before continuing.'
+      : cart.isCatalogRefreshing
+      ? 'Checking saved cart products against the current catalog.'
+      : !organizationReady
       ? 'Create an organization before purchasing licenses or licensed products.'
       : canContinue
       ? 'Requested quantity exceeds available stock. Request a quote instead.'
@@ -106,6 +110,8 @@ export function CartPage() {
               <div><dt>Shipping</dt><dd>Calculated later</dd></div>
               <div className={tw("summary-total")}><dt>Estimated total</dt><dd>${cart.subtotal.toFixed(2)}</dd></div>
             </dl>
+            {cart.isCatalogRefreshing ? <p>Checking saved cart products against the current catalog...</p> : null}
+            {cart.catalogRefreshError ? <section className="mb-3 rounded-control border border-danger bg-danger-soft p-3 text-left text-xs text-danger" role="alert"><strong>Saved cart items could not be verified.</strong><p className="mt-1">Products, prices, or availability may have changed. Try again before requesting a quote or payment.</p><button className={tw('action-button action-button-secondary action-button-compact mt-2 w-full')} type="button" onClick={cart.retryCatalogRefresh}>Try again</button></section> : null}
             {cart.isLicenseCalculating ? <p>Calculating required license capacity...</p> : null}
             {cart.licenseCalculationError ? <p role="alert">Required license capacity could not be calculated.</p> : null}
             {organizationCheckPending ? <p>Checking organization access...</p> : null}

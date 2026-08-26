@@ -117,6 +117,10 @@ def _admin_quote_url(quote_request) -> str:
 
 
 def _customer_quote_url(quote_request) -> str:
+    if not quote_request.user_id:
+        from quotes.claims import guest_quote_claim_url
+
+        return guest_quote_claim_url(quote_request)
     base_url = settings.FRONTEND_URL.rstrip("/")
     quote_number = quote(quote_request.quote_number, safe="")
     return f"{base_url}/account?tab=quotes&quote={quote_number}"
@@ -124,12 +128,21 @@ def _customer_quote_url(quote_request) -> str:
 
 def _send_quote_customer_email(payload: dict) -> None:
     quote = _quote_context(payload)
+    quote_url = _customer_quote_url(quote)
+    access_copy = (
+        "Use the secure link below to connect this quote to an account registered with this email address:\n"
+        f"{quote_url}\n\n"
+        if not quote.user_id
+        else "You can review this quote in your account:\n"
+        f"{quote_url}\n\n"
+    )
     text_body = (
         f"Hello {quote.requester_contact_person},\n\n"
         f"We received your quote request {quote.quote_number}.\n"
         "No order has been created yet.\n\n"
         "Requested products:\n"
         f"{_quote_items_text(quote)}\n\n"
+        f"{access_copy}"
         "Our sales team will contact you with confirmed pricing and delivery details.\n\n"
         f"{settings.SITE_NAME}"
     )
@@ -139,6 +152,7 @@ def _send_quote_customer_email(payload: dict) -> None:
         "No order has been created yet.</p>"
         "<p><strong>Requested products</strong></p>"
         f"{_quote_items_html(quote)}"
+        f'<p><a href="{escape(quote_url, quote=True)}">Open your quote securely</a></p>'
         "<p>Our sales team will contact you with confirmed pricing and delivery details.</p>"
         f"<p>{escape(settings.SITE_NAME)}</p>"
     )
@@ -190,7 +204,8 @@ def _send_quote_webhook(payload: dict) -> None:
 
 def _send_quote_ready_email(payload: dict) -> None:
     quote_request = _quote_context(payload)
-    account_url = f"{settings.FRONTEND_URL.rstrip('/')}/account?tab=quotes"
+    quote_url = _customer_quote_url(quote_request)
+    access_label = "Connect your quote securely" if not quote_request.user_id else "Download and pay invoice"
     priced_items = "\n".join(
         f"- {item.product_name} x {item.quantity}: {item.quoted_line_total}"
         for item in quote_request.items.all()
@@ -201,7 +216,7 @@ def _send_quote_ready_email(payload: dict) -> None:
         f"{priced_items}\n"
         f"Shipping: {quote_request.quoted_shipping}\n"
         f"Total: {quote_request.quoted_total}\n\n"
-        f"Download and pay the invoice in your account: {account_url}\n\n"
+        f"{access_label}: {quote_url}\n\n"
         f"{settings.SITE_NAME}"
     )
     html_items = "".join(
@@ -215,7 +230,7 @@ def _send_quote_ready_email(payload: dict) -> None:
         f"<ul>{html_items}</ul>"
         f"<p><strong>Shipping:</strong> {quote_request.quoted_shipping}<br>"
         f"<strong>Total:</strong> {quote_request.quoted_total}</p>"
-        f'<p><a href="{escape(account_url, quote=True)}">Download and pay invoice</a></p>'
+        f'<p><a href="{escape(quote_url, quote=True)}">{escape(access_label)}</a></p>'
         f"<p>{escape(settings.SITE_NAME)}</p>"
     )
     attachments = []
@@ -444,9 +459,10 @@ def publish_quote_status_changed(
     quote_number = quote_request.quote_number
 
     _create_portal_notifications(
-        recipients=_customer_recipients(
-            user_id=quote_request.user_id,
-            email=quote_request.requester_email,
+        recipients=(
+            get_user_model().objects.filter(pk=quote_request.user_id, is_active=True)
+            if quote_request.user_id
+            else []
         ),
         title=f"Quote {quote_number} is {status_label}",
         message=f"Your quote changed from {previous_label} to {status_label}.",

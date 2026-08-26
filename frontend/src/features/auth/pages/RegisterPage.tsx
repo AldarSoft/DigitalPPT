@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { Link, Navigate, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
 import { ApiError } from '../../../lib/api'
@@ -22,10 +22,12 @@ type RegistrationForm = z.infer<typeof registrationSchema>;
 export function RegisterPage() {
     const auth = useAuth();
     const navigate = useNavigate();
+    const location = useLocation();
     const [submitting, setSubmitting] = useState(false);
     const { register, handleSubmit, setError, formState: { errors } } = useForm<RegistrationForm>();
+    const from = (location.state as { from?: string } | null)?.from;
     if (auth.user)
-        return <Navigate to="/account" replace/>;
+        return <Navigate to={from || "/account"} replace/>;
     const submit = handleSubmit(async (values) => {
         const parsed = registrationSchema.safeParse(values);
         if (!parsed.success) {
@@ -36,7 +38,7 @@ export function RegisterPage() {
         try {
             await auth.register(parsed.data);
             toast.success('Your account is ready');
-            navigate('/account');
+            navigate(from || '/account', { replace: true });
         }
         catch (error) {
             toast.error(error instanceof ApiError ? error.message : 'Could not create account');
@@ -60,7 +62,7 @@ export function RegisterPage() {
           <label>Confirm password<input type="password" {...register('confirm_password')}/><small>{errors.confirm_password?.message}</small></label>
         </div>
         <button className={tw("auth-submit")} type="submit" disabled={submitting}>{submitting ? 'Creating account...' : 'Create account'}</button>
-        <p className={tw("auth-switch")}>Already have an account? <Link to="/login">Sign in</Link></p>
+        <p className={tw("auth-switch")}>Already have an account? <Link to="/login" state={location.state}>Sign in</Link></p>
       </form>
     </main>);
 }

@@ -13,7 +13,7 @@ export function AppProviders({ children }: PropsWithChildren) {
         <AuthProvider>
           <CartProvider>{children}</CartProvider>
         </AuthProvider>
-        <Toaster position="top-right" richColors closeButton />
+        <Toaster position="bottom-right" richColors closeButton />
       </QueryClientProvider>
     </BrowserRouter>
   )

@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from django.core.files.base import ContentFile
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -32,7 +33,9 @@ class QuoteService:
     @transaction.atomic
     def create_quote_request(*, validated_data, user=None):
         items_data = validated_data.pop("items")
-        authenticated_user = user if user and user.is_authenticated else None
+        authenticated_user = (
+            user if user and user.is_authenticated and not user.is_staff else None
+        )
         quote_request = QuoteRequest.objects.create(user=authenticated_user, **validated_data)
 
         QuoteRequestItem.objects.bulk_create(
@@ -60,6 +63,33 @@ class QuoteService:
             len(items_data),
         )
         return QuoteService._queryset().get(pk=quote_request.pk)
+
+    @staticmethod
+    @transaction.atomic
+    def claim_guest_quote(*, quote_request, user, token: str):
+        from orders.models import Order
+        from quotes.claims import validate_guest_quote_claim_token
+
+        locked = QuoteService._queryset().select_for_update().get(pk=quote_request.pk)
+        validate_guest_quote_claim_token(quote_request=locked, token=token)
+
+        if locked.requester_email.lower() != user.email.lower():
+            raise ValidationError({"token": "Sign in with the email address that received this quote link."})
+        if locked.user_id and locked.user_id != user.pk:
+            raise ValidationError({"token": "This quote has already been claimed by another account."})
+
+        if locked.user_id != user.pk:
+            locked.user = user
+            locked.save(update_fields=["user", "updated_at"])
+
+            # A legacy guest quote may already have been invoiced by staff. Only
+            # transfer its linked order when the order itself names this claimant.
+            Order.objects.filter(
+                quote_request=locked,
+                customer_email__iexact=user.email,
+            ).filter(Q(user__isnull=True) | Q(user__is_staff=True)).update(user=user)
+
+        return QuoteService._queryset().get(pk=locked.pk)
 
     @staticmethod
     @transaction.atomic
@@ -145,10 +175,11 @@ class QuoteService:
             title = f"New message on {locked.quote_number}"
             url = f"/admin/quotes?quote={locked.quote_number}"
         else:
-            recipient_ids = User.objects.filter(
-                email__iexact=locked.requester_email,
-                is_active=True,
-            ).exclude(pk=user.pk).values_list("pk", flat=True)
+            recipient_ids = (
+                [locked.user_id]
+                if locked.user_id and locked.user_id != user.pk
+                else []
+            )
             title = f"Quote update: {locked.quote_number}"
             url = f"/account?tab=quotes&quote={locked.quote_number}"
 

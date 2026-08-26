@@ -19,8 +19,8 @@ from payments.serializers import (
     PaymentSimulationSerializer,
     StorefrontPaymentProviderSerializer,
 )
-from payments.services import PaymentService
-from payments.providers import provider_is_available, provider_is_configured
+from payments.providers import get_provider_adapter, provider_is_available
+from payments.services import PaymentProviderCallbackService, PaymentService
 
 
 class PaymentStatusView(APIView):
@@ -33,7 +33,7 @@ class PaymentStatusView(APIView):
     def get(self, request):
         providers = PaymentProvider.objects.all()
         live_processing_available = any(
-            provider.is_enabled and not provider.test_mode and provider_is_configured(provider.code)
+            provider.is_enabled and not provider.test_mode and provider_is_available(provider)
             for provider in providers
         )
         return Response({
@@ -177,6 +177,40 @@ class PaymentSessionSimulateView(PaymentSessionDetailView):
             outcome=input_serializer.validated_data["outcome"],
         )
         return Response(PaymentAttemptSerializer(attempt, context={"request": request}).data)
+
+
+class PaymentProviderCallbackView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Receive a verified live-payment provider callback",
+        request=OpenApiTypes.BINARY,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, provider_code):
+        provider = get_object_or_404(
+            PaymentProvider.objects.filter(code=provider_code, is_enabled=True, test_mode=False)
+        )
+        adapter = get_provider_adapter(provider.code)
+        if not adapter or not provider_is_available(provider):
+            raise NotFound()
+        body = request.body
+        if len(body) > settings.PAYMENT_PROVIDER_CALLBACK_MAX_BODY_BYTES:
+            return Response(
+                {"detail": "Callback body is too large."},
+                status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+        callback = adapter.verify_callback(headers=request.headers, body=body)
+        event, created = PaymentProviderCallbackService.process(
+            provider=provider,
+            callback=callback,
+            payload=body,
+        )
+        return Response(
+            {"event_id": event.event_id, "status": event.status, "duplicate": not created},
+            status=status.HTTP_200_OK,
+        )
 
 
 class PaymentProviderViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):

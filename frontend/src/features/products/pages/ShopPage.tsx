@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { Search, SlidersHorizontal } from 'lucide-react'
+import { AlertTriangle, Search, SlidersHorizontal } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { SelectControl } from '../../../components/SelectControl'
 import { Pagination } from '../../../components/Pagination'
 import { ProductCard } from '../components/ProductCard'
 import { api, unwrap } from '../../../lib/api'
-import { fallbackCategories, fallbackProducts } from '../../../lib/fallback-data'
+import { catalogRequestState } from '../../../lib/catalog-request-state'
 import { tw } from '../../../lib/tailwind-styles'
 
 const PAGE_SIZE = 12
@@ -75,22 +75,16 @@ export function ShopPage() {
             };
         },
     });
-    const categories = categoriesQuery.data ? unwrap(categoriesQuery.data) : fallbackCategories;
+    const categories = categoriesQuery.data ? unwrap(categoriesQuery.data) : [];
     const selectedCategory = categories.find((item) => item.slug === category);
     const showCategoryDropdown = categories.length > 6;
     const rawProducts = useMemo(() => {
-        if (productsQuery.isError)
-            return fallbackProducts;
         return productsQuery.data ? unwrap(productsQuery.data) : [];
-    }, [productsQuery.data, productsQuery.isError]);
+    }, [productsQuery.data]);
     const priceRange = useMemo(() => {
         if (priceBoundsQuery.data)
             return priceBoundsQuery.data;
-        const prices = fallbackProducts.map((product) => Number(product.current_price)).filter((price) => Number.isFinite(price));
-        return {
-            min: prices.length ? Math.min(...prices) : 0,
-            max: prices.length ? Math.max(...prices) : 0,
-        };
+        return { min: 0, max: 0 };
     }, [priceBoundsQuery.data]);
     const parseNumericParam = (value: string | null, fallback: number) => {
         const parsed = Number(value);
@@ -149,9 +143,12 @@ export function ShopPage() {
         }
         return list;
     }, [rawProducts, category, inStock, ordering, priceMin, priceMax, params]);
-    const totalProducts = productsQuery.isError
-        ? products.length
-        : productsQuery.data && !Array.isArray(productsQuery.data)
+    const requestState = catalogRequestState({
+        hasData: Boolean(productsQuery.data),
+        isError: productsQuery.isError,
+        isLoading: productsQuery.isLoading,
+    });
+    const totalProducts = productsQuery.data && !Array.isArray(productsQuery.data)
             ? productsQuery.data.count
             : products.length;
     const setParam = (key: string, value: string, defaultValue?: string) => {
@@ -276,8 +273,10 @@ export function ShopPage() {
           </aside>
 
           <div>
-            {productsQuery.isError ? (<p className={tw("connection-note")}>Showing the built-in development catalog while the Django API is offline.</p>) : null}
-            {products.length ? (<>
+            {requestState === 'unavailable' ? (<div className={tw("empty-state")} role="alert">
+                <AlertTriangle size={30}/><h3>Catalog temporarily unavailable</h3><p>We could not load current products, prices, or availability. Please try again.</p>
+                <button className={tw("primary-action")} type="button" onClick={() => void Promise.all([productsQuery.refetch(), categoriesQuery.refetch(), priceBoundsQuery.refetch()])}>Try again</button>
+              </div>) : requestState === 'loading' ? (<div className={tw("empty-state")}><Search size={30}/><h3>Loading catalog</h3><p>Fetching the latest product availability.</p></div>) : products.length ? (<>
                 <div className={tw("catalog-grid")}>
                   {products.map((product) => <ProductCard product={product} key={product.id}/>)}
                 </div>

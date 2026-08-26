@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.core.files.storage import default_storage
-from django.db.models import DecimalField, IntegerField, OuterRef, Q, Subquery, Sum, Value
+from django.db.models import DecimalField, ExpressionWrapper, F, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from rest_framework import parsers, status, viewsets
 from rest_framework.decorators import action
@@ -15,6 +15,7 @@ from drf_spectacular.utils import extend_schema
 from common.permissions import IsAdminOrReadOnly
 from products.models import Category, Product
 from orders.models import Order, OrderItem
+from orders.models import InventoryReservation
 from products.serializers import (
     CategorySerializer,
     CategoryWriteSerializer,
@@ -106,12 +107,30 @@ class ProductViewSet(viewsets.ModelViewSet):
     lookup_field = "slug"
 
     def get_queryset(self):
+        reserved_quantity = (
+            InventoryReservation.objects.filter(
+                product_id=OuterRef("pk"),
+                status=InventoryReservation.Status.RESERVED,
+            )
+            .values("product_id")
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
+        )
         queryset = Product.objects.with_catalog_relations().annotate(
             current_price_value=Coalesce(
                 "sale_price",
                 "price",
                 output_field=DecimalField(max_digits=12, decimal_places=2),
-            )
+            ),
+            reserved_inventory_quantity=Coalesce(
+                Subquery(reserved_quantity, output_field=IntegerField()),
+                Value(0),
+            ),
+        ).annotate(
+            sellable_inventory_quantity=ExpressionWrapper(
+                F("inventory_quantity") - F("reserved_inventory_quantity"),
+                output_field=IntegerField(),
+            ),
         )
         if not (self.request.user and self.request.user.is_staff):
             queryset = queryset.public()
@@ -131,21 +150,21 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(is_featured=True)
         if stock in {"true", "1"}:
             queryset = queryset.filter(
-                Q(inventory_quantity__gt=0)
+                Q(sellable_inventory_quantity__gt=0)
                 | Q(licensing_role=Product.LicensingRole.LICENSE_PRODUCT)
             )
         if stock == "out":
             queryset = queryset.filter(
-                inventory_quantity=0,
+                sellable_inventory_quantity__lte=0,
                 licensing_role__in=(
                     Product.LicensingRole.STANDARD,
                     Product.LicensingRole.LICENSED_PRODUCT,
                 ),
             )
         if stock == "low":
-            queryset = queryset.filter(inventory_quantity__gt=0, inventory_quantity__lte=5)
+            queryset = queryset.filter(sellable_inventory_quantity__gt=0, sellable_inventory_quantity__lte=5)
         if stock == "healthy":
-            queryset = queryset.filter(inventory_quantity__gt=5)
+            queryset = queryset.filter(sellable_inventory_quantity__gt=5)
         if best_sellers in {"true", "1"}:
             sold_quantity = (
                 OrderItem.objects.filter(

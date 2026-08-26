@@ -6,20 +6,29 @@ from rest_framework import serializers
 
 from orders.models import Order
 from payments.models import PaymentAttempt, PaymentProvider
-from payments.providers import provider_is_configured
+from payments.providers import provider_integration_state, provider_is_configured
 from payments.services import PaymentService
 
 
 class PaymentProviderSerializer(serializers.ModelSerializer):
     api_connected = serializers.SerializerMethodField()
+    integration_state = serializers.SerializerMethodField()
 
     class Meta:
         model = PaymentProvider
-        fields = ("id", "code", "display_name", "is_enabled", "test_mode", "api_connected", "sort_order")
-        read_only_fields = ("id", "code", "test_mode", "api_connected", "sort_order")
+        fields = (
+            "id", "code", "display_name", "is_enabled", "test_mode",
+            "api_connected", "integration_state", "sort_order",
+        )
+        read_only_fields = (
+            "id", "code", "test_mode", "api_connected", "integration_state", "sort_order",
+        )
 
     def get_api_connected(self, obj) -> bool:
         return provider_is_configured(obj.code)
+
+    def get_integration_state(self, obj) -> str:
+        return provider_integration_state(obj)
 
 
 class StorefrontPaymentProviderSerializer(serializers.ModelSerializer):

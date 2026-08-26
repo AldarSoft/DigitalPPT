@@ -18,7 +18,7 @@ from licensing.services import (
     LicenseLifecycleService,
     OrganizationService,
 )
-from orders.models import Order, OrderItem
+from orders.models import InventoryReservation, Order, OrderItem
 from payments.models import PaymentAttempt, PaymentProvider
 from payments.services import PaymentService
 from products.models import Category, Product
@@ -158,8 +158,11 @@ class PaymentSuccessProvisioningTests(TestCase):
         license = License.objects.get(source_order_item=license_item)
         allocation = ProductLicenseAllocation.objects.get(order_item=radio_item)
         self.assertEqual(result.status, PaymentAttempt.Status.SUCCEEDED)
-        self.assertEqual(order.status, Order.Status.PROCESSING)
-        self.assertEqual(self.radio.inventory_quantity, 3)
+        self.assertEqual(order.status, Order.Status.SCHEDULED)
+        self.assertEqual(self.radio.inventory_quantity, 5)
+        reservation = InventoryReservation.objects.get(order_item=radio_item)
+        self.assertEqual(reservation.status, InventoryReservation.Status.RESERVED)
+        self.assertEqual(reservation.quantity, 2)
         self.assertTrue(
             OrganizationMembership.objects.filter(
                 organization=organization,

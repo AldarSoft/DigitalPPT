@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from django.db import transaction
@@ -9,12 +11,29 @@ from rest_framework.exceptions import ValidationError
 
 from core.models import SiteSetting
 from orders.models import Order
-from orders.services import OrderService
-from payments.models import PaymentAttempt
-from payments.providers import provider_is_available
+from orders.services import InventoryReservationService, OrderService
+from payments.models import PaymentAttempt, PaymentProviderEvent
+from payments.providers import get_provider_adapter, provider_is_available
 
 
 class PaymentService:
+    @staticmethod
+    def attach_provider_checkout(*, attempt):
+        """Persist the provider session created by a registered live adapter."""
+        if attempt.is_test:
+            return attempt
+        adapter = get_provider_adapter(attempt.provider.code)
+        if not adapter:
+            raise ValidationError({"provider": "This payment provider is unavailable."})
+        session = adapter.create_checkout(attempt=attempt)
+        metadata = dict(attempt.metadata or {})
+        metadata["checkout_url"] = session.checkout_url
+        metadata["provider_session"] = session.metadata
+        attempt.external_reference = session.external_reference[:255]
+        attempt.metadata = metadata
+        attempt.save(update_fields=["external_reference", "metadata", "updated_at"])
+        return attempt
+
     @staticmethod
     def can_pay_order(*, user, order):
         if not user or not user.is_authenticated:
@@ -125,6 +144,7 @@ class PaymentService:
             metadata={"source": "storefront", "billing": billing},
             created_by=user,
         )
+        PaymentService.attach_provider_checkout(attempt=attempt)
         return attempt, True
 
     @staticmethod
@@ -183,6 +203,7 @@ class PaymentService:
             },
             created_by=user,
         )
+        PaymentService.attach_provider_checkout(attempt=attempt)
         return attempt, True
 
     @staticmethod
@@ -237,6 +258,50 @@ class PaymentService:
         return locked
 
     @staticmethod
+    def expire_pending_attempts(*, now=None):
+        now = now or timezone.now()
+        return PaymentAttempt.objects.filter(
+            status=PaymentAttempt.Status.PENDING,
+            expires_at__isnull=False,
+            expires_at__lte=now,
+        ).update(
+            status=PaymentAttempt.Status.EXPIRED,
+            failure_message="The checkout session expired.",
+            updated_at=now,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def mark_failed(*, attempt, reason, external_reference=""):
+        return PaymentService.mark_pending_terminal(
+            attempt=attempt,
+            terminal_status=PaymentAttempt.Status.FAILED,
+            reason=reason,
+            external_reference=external_reference,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def mark_pending_terminal(*, attempt, terminal_status, reason, external_reference=""):
+        if terminal_status not in {
+            PaymentAttempt.Status.FAILED,
+            PaymentAttempt.Status.CANCELLED,
+            PaymentAttempt.Status.EXPIRED,
+        }:
+            raise ValidationError({"payment": "Unsupported terminal payment status."})
+        locked = PaymentAttempt.objects.select_for_update().get(pk=attempt.pk)
+        if locked.status != PaymentAttempt.Status.PENDING:
+            return locked
+        locked.status = terminal_status
+        locked.failure_message = reason[:500]
+        if external_reference:
+            locked.external_reference = external_reference[:255]
+        locked.save(
+            update_fields=["status", "failure_message", "external_reference", "updated_at"]
+        )
+        return locked
+
+    @staticmethod
     @transaction.atomic
     def complete_success(*, attempt, actor, external_reference):
         from licensing.services import PaymentSuccessProvisioningService
@@ -254,6 +319,7 @@ class PaymentService:
                 actor=actor,
             )
             locked_order = Order.objects.select_for_update().get(pk=locked.order_id)
+            InventoryReservationService.reserve_for_order(order=locked_order)
             target_status = OrderService.status_after_successful_payment(
                 order=locked_order
             )
@@ -305,6 +371,7 @@ class PaymentService:
                 "updated_at",
             ]
         )
+        InventoryReservationService.reserve_for_order(order=locked_order)
         PaymentSuccessProvisioningService.provision(
             payment_attempt=locked,
             actor=actor,
@@ -321,6 +388,31 @@ class PaymentService:
             reason="Closed after another payment succeeded.",
         )
         locked.refresh_from_db()
+        return locked
+
+    @staticmethod
+    @transaction.atomic
+    def mark_refunded(*, attempt, reason="Refund approved."):
+        """Release an unfulfilled physical reservation after a recorded refund.
+
+        Live-provider refund callbacks will call this method once the provider
+        integration is added. It is deliberately not exposed as a client action.
+        """
+        locked = PaymentAttempt.objects.select_for_update().select_related("order").get(pk=attempt.pk)
+        if locked.status == PaymentAttempt.Status.REFUNDED:
+            return locked
+        if locked.status != PaymentAttempt.Status.SUCCEEDED:
+            raise ValidationError({"payment": "Only successful payments can be refunded."})
+        locked.status = PaymentAttempt.Status.REFUNDED
+        locked.failure_message = reason
+        locked.save(update_fields=["status", "failure_message", "updated_at"])
+        if locked.order_id and locked.order.status in {Order.Status.PENDING, Order.Status.SCHEDULED, Order.Status.PROCESSING}:
+            InventoryReservationService.release_for_order(order=locked.order, reason=reason)
+            OrderService.update_status(
+                order=locked.order,
+                new_status=Order.Status.CANCELLED,
+                allow_paid_cancellation=True,
+            )
         return locked
 
     @staticmethod
@@ -434,14 +526,98 @@ class PaymentService:
             return locked
 
         if outcome == PaymentAttempt.Status.FAILED:
-            locked.status = PaymentAttempt.Status.FAILED
-            locked.failure_message = "Simulated provider decline."
-            locked.external_reference = f"dev_failed_{locked.pk}"
-            locked.save(update_fields=["status", "failure_message", "external_reference", "updated_at"])
-            return locked
+            return PaymentService.mark_failed(
+                attempt=locked,
+                reason="Simulated provider decline.",
+                external_reference=f"dev_failed_{locked.pk}",
+            )
 
         return PaymentService.complete_success(
             attempt=locked,
             actor=user,
             external_reference=f"dev_paid_{locked.pk}",
         )
+
+
+class PaymentProviderCallbackService:
+    """Processes a callback only after an adapter has verified its signature."""
+
+    @staticmethod
+    @transaction.atomic
+    def process(*, provider, callback, payload: bytes):
+        digest = hashlib.sha256(payload).hexdigest()
+        event, created = PaymentProviderEvent.objects.select_for_update().get_or_create(
+            provider=provider,
+            event_id=callback.event_id,
+            defaults={"payload_sha256": digest},
+        )
+        if not created:
+            return event, False
+
+        attempt = PaymentAttempt.objects.select_for_update().filter(
+            provider=provider,
+            reference=callback.payment_reference,
+        ).first()
+        if not attempt:
+            event.status = PaymentProviderEvent.Status.IGNORED
+            event.error_message = "Payment reference was not found."
+            event.processed_at = timezone.now()
+            event.save(update_fields=["status", "error_message", "processed_at", "updated_at"])
+            return event, True
+
+        event.payment_attempt = attempt
+        event.provider_transaction_id = callback.transaction_id[:255]
+        event.outcome = callback.outcome
+        try:
+            received_amount = Decimal(callback.amount)
+        except (InvalidOperation, TypeError):
+            received_amount = None
+        if received_amount != attempt.amount or callback.currency != attempt.currency:
+            event.status = PaymentProviderEvent.Status.FAILED
+            event.error_message = "Provider callback amount or currency did not match the payment attempt."
+            event.processed_at = timezone.now()
+            event.save(update_fields=[
+                "payment_attempt", "provider_transaction_id", "outcome", "status",
+                "error_message", "processed_at", "updated_at",
+            ])
+            return event, True
+
+        if callback.outcome == PaymentAttempt.Status.SUCCEEDED:
+            PaymentService.complete_success(
+                attempt=attempt,
+                actor=None,
+                external_reference=callback.transaction_id,
+            )
+        elif callback.outcome == PaymentAttempt.Status.REFUNDED:
+            PaymentService.mark_refunded(
+                attempt=attempt,
+                reason="Verified provider refund.",
+            )
+        elif callback.outcome in {
+            PaymentAttempt.Status.FAILED,
+            PaymentAttempt.Status.CANCELLED,
+            PaymentAttempt.Status.EXPIRED,
+        }:
+            PaymentService.mark_pending_terminal(
+                attempt=attempt,
+                terminal_status=callback.outcome,
+                reason=f"Verified provider payment {callback.outcome}.",
+                external_reference=callback.transaction_id,
+            )
+        else:
+            event.status = PaymentProviderEvent.Status.IGNORED
+            event.error_message = "Provider callback outcome is not supported."
+            event.processed_at = timezone.now()
+            event.save(update_fields=[
+                "payment_attempt", "provider_transaction_id", "outcome", "status",
+                "error_message", "processed_at", "updated_at",
+            ])
+            return event, True
+
+        event.status = PaymentProviderEvent.Status.PROCESSED
+        event.processed_at = timezone.now()
+        event.save(update_fields=[
+            "payment_attempt", "provider_transaction_id", "outcome", "status",
+            "processed_at", "updated_at",
+        ])
+        return event, True

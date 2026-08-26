@@ -14,6 +14,8 @@ import { AdminQuotesPage } from '../features/admin/pages/AdminQuotesPage'
 import { AdminSiteSettingsPage } from '../features/admin/pages/AdminSiteSettingsPage'
 import { LoginPage } from '../features/auth/pages/LoginPage'
 import { RegisterPage } from '../features/auth/pages/RegisterPage'
+import { ResetPasswordPage } from '../features/auth/pages/ResetPasswordPage'
+import { ClaimQuotePage } from '../features/auth/pages/ClaimQuotePage'
 import { CartPage } from '../features/cart/pages/CartPage'
 import { CheckoutPage } from '../features/checkout/pages/CheckoutPage'
 import { PaymentPage } from '../features/payments/pages/PaymentPage'
@@ -50,8 +52,10 @@ export function AppRouter() {
           <Route path="checkout" element={<CheckoutPage />} />
           <Route path="login" element={<LoginPage />} />
           <Route path="register" element={<RegisterPage />} />
+          <Route path="auth/reset-password" element={<ResetPasswordPage />} />
           <Route path="invite" element={<AcceptOrganizationInvitationPage />} />
           <Route element={<RequireAuth />}>
+            <Route path="auth/claim-quote" element={<ClaimQuotePage />} />
             <Route path="account" element={<AccountPage />} />
             <Route path="payment" element={<PaymentPage />} />
           </Route>

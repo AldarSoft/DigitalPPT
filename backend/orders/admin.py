@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.db.models import Sum
 
-from orders.models import Order, OrderItem
+from orders.models import InventoryReservation, Order, OrderItem
 from orders.services import OrderService
 
 
@@ -96,3 +96,11 @@ class OrderItemAdmin(admin.ModelAdmin):
         order = obj.order
         super().delete_model(request, obj)
         recalculate_order_totals(order)
+
+
+@admin.register(InventoryReservation)
+class InventoryReservationAdmin(admin.ModelAdmin):
+    list_display = ("order_item", "product", "quantity", "status", "created_at", "consumed_at", "released_at")
+    list_filter = ("status", "created_at")
+    search_fields = ("order_item__order__order_number", "product__name", "product__sku")
+    readonly_fields = ("order_item", "product", "quantity", "status", "consumed_at", "released_at", "release_reason", "created_at", "updated_at")

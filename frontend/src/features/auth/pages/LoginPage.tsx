@@ -69,7 +69,7 @@ export function LoginPage() {
           <label>Password<div><LockKeyhole size={19}/><input type={showPassword ? 'text' : 'password'} {...register('password')}/><button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={19}/> : <Eye size={19}/>}</button></div><small>{errors.password?.message}</small></label>
           <button className={tw("forgot-link")} type="button" onClick={() => setForgotOpen(true)}>Forgot password?</button>
           <button className={tw("auth-submit")} type="submit" disabled={submitting}>{submitting ? 'Signing in...' : 'Sign in'}</button>
-          <p className={tw("auth-switch")}>New to Digital PTT? <Link to="/register">Create an account</Link></p>
+          <p className={tw("auth-switch")}>New to Digital PTT? <Link to="/register" state={location.state}>Create an account</Link></p>
         </form>
       </section>
       {forgotOpen ? <ForgotPasswordPage onClose={() => setForgotOpen(false)}/> : null}
