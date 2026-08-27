@@ -15,6 +15,7 @@ from payments.serializers import (
     DevelopmentConfirmationSerializer,
     LicenseRenewalCheckoutSessionCreateSerializer,
     PaymentAttemptSerializer,
+    BankTransferConfirmationSerializer,
     PaymentProviderSerializer,
     PaymentSimulationSerializer,
     StorefrontPaymentProviderSerializer,
@@ -53,14 +54,28 @@ class StorefrontPaymentStatusView(APIView):
     )
     def get(self, request):
         providers = [
-            provider for provider in PaymentProvider.objects.filter(is_enabled=True)
+            provider for provider in PaymentProvider.objects.filter(
+                is_enabled=True,
+                is_customer_available=True,
+            ).exclude(code=PaymentProvider.Code.BANK_TRANSFER)
             if provider_is_available(provider)
         ]
+        from core.models import SiteSetting
+
+        bank_provider_enabled = PaymentProvider.objects.filter(
+            code=PaymentProvider.Code.BANK_TRANSFER,
+            is_enabled=True,
+            is_customer_available=True,
+        ).exists()
+        manual_bank_transfer_enabled = bool(
+            bank_provider_enabled and SiteSetting.get_solo().bank_transfer_is_configured
+        )
         return Response({
             "storefront_enabled": bool(settings.PAYMENTS_STOREFRONT_ENABLED and providers),
             "development_simulator": settings.PAYMENTS_DEVELOPMENT_SIMULATOR,
             "providers": StorefrontPaymentProviderSerializer(providers, many=True).data
             if settings.PAYMENTS_STOREFRONT_ENABLED else [],
+            "manual_bank_transfer_enabled": manual_bank_transfer_enabled,
         })
 
 
@@ -218,6 +233,27 @@ class PaymentProviderViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, vie
     serializer_class = PaymentProviderSerializer
     permission_classes = [IsAdminUser]
     http_method_names = ["get", "patch", "head", "options"]
+
+
+class BankTransferConfirmationView(APIView):
+    permission_classes = [IsAdminUser]
+
+    @extend_schema(
+        summary="Confirm a quote invoice bank transfer after reconciliation",
+        request=BankTransferConfirmationSerializer,
+        responses=PaymentAttemptSerializer,
+    )
+    def post(self, request, order_number):
+        serializer = BankTransferConfirmationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order = get_object_or_404(Order.objects.select_related("quote_request"), order_number=order_number)
+        attempt = PaymentService.confirm_bank_transfer(
+            order=order,
+            actor=request.user,
+            bank_transaction_reference=serializer.validated_data["bank_transaction_reference"],
+            internal_note=serializer.validated_data.get("internal_note", ""),
+        )
+        return Response(PaymentAttemptSerializer(attempt, context={"request": request}).data)
 
 
 class PaymentAttemptViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet):

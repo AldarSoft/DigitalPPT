@@ -151,10 +151,55 @@ def build_invoice_pdf(*, quote_request, site_settings) -> bytes:
             Paragraph(escape(quote_request.admin_message).replace("\n", "<br/>"), body),
             Spacer(1, 6 * mm),
         ])
-    story.append(Paragraph(
-        f"Payment is confirmed through the Digital PTT customer account. "
-        f"Contact {site_settings.support_email or 'support'} with questions.",
-        small,
-    ))
+    # The invoice should only offer a method that is currently enabled for customers.
+    from payments.models import PaymentProvider
+
+    bank_transfer_available = PaymentProvider.objects.filter(
+        code=PaymentProvider.Code.BANK_TRANSFER,
+        is_enabled=True,
+        is_customer_available=True,
+    ).exists()
+    if site_settings.bank_transfer_is_configured and bank_transfer_available:
+        bank_rows = [
+            [Paragraph("<b>Bank transfer payment instructions</b>", body), ""],
+            [Paragraph("Beneficiary", small), Paragraph(escape(site_settings.bank_beneficiary_name), small)],
+            [Paragraph("Bank", small), Paragraph(escape(site_settings.bank_name), small)],
+            [Paragraph("Account number", small), Paragraph(escape(site_settings.bank_account_number), small)],
+        ]
+        if site_settings.bank_iban:
+            bank_rows.append([Paragraph("IBAN", small), Paragraph(escape(site_settings.bank_iban), small)])
+        if site_settings.bank_swift_bic:
+            bank_rows.append([Paragraph("SWIFT / BIC", small), Paragraph(escape(site_settings.bank_swift_bic), small)])
+        bank_rows.append([
+            Paragraph("Required transfer reference", small),
+            Paragraph(f"<b>{escape(quote_request.invoice_number)}</b>", small),
+        ])
+        bank_table = Table(bank_rows, colWidths=[52 * mm, 108 * mm])
+        bank_table.setStyle(TableStyle([
+            ("SPAN", (0, 0), (1, 0)),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef4ff")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#9dbdff")),
+            ("GRID", (0, 1), (-1, -1), 0.25, colors.HexColor("#d8dee9")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        story.extend([bank_table, Spacer(1, 6 * mm)])
+        if site_settings.bank_payment_instructions:
+            story.extend([
+                Paragraph(escape(site_settings.bank_payment_instructions).replace("\n", "<br/>"), small),
+                Spacer(1, 4 * mm),
+            ])
+        closing_copy = (
+            f"Use {quote_request.invoice_number} as the transfer reference. "
+            f"Contact {site_settings.support_email or 'support'} with questions."
+        )
+    else:
+        closing_copy = (
+            f"Payment is confirmed through the Digital PTT customer account. "
+            f"Contact {site_settings.support_email or 'support'} with questions."
+        )
+    story.append(Paragraph(closing_copy, small))
     document.build(story)
     return output.getvalue()

@@ -18,7 +18,7 @@ class PaymentProviderSerializer(serializers.ModelSerializer):
         model = PaymentProvider
         fields = (
             "id", "code", "display_name", "is_enabled", "test_mode",
-            "api_connected", "integration_state", "sort_order",
+            "is_customer_available", "api_connected", "integration_state", "sort_order",
         )
         read_only_fields = (
             "id", "code", "test_mode", "api_connected", "integration_state", "sort_order",
@@ -35,6 +35,16 @@ class StorefrontPaymentProviderSerializer(serializers.ModelSerializer):
     class Meta:
         model = PaymentProvider
         fields = ("code", "display_name", "test_mode", "sort_order")
+
+
+class BankTransferConfirmationSerializer(serializers.Serializer):
+    bank_transaction_reference = serializers.CharField(max_length=255)
+    internal_note = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+
+    def validate_bank_transaction_reference(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Enter the bank transaction reference.")
+        return value.strip()
 
 
 class PaymentAttemptSerializer(serializers.ModelSerializer):
@@ -81,7 +91,9 @@ class CheckoutSessionCreateSerializer(serializers.Serializer):
     order_number = serializers.CharField(max_length=40)
     provider = serializers.SlugRelatedField(
         slug_field="code",
-        queryset=PaymentProvider.objects.filter(is_enabled=True),
+        queryset=PaymentProvider.objects.filter(is_enabled=True, is_customer_available=True).exclude(
+            code=PaymentProvider.Code.BANK_TRANSFER
+        ),
     )
     idempotency_key = serializers.UUIDField()
     billing = BillingDetailsSerializer()
@@ -92,7 +104,9 @@ class LicenseRenewalCheckoutSessionCreateSerializer(serializers.Serializer):
     organization = serializers.IntegerField(required=False, allow_null=True)
     provider = serializers.SlugRelatedField(
         slug_field="code",
-        queryset=PaymentProvider.objects.filter(is_enabled=True),
+        queryset=PaymentProvider.objects.filter(is_enabled=True, is_customer_available=True).exclude(
+            code=PaymentProvider.Code.BANK_TRANSFER
+        ),
     )
     idempotency_key = serializers.UUIDField()
     billing = BillingDetailsSerializer()

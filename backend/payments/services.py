@@ -12,7 +12,7 @@ from rest_framework.exceptions import ValidationError
 from core.models import SiteSetting
 from orders.models import Order
 from orders.services import InventoryReservationService, OrderService
-from payments.models import PaymentAttempt, PaymentProviderEvent
+from payments.models import PaymentAttempt, PaymentProvider, PaymentProviderEvent
 from payments.providers import get_provider_adapter, provider_is_available
 
 
@@ -78,6 +78,53 @@ class PaymentService:
 
     @staticmethod
     @transaction.atomic
+    def confirm_bank_transfer(*, order, actor, bank_transaction_reference, internal_note=""):
+        """Record a staff-verified transfer and run the standard success workflow."""
+        if not actor or not actor.is_staff:
+            raise ValidationError({"detail": "Administrator access is required."})
+
+        locked_order = (
+            Order.objects.select_for_update()
+            .select_related("quote_request")
+            .get(pk=order.pk)
+        )
+        if not locked_order.quote_request_id:
+            raise ValidationError({"order": "Manual bank confirmation is available for quote invoices only."})
+        if locked_order.status != Order.Status.PENDING:
+            raise ValidationError({"order": "Only orders awaiting payment can be confirmed."})
+        if PaymentAttempt.objects.filter(order=locked_order, status=PaymentAttempt.Status.SUCCEEDED).exists():
+            raise ValidationError({"order": "This order is already paid."})
+
+        provider = PaymentProvider.objects.filter(
+            code=PaymentProvider.Code.BANK_TRANSFER,
+            is_enabled=True,
+        ).first()
+        if not provider:
+            raise ValidationError({"provider": "Enable the Bank transfer provider before confirming payment."})
+
+        attempt = PaymentAttempt.objects.create(
+            order=locked_order,
+            provider=provider,
+            amount=locked_order.total,
+            currency=SiteSetting.get_solo().default_currency or "USD",
+            status=PaymentAttempt.Status.PENDING,
+            is_test=False,
+            external_reference=bank_transaction_reference,
+            metadata={
+                "source": "manual_bank_transfer",
+                "internal_note": internal_note.strip(),
+                "confirmed_by_user_id": actor.pk,
+            },
+            created_by=actor,
+        )
+        return PaymentService.complete_success(
+            attempt=attempt,
+            actor=actor,
+            external_reference=bank_transaction_reference,
+        )
+
+    @staticmethod
+    @transaction.atomic
     def start_checkout(*, user, order, provider, idempotency_key, billing):
         existing = (
             PaymentAttempt.objects.select_for_update()
@@ -106,7 +153,11 @@ class PaymentService:
             status=PaymentAttempt.Status.SUCCEEDED,
         ).exists():
             raise ValidationError({"order_number": "This order is already paid."})
-        if not provider_is_available(provider):
+        if (
+            provider.code == PaymentProvider.Code.BANK_TRANSFER
+            or not provider.is_customer_available
+            or not provider_is_available(provider)
+        ):
             raise ValidationError({"provider": "This payment provider is unavailable."})
 
         PaymentService.close_pending_attempts(
@@ -174,7 +225,11 @@ class PaymentService:
             organization_id=organization_id,
             lock=True,
         )
-        if not provider_is_available(provider):
+        if (
+            provider.code == PaymentProvider.Code.BANK_TRANSFER
+            or not provider.is_customer_available
+            or not provider_is_available(provider)
+        ):
             raise ValidationError({"provider": "This payment provider is unavailable."})
 
         PaymentAttempt.objects.filter(

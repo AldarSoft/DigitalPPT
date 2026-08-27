@@ -76,6 +76,13 @@ class SiteSetting(TimeStampedModel):
     tax_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     flat_shipping_rate = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     free_shipping_minimum = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    bank_transfer_enabled = models.BooleanField(default=False)
+    bank_beneficiary_name = models.CharField(max_length=255, blank=True)
+    bank_name = models.CharField(max_length=255, blank=True)
+    bank_account_number = models.CharField(max_length=120, blank=True)
+    bank_iban = models.CharField(max_length=64, blank=True)
+    bank_swift_bic = models.CharField(max_length=32, blank=True)
+    bank_payment_instructions = models.TextField(blank=True)
     working_hours = models.CharField(max_length=255, blank=True)
     about_story = models.TextField(blank=True)
     about_mission = models.TextField(blank=True)
@@ -120,6 +127,15 @@ class SiteSetting(TimeStampedModel):
 
     def __str__(self):
         return self.site_name
+
+    @property
+    def bank_transfer_is_configured(self):
+        return bool(
+            self.bank_transfer_enabled
+            and self.bank_beneficiary_name
+            and self.bank_name
+            and self.bank_account_number
+        )
 
 
 class ContactMessage(TimeStampedModel):

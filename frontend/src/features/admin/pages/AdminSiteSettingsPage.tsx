@@ -3,7 +3,7 @@ import { useForm, useWatch } from 'react-hook-form'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Eye, EyeOff, Image, Pencil, Plus, Save, Settings2, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, mediaUrl, unwrap } from '../../../lib/api'
+import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
 import type { Banner, SiteSettings } from '../../../types'
 import { AdminErrorState } from '../components/AdminErrorState'
@@ -112,6 +112,7 @@ function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
   const queryClient = useQueryClient()
   const { register, handleSubmit, reset, control, formState: { isDirty } } = useForm<SiteSettings>({ defaultValues: settings })
   const commerceEnabled = useWatch({ control, name: 'commerce_defaults_enabled' })
+  const bankTransferEnabled = useWatch({ control, name: 'bank_transfer_enabled' })
   const save = useMutation({
     mutationFn: api.updateSiteSettings,
     onSuccess: (value) => {
@@ -119,7 +120,7 @@ function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
       reset(value)
       toast.success('Site settings saved')
     },
-    onError: () => toast.error('Could not save site settings. Check the entered values.'),
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not save site settings. Check the entered values.'),
   })
 
   return (
@@ -133,6 +134,18 @@ function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
           <label>Support phone<input maxLength={32} {...register('support_phone')} /></label>
           <label>Working hours<input maxLength={255} {...register('working_hours')} /></label>
           <label className={tw('field-wide')}>Company address<textarea rows={3} {...register('company_address')} /></label>
+        </div>
+      </section>
+
+      <section className={tw('admin-panel settings-section')}>
+        <div className={tw('settings-section-title')}><Settings2 size={19} /><div><h2>Bank transfer invoices</h2><p>Details printed on quote invoices when manual bank transfer is available to customers.</p><label className={tw('settings-feature-toggle')}><input type="checkbox" {...register('bank_transfer_enabled')} /><span><strong>Include bank transfer instructions on invoices</strong><small>Also enable Bank transfer for customers in the Payments workspace.</small></span></label></div></div>
+        <div className={tw(`settings-fields two-column ${bankTransferEnabled ? '' : 'settings-fields-disabled'}`)}>
+          <label>Beneficiary name<input maxLength={255} disabled={!bankTransferEnabled} {...register('bank_beneficiary_name')} /></label>
+          <label>Bank name<input maxLength={255} disabled={!bankTransferEnabled} {...register('bank_name')} /></label>
+          <label>Account number<input maxLength={120} disabled={!bankTransferEnabled} {...register('bank_account_number')} /></label>
+          <label>IBAN<input maxLength={64} disabled={!bankTransferEnabled} {...register('bank_iban')} /></label>
+          <label>SWIFT / BIC<input maxLength={32} disabled={!bankTransferEnabled} {...register('bank_swift_bic')} /></label>
+          <label className={tw('field-wide')}>Transfer instructions<textarea rows={3} disabled={!bankTransferEnabled} placeholder="Use the invoice number as the payment reference." {...register('bank_payment_instructions')} /></label>
         </div>
       </section>
 

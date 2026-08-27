@@ -18,6 +18,7 @@ class PaymentProvider(TimeStampedModel):
     code = models.CharField(max_length=40, choices=Code.choices, unique=True)
     display_name = models.CharField(max_length=120)
     is_enabled = models.BooleanField(default=True, db_index=True)
+    is_customer_available = models.BooleanField(default=False, db_index=True)
     test_mode = models.BooleanField(default=True)
     sort_order = models.PositiveIntegerField(default=0)
 

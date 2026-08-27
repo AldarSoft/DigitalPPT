@@ -228,7 +228,7 @@ export function AccountPage() {
           </div>
         </div>
       </section>
-      {selectedRecord ? <AccountRecordDialog record={selectedRecord} organizationId={organizationId} paymentsEnabled={paymentStatusQuery.data?.storefront_enabled} onClose={closeRecord} onLinkedQuoteSelect={(quoteNumber) => { setSelectedRecordState(null); const next = new URLSearchParams({ tab: 'quotes', quote: quoteNumber }); if (organizationId) next.set('org', String(organizationId)); setSearchParams(next, { replace: true }); }} /> : null}
+      {selectedRecord ? <AccountRecordDialog record={selectedRecord} organizationId={organizationId} paymentsEnabled={paymentStatusQuery.data?.storefront_enabled} bankTransferEnabled={paymentStatusQuery.data?.manual_bank_transfer_enabled} onClose={closeRecord} onLinkedQuoteSelect={(quoteNumber) => { setSelectedRecordState(null); const next = new URLSearchParams({ tab: 'quotes', quote: quoteNumber }); if (organizationId) next.set('org', String(organizationId)); setSearchParams(next, { replace: true }); }} /> : null}
     </main>
   );
 }

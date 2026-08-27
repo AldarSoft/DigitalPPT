@@ -309,9 +309,14 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  updatePaymentProvider: (id: number, data: Pick<PaymentProvider, 'is_enabled'>) =>
+  updatePaymentProvider: (id: number, data: Partial<Pick<PaymentProvider, 'is_enabled' | 'is_customer_available'>>) =>
     request<PaymentProvider>(`/payments/providers/${id}/`, {
       method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  confirmBankTransfer: (orderNumber: string, data: { bank_transaction_reference: string; internal_note?: string }) =>
+    request<PaymentAttempt>(`/payments/orders/${encodeURIComponent(orderNumber)}/confirm-bank-transfer/`, {
+      method: 'POST',
       body: JSON.stringify(data),
     }),
   notifications: () => request<NotificationInbox>('/core/notifications/'),

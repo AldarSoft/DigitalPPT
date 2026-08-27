@@ -151,6 +151,13 @@ export interface SiteSettings {
   tax_rate: string
   flat_shipping_rate: string
   free_shipping_minimum: string
+  bank_transfer_enabled: boolean
+  bank_beneficiary_name: string
+  bank_name: string
+  bank_account_number: string
+  bank_iban: string
+  bank_swift_bic: string
+  bank_payment_instructions: string
   working_hours: string
   about_story: string
   about_mission: string
@@ -336,6 +343,7 @@ export interface PaymentProvider {
   code: PaymentProviderCode
   display_name: string
   is_enabled: boolean
+  is_customer_available: boolean
   test_mode: boolean
   api_connected: boolean
   integration_state: 'disabled' | 'development_simulator' | 'development_unavailable' | 'credentials_missing' | 'adapter_not_implemented' | 'ready'
@@ -396,6 +404,7 @@ export interface StorefrontPaymentStatus {
   storefront_enabled: boolean
   development_simulator: boolean
   providers: StorefrontPaymentProvider[]
+  manual_bank_transfer_enabled: boolean
 }
 
 export interface BillingDetails {

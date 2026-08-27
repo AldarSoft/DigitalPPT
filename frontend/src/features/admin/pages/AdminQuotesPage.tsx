@@ -36,6 +36,9 @@ export function AdminQuotesPage() {
   const [quotedShipping, setQuotedShipping] = useState<string | null>(null)
   const [adminMessage, setAdminMessage] = useState<string | null>(null)
   const [requestAdditionalInformation, setRequestAdditionalInformation] = useState(false)
+  const [confirmingBankTransfer, setConfirmingBankTransfer] = useState(false)
+  const [bankTransactionReference, setBankTransactionReference] = useState('')
+  const [bankTransferNote, setBankTransferNote] = useState('')
   const [message, setMessage] = useState('')
   const messagesRef = useRef<HTMLDivElement>(null)
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
@@ -94,6 +97,9 @@ export function AdminQuotesPage() {
     setQuotedShipping(value.quoted_shipping || '0.00')
     setAdminMessage(value.admin_message || '')
     setRequestAdditionalInformation(false)
+    setConfirmingBankTransfer(false)
+    setBankTransactionReference('')
+    setBankTransferNote('')
     setMessage('')
     setConfirmingClose(false)
     queryClient.invalidateQueries({ queryKey: ['admin-quotes'] })
@@ -123,6 +129,23 @@ export function AdminQuotesPage() {
     mutationFn: () => api.addQuoteMessage(selected!.quote_number, message),
     onSuccess: (value) => applyQuote(value, 'Message sent.'),
     onError: mutationError,
+  })
+  const confirmBankTransfer = useMutation({
+    mutationFn: () => api.confirmBankTransfer(selected!.order_number!, {
+      bank_transaction_reference: bankTransactionReference,
+      internal_note: bankTransferNote,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-quotes'] })
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] })
+      queryClient.invalidateQueries({ queryKey: ['payment-attempts'] })
+      setConfirmingBankTransfer(false)
+      setBankTransactionReference('')
+      setBankTransferNote('')
+      void linkedQuoteQuery.refetch()
+      toast.success('Bank transfer confirmed. The order is now moving through fulfillment.')
+    },
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not confirm the bank transfer'),
   })
   if (quotesQuery.isError || summaryQuery.isError) return <AdminErrorState resource="quote requests" />
 
@@ -233,6 +256,27 @@ export function AdminQuotesPage() {
             {invoiceSent ? <dl className={tw('record-totals')}><div><dt>Subtotal</dt><dd>${Number(selected.quoted_subtotal).toFixed(2)}</dd></div><div><dt>Shipping</dt><dd>${Number(selected.quoted_shipping).toFixed(2)}</dd></div><div><dt>Invoice total</dt><dd>${Number(selected.quoted_total).toFixed(2)}</dd></div></dl> : null}
             {selected.invoice_pdf_url ? <a className={`${tw('record-payment-link')} !text-white [&>svg]:text-white`} href={mediaUrl(selected.invoice_pdf_url)} target="_blank" rel="noreferrer"><Download size={17} />Download {selected.invoice_number}</a> : null}
             {selected.order_number ? <p>Invoice order: <strong>{selected.order_number}</strong></p> : <p>No order has been created from this quote.</p>}
+            {selected.status === 'quoted' && selected.order_status === 'pending' && selected.order_number ? (
+              <section className="mt-5 rounded-control border border-warning bg-warning-soft p-4">
+                <div className="flex items-start gap-3">
+                  <CreditCard className="mt-0.5 shrink-0 text-warning" size={19} />
+                  <div>
+                    <h3 className="text-base font-extrabold text-ink">Confirm bank transfer received</h3>
+                    <p className="mt-1 text-sm text-warning">Match the bank statement to invoice reference <strong>{selected.invoice_number}</strong> and the invoice amount before confirming. This activates fulfillment and cannot be undone here.</p>
+                  </div>
+                </div>
+                {confirmingBankTransfer ? (
+                  <div className="mt-4 grid gap-3">
+                    <label className="grid gap-2 text-xs font-bold text-ink">Bank transaction reference<input className="min-h-10 rounded-control border border-border-input bg-white px-3 text-sm font-normal" value={bankTransactionReference} onChange={(event) => setBankTransactionReference(event.target.value)} /></label>
+                    <label className="grid gap-2 text-xs font-bold text-ink">Internal note <span className="font-normal text-muted">(optional)</span><textarea rows={2} className="rounded-control border border-border-input bg-white p-3 text-sm font-normal" value={bankTransferNote} onChange={(event) => setBankTransferNote(event.target.value)} /></label>
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <button className={tw('table-action')} type="button" onClick={() => setConfirmingBankTransfer(false)}>Cancel</button>
+                      <button className={tw('record-payment-link !mt-0')} type="button" disabled={!bankTransactionReference.trim() || confirmBankTransfer.isPending} onClick={() => confirmBankTransfer.mutate()}>{confirmBankTransfer.isPending ? 'Confirming...' : 'Confirm payment received'}</button>
+                    </div>
+                  </div>
+                ) : <button className={`${tw('record-payment-link')} mt-4`} type="button" onClick={() => setConfirmingBankTransfer(true)}>Confirm payment received</button>}
+              </section>
+            ) : null}
             <StatusTimeline noun="Quote request" currentStatus={selected.status} initialStatus="new" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={QUOTE_STEPS} />
             {selected.status !== 'approved' && selected.status !== 'quoted' && selected.status !== 'cancelled' ? (
               <div className={tw('quote-close-section')}>

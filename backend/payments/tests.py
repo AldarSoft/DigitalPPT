@@ -45,6 +45,11 @@ class PaymentFoundationTests(APITestCase):
             subtotal="680.00",
             total="680.00",
         )
+        # Customer payment availability is off by default; enable the test provider
+        # only for checkout cases that intentionally exercise the storefront flow.
+        PaymentProvider.objects.filter(code=PaymentProvider.Code.STRIPE).update(
+            is_customer_available=True,
+        )
 
     def test_payment_status_is_staff_only_and_storefront_is_disabled(self):
         anonymous = self.client.get("/api/v1/payments/status/")
@@ -188,6 +193,47 @@ class PaymentFoundationTests(APITestCase):
         reservation = InventoryReservation.objects.get(order_item__order=self.order)
         self.assertEqual(reservation.status, InventoryReservation.Status.RESERVED)
         self.assertEqual(reservation.quantity, 2)
+
+    def test_admin_can_confirm_a_quote_invoice_bank_transfer_once(self):
+        quote = QuoteRequest.objects.create(
+            user=self.customer,
+            status=QuoteRequest.Status.QUOTED,
+            requester_contact_person="Payment Tester",
+            requester_email=self.customer.email,
+            invoice_number="INV-2026-000999",
+            quoted_total=self.order.total,
+        )
+        self.order.quote_request = quote
+        self.order.source = Order.Source.QUOTE
+        self.order.save(update_fields=["quote_request", "source", "updated_at"])
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post(
+            f"/api/v1/payments/orders/{self.order.order_number}/confirm-bank-transfer/",
+            {
+                "bank_transaction_reference": "BANK-STATEMENT-2026-0001",
+                "internal_note": "Matched against the daily statement.",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], PaymentAttempt.Status.SUCCEEDED)
+        self.assertEqual(response.data["provider_code"], PaymentProvider.Code.BANK_TRANSFER)
+        self.order.refresh_from_db()
+        quote.refresh_from_db()
+        attempt = PaymentAttempt.objects.get(order=self.order, provider__code=PaymentProvider.Code.BANK_TRANSFER)
+        self.assertEqual(self.order.status, Order.Status.SCHEDULED)
+        self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
+        self.assertEqual(attempt.external_reference, "BANK-STATEMENT-2026-0001")
+        self.assertEqual(attempt.metadata["internal_note"], "Matched against the daily statement.")
+
+        repeated = self.client.post(
+            f"/api/v1/payments/orders/{self.order.order_number}/confirm-bank-transfer/",
+            {"bank_transaction_reference": "BANK-STATEMENT-2026-0001"},
+            format="json",
+        )
+        self.assertEqual(repeated.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_customer_cannot_list_or_simulate_payments(self):
         self.client.force_authenticate(self.customer)
@@ -524,11 +570,12 @@ class PaymentFoundationTests(APITestCase):
         PAYMENTS_DEVELOPMENT_SIMULATOR=True,
     )
     def test_storefront_status_exposes_test_providers_in_development(self):
+        PaymentProvider.objects.update(is_customer_available=True)
         response = self.client.get("/api/v1/payments/storefront-status/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(response.data["storefront_enabled"])
         self.assertTrue(response.data["development_simulator"])
-        self.assertEqual(len(response.data["providers"]), 4)
+        self.assertEqual(len(response.data["providers"]), 3)
 
     @override_settings(
         DEBUG=False,

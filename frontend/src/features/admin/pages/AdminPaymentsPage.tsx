@@ -69,10 +69,10 @@ export function AdminPaymentsPage() {
   })
 
   const toggleProvider = useMutation({
-    mutationFn: ({ id, is_enabled }: { id: number; is_enabled: boolean }) => api.updatePaymentProvider(id, { is_enabled }),
+    mutationFn: ({ id, is_customer_available }: { id: number; is_customer_available: boolean }) => api.updatePaymentProvider(id, { is_customer_available }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['payment-status'] })
-      toast.success('Test provider setting updated')
+      toast.success('Customer payment availability updated')
     },
     onError: () => toast.error('Could not update the provider'),
   })
@@ -120,7 +120,7 @@ export function AdminPaymentsPage() {
           return <article className={tw('payment-provider-card')} key={item.id}>
             <header><span><Icon size={19} /></span><div><h2>{item.display_name}</h2><p>{providerStateLabel[item.integration_state]}</p></div></header>
             <p>{detail.description}</p>
-            <footer><span>{item.test_mode ? 'TEST MODE' : item.integration_state === 'ready' ? 'LIVE READY' : 'NOT LIVE'}</span><button className={tw(`payment-toggle ${item.is_enabled ? 'active' : ''}`)} type="button" role="switch" aria-checked={item.is_enabled} aria-label={`${item.is_enabled ? 'Disable' : 'Enable'} ${item.display_name}`} disabled={toggleProvider.isPending} onClick={() => toggleProvider.mutate({ id: item.id, is_enabled: !item.is_enabled })} /></footer>
+            <footer><span>{item.is_customer_available ? item.code === 'bank_transfer' ? 'MANUAL TRANSFER ENABLED' : item.test_mode ? 'TEST MODE ENABLED' : 'CUSTOMER ENABLED' : 'HIDDEN FROM CUSTOMERS'}</span><button className={tw(`payment-toggle ${item.is_customer_available ? 'active' : ''}`)} type="button" role="switch" aria-checked={item.is_customer_available} aria-label={`${item.is_customer_available ? 'Disable' : 'Enable'} ${item.display_name} for customers`} disabled={toggleProvider.isPending} onClick={() => toggleProvider.mutate({ id: item.id, is_customer_available: !item.is_customer_available })} /></footer>
           </article>
         })}
       </section>
