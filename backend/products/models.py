@@ -209,6 +209,39 @@ class Product(ActiveModel):
         return self.name
 
 
+class InventoryAdjustment(TimeStampedModel):
+    class Mode(models.TextChoices):
+        ADD = "add", "Add stock"
+        SET = "set", "Set counted quantity"
+
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.PROTECT,
+        related_name="inventory_adjustments",
+    )
+    performed_by = models.ForeignKey(
+        "users.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="inventory_adjustments",
+    )
+    mode = models.CharField(max_length=12, choices=Mode.choices)
+    quantity = models.PositiveIntegerField()
+    quantity_before = models.PositiveIntegerField()
+    quantity_after = models.PositiveIntegerField()
+    reason = models.CharField(max_length=64)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(fields=["product", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.product} {self.mode} {self.quantity}"
+
+
 class ProductImage(TimeStampedModel):
     product = models.ForeignKey(
         Product,

@@ -211,6 +211,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
+  adjustInventory: (slug: string, data: { mode: 'add' | 'set'; quantity: number; reason: string }) =>
+    request<Product>(`/products/catalog/${slug}/inventory-adjust/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   deleteProduct: (slug: string) =>
     request<void>(`/products/catalog/${slug}/`, { method: 'DELETE' }),
   uploadProductImage: (image: File) => {

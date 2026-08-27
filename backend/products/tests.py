@@ -1,9 +1,11 @@
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
-from products.models import Category, Product
+from orders.models import InventoryReservation, Order, OrderItem
+from products.models import Category, InventoryAdjustment, Product
 from products.serializers import ProductSerializer, ProductWriteSerializer
 
 
@@ -110,3 +112,73 @@ class ProductLicensingContractTests(TestCase):
 
         self.assertIn("license_capacity", raised.exception.message_dict)
         self.assertIn("license_term_days", raised.exception.message_dict)
+
+
+class InventoryAdjustmentTests(TestCase):
+    def setUp(self):
+        self.staff = get_user_model().objects.create_user(
+            username="inventory-admin",
+            email="inventory-admin@example.com",
+            password="StrongPass123!",
+            is_staff=True,
+        )
+        category = Category.objects.create(name="Inventory")
+        self.product = Product.objects.create(
+            category=category,
+            name="Reserved radio",
+            sku="RESERVED-RADIO",
+            price="100.00",
+            inventory_quantity=8,
+            status=Product.Status.PUBLISHED,
+        )
+        order = Order.objects.create(
+            user=self.staff,
+            customer_first_name="Inventory",
+            customer_last_name="Admin",
+            customer_email=self.staff.email,
+            shipping_address="1 Main Street",
+            shipping_city="Ulaanbaatar",
+            shipping_country="Mongolia",
+            subtotal="800.00",
+            total="800.00",
+        )
+        item = OrderItem.objects.create(
+            order=order,
+            product=self.product,
+            product_name=self.product.name,
+            sku=self.product.sku,
+            unit_price="100.00",
+            quantity=8,
+            reserved_quantity=8,
+            fulfillment_status=OrderItem.FulfillmentStatus.READY,
+            line_total="800.00",
+        )
+        InventoryReservation.objects.create(order_item=item, product=self.product, quantity=8)
+        self.api = APIClient()
+        self.api.force_authenticate(self.staff)
+
+    def test_counted_stock_cannot_be_lower_than_paid_reservations(self):
+        response = self.api.post(
+            f"/api/v1/products/catalog/{self.product.slug}/inventory-adjust/",
+            {"mode": "set", "quantity": 1, "reason": "warehouse_count"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.inventory_quantity, 8)
+
+    def test_add_stock_records_an_audited_adjustment(self):
+        response = self.api.post(
+            f"/api/v1/products/catalog/{self.product.slug}/inventory-adjust/",
+            {"mode": "add", "quantity": 2, "reason": "stock_received"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.product.refresh_from_db()
+        adjustment = InventoryAdjustment.objects.get(product=self.product)
+        self.assertEqual(self.product.inventory_quantity, 10)
+        self.assertEqual(adjustment.quantity_before, 8)
+        self.assertEqual(adjustment.quantity_after, 10)
+        self.assertEqual(adjustment.performed_by, self.staff)

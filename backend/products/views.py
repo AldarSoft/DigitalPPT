@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.core.files.storage import default_storage
+from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, IntegerField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
 from rest_framework import parsers, status, viewsets
@@ -13,7 +14,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 
 from common.permissions import IsAdminOrReadOnly
-from products.models import Category, Product
+from products.models import Category, InventoryAdjustment, Product
 from orders.models import Order, OrderItem
 from orders.models import InventoryReservation
 from products.serializers import (
@@ -24,6 +25,7 @@ from products.serializers import (
     ProductWriteSerializer,
     ProductImageUploadRequestSerializer,
     ProductImageUploadResponseSerializer,
+    InventoryAdjustmentSerializer,
 )
 
 
@@ -116,6 +118,16 @@ class ProductViewSet(viewsets.ModelViewSet):
             .annotate(total=Sum("quantity"))
             .values("total")[:1]
         )
+        backordered_quantity = (
+            OrderItem.objects.filter(
+                product_id=OuterRef("pk"),
+                backordered_quantity__gt=0,
+                order__status=Order.Status.BACKORDERED,
+            )
+            .values("product_id")
+            .annotate(total=Sum("backordered_quantity"))
+            .values("total")[:1]
+        )
         queryset = Product.objects.with_catalog_relations().annotate(
             current_price_value=Coalesce(
                 "sale_price",
@@ -124,6 +136,10 @@ class ProductViewSet(viewsets.ModelViewSet):
             ),
             reserved_inventory_quantity=Coalesce(
                 Subquery(reserved_quantity, output_field=IntegerField()),
+                Value(0),
+            ),
+            backordered_inventory_quantity=Coalesce(
+                Subquery(backordered_quantity, output_field=IntegerField()),
                 Value(0),
             ),
         ).annotate(
@@ -192,7 +208,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         return queryset
 
     def get_permissions(self):
-        if self.action in {"create", "update", "partial_update", "destroy"}:
+        if self.action in {"create", "update", "partial_update", "destroy", "inventory_adjust"}:
             return [IsAdminUser()]
         return [IsAdminOrReadOnly()]
 
@@ -202,6 +218,71 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.request.user and self.request.user.is_staff:
             return AdminProductSerializer
         return ProductSerializer
+
+    def perform_update(self, serializer):
+        previous_inventory = serializer.instance.inventory_quantity
+        product = serializer.save()
+        if product.is_stock_tracked and product.inventory_quantity > previous_inventory:
+            from orders.services import InventoryReservationService
+
+            transaction.on_commit(
+                lambda product_id=product.pk: InventoryReservationService.reserve_backorders_for_product(
+                    product_id=product_id
+                )
+            )
+
+    @action(detail=True, methods=["post"], url_path="inventory-adjust")
+    @transaction.atomic
+    def inventory_adjust(self, request, slug=None):
+        product = Product.objects.select_for_update().get(slug=slug)
+        if not product.is_stock_tracked:
+            return Response(
+                {"detail": "License products do not use physical inventory."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = InventoryAdjustmentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        reserved_quantity = InventoryReservation.objects.filter(
+            product=product,
+            status=InventoryReservation.Status.RESERVED,
+        ).aggregate(total=Coalesce(Sum("quantity"), Value(0)))["total"]
+        quantity_before = product.inventory_quantity
+        quantity_after = (
+            quantity_before + data["quantity"]
+            if data["mode"] == InventoryAdjustment.Mode.ADD
+            else data["quantity"]
+        )
+        if quantity_after < reserved_quantity:
+            return Response(
+                {
+                    "quantity": (
+                        f"On-hand stock cannot be lower than the {reserved_quantity} units "
+                        "reserved for paid orders."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        product.inventory_quantity = quantity_after
+        product.save(update_fields=["inventory_quantity", "updated_at"])
+        InventoryAdjustment.objects.create(
+            product=product,
+            performed_by=request.user,
+            mode=data["mode"],
+            quantity=data["quantity"],
+            quantity_before=quantity_before,
+            quantity_after=quantity_after,
+            reason=data["reason"],
+        )
+        if quantity_after > quantity_before:
+            from orders.services import InventoryReservationService
+
+            InventoryReservationService.reserve_backorders_for_product(product_id=product.pk)
+
+        product = self.get_queryset().get(pk=product.pk)
+        return Response(self.get_serializer(product).data)
 
     @action(detail=False, methods=["get"], url_path=r"by-id/(?P<product_id>\d+)")
     def by_id(self, request, product_id=None):

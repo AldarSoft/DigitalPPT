@@ -5,6 +5,7 @@ export type SimpleStatus = 'draft' | 'pending' | 'processing' | 'completed' | 'c
 const ORDER_STATUS: Record<Order['status'], SimpleStatus> = {
   draft: 'draft',
   pending: 'pending',
+  backordered: 'processing',
   scheduled: 'processing',
   processing: 'processing',
   completed: 'completed',
@@ -55,6 +56,7 @@ export function simpleStatusLabel(status: SimpleStatus) {
 
 export function orderStatusLabel(status: Order['status'], source?: Order['source']) {
   if (status === 'pending' && source === 'quote') return 'Awaiting payment'
+  if (status === 'backordered') return 'Awaiting stock'
   return simpleStatusLabel(orderStatusKey(status))
 }
 

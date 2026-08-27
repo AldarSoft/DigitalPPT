@@ -15,6 +15,7 @@ class Order(TimeStampedModel):
     class Status(models.TextChoices):
         DRAFT = "draft", "Draft"
         PENDING = "pending", "Pending"
+        BACKORDERED = "backordered", "Awaiting stock"
         SCHEDULED = "scheduled", "Scheduled"
         PROCESSING = "processing", "Processing"
         COMPLETED = "completed", "Completed"
@@ -135,6 +136,13 @@ class Order(TimeStampedModel):
 
 
 class OrderItem(TimeStampedModel):
+    class FulfillmentStatus(models.TextChoices):
+        NOT_REQUIRED = "not_required", "Not required"
+        READY = "ready", "Ready to ship"
+        PARTIALLY_READY = "partially_ready", "Partially ready"
+        BACKORDERED = "backordered", "Awaiting stock"
+        FULFILLED = "fulfilled", "Fulfilled"
+
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="items")
     product = models.ForeignKey(
         "products.Product",
@@ -147,6 +155,14 @@ class OrderItem(TimeStampedModel):
     sku = models.CharField(max_length=120, blank=True)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     quantity = models.PositiveIntegerField(default=1)
+    reserved_quantity = models.PositiveIntegerField(default=0)
+    backordered_quantity = models.PositiveIntegerField(default=0)
+    fulfillment_status = models.CharField(
+        max_length=24,
+        choices=FulfillmentStatus.choices,
+        default=FulfillmentStatus.NOT_REQUIRED,
+        db_index=True,
+    )
     line_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     class Meta:
@@ -155,6 +171,17 @@ class OrderItem(TimeStampedModel):
         verbose_name_plural = "Order Items"
         indexes = [
             models.Index(fields=["order", "product"]),
+            models.Index(fields=["fulfillment_status"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(reserved_quantity__lte=models.F("quantity")),
+                name="orders_item_reserved_quantity_not_over_ordered",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(backordered_quantity__lte=models.F("quantity")),
+                name="orders_item_backordered_quantity_not_over_ordered",
+            ),
         ]
 
     def __str__(self):

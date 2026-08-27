@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from products.models import Category, Product, ProductImage, ProductSpecification
+from products.models import Category, InventoryAdjustment, Product, ProductImage, ProductSpecification
 
 
 class CategorySerializer(serializers.ModelSerializer):
@@ -69,6 +69,7 @@ class ProductSerializer(serializers.ModelSerializer):
     inventory_quantity = serializers.SerializerMethodField()
     on_hand_inventory_quantity = serializers.IntegerField(source="inventory_quantity", read_only=True)
     reserved_inventory_quantity = serializers.SerializerMethodField()
+    backordered_inventory_quantity = serializers.SerializerMethodField()
     required_license_product = LicenseProductSummarySerializer(read_only=True)
     is_stock_tracked = serializers.BooleanField(read_only=True)
 
@@ -90,6 +91,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "inventory_quantity",
             "on_hand_inventory_quantity",
             "reserved_inventory_quantity",
+            "backordered_inventory_quantity",
             "licensing_role",
             "required_license_product",
             "license_capacity",
@@ -113,6 +115,20 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_reserved_inventory_quantity(self, obj) -> int:
         return max(0, getattr(obj, "reserved_inventory_quantity", 0))
+
+    def get_backordered_inventory_quantity(self, obj) -> int:
+        return max(0, getattr(obj, "backordered_inventory_quantity", 0))
+
+
+class InventoryAdjustmentSerializer(serializers.Serializer):
+    mode = serializers.ChoiceField(choices=InventoryAdjustment.Mode.choices)
+    quantity = serializers.IntegerField(min_value=0)
+    reason = serializers.CharField(max_length=64)
+
+    def validate(self, attrs):
+        if attrs["mode"] == InventoryAdjustment.Mode.ADD and attrs["quantity"] <= 0:
+            raise serializers.ValidationError({"quantity": "Add at least one unit."})
+        return attrs
 
 
 class AdminProductSerializer(ProductSerializer):

@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 from licensing.models import License, LicenseEvent, Organization, OrganizationMembership
 from licensing.services import OrganizationService
 from orders.models import InventoryReservation, Order, OrderItem
-from orders.services import OrderService
+from orders.services import InventoryReservationService, OrderService
 from payments.models import PaymentAttempt, PaymentProvider
 from payments.services import PaymentService
 from products.models import Category, Product
@@ -251,17 +251,43 @@ class InventoryReservationLifecycleTests(TestCase):
         self.assertEqual(response.data["on_hand_inventory_quantity"], 2)
         self.assertEqual(response.data["reserved_inventory_quantity"], 1)
 
-    def test_competing_paid_orders_cannot_over_reserve_stock(self):
+    def test_paid_order_backorders_the_shortage_without_rejecting_payment(self):
         first = self.create_order(quantity=2)
         second = self.create_order(quantity=1)
         self.pay(first)
 
-        with self.assertRaises(ValidationError):
-            self.pay(second)
+        attempt = self.pay(second)
 
         second.refresh_from_db()
-        self.assertEqual(second.status, Order.Status.PENDING)
+        item = second.items.get()
+        self.assertEqual(attempt.status, PaymentAttempt.Status.SUCCEEDED)
+        self.assertEqual(second.status, Order.Status.BACKORDERED)
+        self.assertEqual(item.reserved_quantity, 0)
+        self.assertEqual(item.backordered_quantity, 1)
+        self.assertEqual(item.fulfillment_status, OrderItem.FulfillmentStatus.BACKORDERED)
         self.assertFalse(InventoryReservation.objects.filter(order_item__order=second).exists())
+
+    def test_inventory_restock_allocates_the_oldest_backorder_and_schedules_it(self):
+        first = self.create_order(quantity=2)
+        second = self.create_order(quantity=1)
+        self.pay(first)
+        self.pay(second)
+
+        self.product.inventory_quantity = 3
+        self.product.save(update_fields=["inventory_quantity", "updated_at"])
+        changed_orders = InventoryReservationService.reserve_backorders_for_product(
+            product_id=self.product.pk
+        )
+
+        second.refresh_from_db()
+        item = second.items.get()
+        reservation = InventoryReservation.objects.get(order_item=item)
+        self.assertEqual(changed_orders, [second.pk])
+        self.assertEqual(second.status, Order.Status.SCHEDULED)
+        self.assertEqual(item.reserved_quantity, 1)
+        self.assertEqual(item.backordered_quantity, 0)
+        self.assertEqual(item.fulfillment_status, OrderItem.FulfillmentStatus.READY)
+        self.assertEqual(reservation.quantity, 1)
 
     def test_approved_cancellation_releases_an_unfulfilled_reservation(self):
         order = self.create_order(quantity=1)

@@ -63,34 +63,124 @@ class InventoryReservationService:
                 order_item_id__in=[item.pk for item in physical_items]
             )
         }
-        pending_items = [item for item in physical_items if item.pk not in existing]
-        if not pending_items:
-            return list(existing.values())
-
         reserved = InventoryReservationService.reserved_quantities(product_ids=product_ids)
-        required = {}
-        for item in pending_items:
-            required[item.product_id] = required.get(item.product_id, 0) + item.quantity
-
-        stock_errors = {}
-        for product_id, quantity in required.items():
-            product = products.get(product_id)
+        reservations = []
+        for item in physical_items:
+            product = products.get(item.product_id)
+            reservation = existing.get(item.pk)
+            current_reserved = (
+                reservation.quantity
+                if reservation and reservation.status == InventoryReservation.Status.RESERVED
+                else 0
+            )
             available = InventoryReservationService.available_quantity(
                 product=product,
-                reserved_quantity=reserved.get(product_id, 0),
+                reserved_quantity=reserved.get(item.product_id, 0),
             ) if product else 0
-            if available < quantity:
-                stock_errors[str(product_id)] = (
-                    f"Only {available} units are available to reserve; {quantity} requested."
-                )
-        if stock_errors:
-            raise ValidationError({"inventory": stock_errors})
+            quantity_to_reserve = min(item.quantity - current_reserved, available)
+            total_reserved = current_reserved + quantity_to_reserve
 
-        created = InventoryReservation.objects.bulk_create([
-            InventoryReservation(order_item=item, product=products[item.product_id], quantity=item.quantity)
-            for item in pending_items
-        ])
-        return [*existing.values(), *created]
+            if reservation and reservation.status == InventoryReservation.Status.RESERVED:
+                if quantity_to_reserve:
+                    reservation.quantity = total_reserved
+                    reservation.save(update_fields=["quantity", "updated_at"])
+                    reserved[item.product_id] = reserved.get(item.product_id, 0) + quantity_to_reserve
+                reservations.append(reservation)
+            elif total_reserved:
+                if reservation:
+                    reservation.product = product
+                    reservation.quantity = total_reserved
+                    reservation.status = InventoryReservation.Status.RESERVED
+                    reservation.consumed_at = None
+                    reservation.released_at = None
+                    reservation.release_reason = ""
+                    reservation.save()
+                else:
+                    reservation = InventoryReservation.objects.create(
+                        order_item=item,
+                        product=product,
+                        quantity=total_reserved,
+                    )
+                reserved[item.product_id] = reserved.get(item.product_id, 0) + quantity_to_reserve
+                reservations.append(reservation)
+
+            item.reserved_quantity = total_reserved
+            item.backordered_quantity = item.quantity - total_reserved
+            item.fulfillment_status = (
+                OrderItem.FulfillmentStatus.READY
+                if not item.backordered_quantity
+                else OrderItem.FulfillmentStatus.PARTIALLY_READY
+                if total_reserved
+                else OrderItem.FulfillmentStatus.BACKORDERED
+            )
+            item.save(update_fields=[
+                "reserved_quantity",
+                "backordered_quantity",
+                "fulfillment_status",
+                "updated_at",
+            ])
+        return reservations
+
+    @staticmethod
+    @transaction.atomic
+    def reserve_backorders_for_product(*, product_id):
+        """Allocate newly available stock to paid backorders in order sequence."""
+        product = Product.objects.select_for_update().filter(pk=product_id).first()
+        if not product or not product.is_stock_tracked:
+            return []
+
+        reserved = InventoryReservationService.reserved_quantities(product_ids=[product.pk])
+        available = InventoryReservationService.available_quantity(
+            product=product,
+            reserved_quantity=reserved.get(product.pk, 0),
+        )
+        if not available:
+            return []
+
+        items = list(
+            OrderItem.objects.select_for_update()
+            .select_related("order")
+            .filter(
+                product=product,
+                backordered_quantity__gt=0,
+                order__status=Order.Status.BACKORDERED,
+            )
+            .order_by("order__created_at", "id")
+        )
+        changed_orders = set()
+        for item in items:
+            if not available:
+                break
+            allocation = min(item.backordered_quantity, available)
+            reservation = InventoryReservation.objects.select_for_update().filter(order_item=item).first()
+            if reservation:
+                reservation.quantity += allocation
+                reservation.status = InventoryReservation.Status.RESERVED
+                reservation.released_at = None
+                reservation.release_reason = ""
+                reservation.save(update_fields=[
+                    "quantity", "status", "released_at", "release_reason", "updated_at",
+                ])
+            else:
+                InventoryReservation.objects.create(order_item=item, product=product, quantity=allocation)
+            item.reserved_quantity += allocation
+            item.backordered_quantity -= allocation
+            item.fulfillment_status = (
+                OrderItem.FulfillmentStatus.READY
+                if not item.backordered_quantity
+                else OrderItem.FulfillmentStatus.PARTIALLY_READY
+            )
+            item.save(update_fields=[
+                "reserved_quantity", "backordered_quantity", "fulfillment_status", "updated_at",
+            ])
+            available -= allocation
+            changed_orders.add(item.order_id)
+
+        for order_id in changed_orders:
+            order = Order.objects.prefetch_related("items__product").get(pk=order_id)
+            if not order.items.filter(backordered_quantity__gt=0).exists():
+                OrderService.update_status(order=order, new_status=Order.Status.SCHEDULED)
+        return list(changed_orders)
 
     @staticmethod
     def consume_for_order(*, order):
@@ -127,6 +217,12 @@ class InventoryReservationService:
             consumed_at=timezone.now(),
             updated_at=timezone.now(),
         )
+        OrderItem.objects.filter(
+            pk__in=[reservation.order_item_id for reservation in reservations]
+        ).update(
+            fulfillment_status=OrderItem.FulfillmentStatus.FULFILLED,
+            updated_at=timezone.now(),
+        )
         return True
 
     @staticmethod
@@ -149,6 +245,7 @@ class OrderService:
             Order.Status.CANCELLED,
         },
         Order.Status.PENDING: {
+            Order.Status.BACKORDERED,
             Order.Status.SCHEDULED,
             Order.Status.PROCESSING,
             Order.Status.COMPLETED,
@@ -161,6 +258,10 @@ class OrderService:
         Order.Status.SCHEDULED: {
             Order.Status.PROCESSING,
             Order.Status.COMPLETED,
+            Order.Status.CANCELLED,
+        },
+        Order.Status.BACKORDERED: {
+            Order.Status.SCHEDULED,
             Order.Status.CANCELLED,
         },
         Order.Status.COMPLETED: set(),
@@ -340,6 +441,8 @@ class OrderService:
         )
         if is_digital_only:
             return Order.Status.COMPLETED
+        if any(item.backordered_quantity for item in items):
+            return Order.Status.BACKORDERED
         return Order.Status.SCHEDULED
 
     @staticmethod

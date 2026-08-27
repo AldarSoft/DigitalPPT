@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, Building2, FileText, LockKeyhole, Minus, Plus, ShoppingBag } from 'lucide-react'
 import { Link, Navigate } from 'react-router-dom'
@@ -77,18 +78,10 @@ export function CartPage() {
                         <span className={tw(availableForPayment ? '' : 'out')}><i />{availabilityLabel}</span>
                         {item.is_automatic ? <small className={tw("automatic-license-label")}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}
                       </div>
-                      {item.is_automatic ? <div className={tw("quantity-control")} aria-label={`Required quantity for ${product.name}`}>
+                      {item.is_automatic ? <div className={tw("quantity-control automatic-quantity-control")} aria-label={`Required quantity for ${product.name}`}>
                         <LockKeyhole size={15}/>
                         <strong aria-live="polite">{quantity}</strong>
-                      </div> : <div className={tw("quantity-control")} aria-label={`Quantity for ${product.name}`}>
-                        <button type="button" aria-label={`Decrease ${product.name} quantity`} disabled={quantity <= 1} onClick={() => cart.setQuantity(product.id, quantity - 1)}>
-                          <Minus size={16}/>
-                        </button>
-                        <strong aria-live="polite">{quantity}</strong>
-                        <button type="button" aria-label={`Increase ${product.name} quantity`} disabled={quantity >= 1000} onClick={() => cart.setQuantity(product.id, quantity + 1)}>
-                          <Plus size={16}/>
-                        </button>
-                      </div>}
+                      </div> : <CartQuantityControl productId={product.id} productName={product.name} quantity={quantity} onQuantityChange={cart.setQuantity} />}
                       <div className={tw("cart-item-price")}>
                         <small className={tw(`cart-item-unit-price ${bulkPriceActive ? 'bulk' : ''}`)}>${unitPrice.toFixed(2)} each{bulkPriceActive ? ' - Bulk price' : ''}</small>
                         <strong>${(unitPrice * quantity).toFixed(2)}</strong>
@@ -134,4 +127,38 @@ export function CartPage() {
         </div>
       </section>
     </main>);
+}
+
+function CartQuantityControl({ productId, productName, quantity, onQuantityChange }: { productId: number; productName: string; quantity: number; onQuantityChange: (productId: number, quantity: number) => void }) {
+  const [value, setValue] = useState(String(quantity))
+
+  useEffect(() => {
+    setValue(String(quantity))
+  }, [quantity])
+
+  const commit = (nextValue: string) => {
+    const nextQuantity = Number(nextValue)
+    if (!Number.isInteger(nextQuantity) || nextQuantity < 1 || nextQuantity > 1000) {
+      setValue(String(quantity))
+      return
+    }
+    onQuantityChange(productId, nextQuantity)
+  }
+
+  return <div className={tw('quantity-control cart-quantity-control')} aria-label={`Quantity for ${productName}`}>
+    <button type="button" aria-label={`Decrease ${productName} quantity`} disabled={quantity <= 1} onClick={() => onQuantityChange(productId, quantity - 1)}>
+      <Minus size={16}/>
+    </button>
+    <input aria-label={`${productName} quantity`} inputMode="numeric" maxLength={4} pattern="[0-9]*" value={value} onFocus={(event) => event.currentTarget.select()} onChange={(event) => {
+      const nextValue = event.target.value
+      if (!/^\d*$/.test(nextValue)) return
+      setValue(nextValue)
+      if (nextValue) commit(nextValue)
+    }} onBlur={() => commit(value)} onKeyDown={(event) => {
+      if (event.key === 'Enter') event.currentTarget.blur()
+    }} />
+    <button type="button" aria-label={`Increase ${productName} quantity`} disabled={quantity >= 1000} onClick={() => onQuantityChange(productId, quantity + 1)}>
+      <Plus size={16}/>
+    </button>
+  </div>
 }

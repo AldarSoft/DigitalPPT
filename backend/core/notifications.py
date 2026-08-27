@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 ORDER_STATUS_LABELS = {
     "pending": "Pending",
+    "backordered": "Awaiting stock",
     "scheduled": "Processing",
     "processing": "Processing",
     "completed": "Completed",

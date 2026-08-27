@@ -57,6 +57,7 @@ export interface Product {
   inventory_quantity: number
   on_hand_inventory_quantity?: number
   reserved_inventory_quantity?: number
+  backordered_inventory_quantity?: number
   licensing_role: 'standard' | 'licensed_product' | 'license_product'
   required_license_product: LicenseProductSummary | null
   license_capacity: number | null
@@ -201,6 +202,9 @@ export interface OrderItem {
   sku: string
   unit_price: string
   quantity: number
+  reserved_quantity: number
+  backordered_quantity: number
+  fulfillment_status: 'not_required' | 'ready' | 'partially_ready' | 'backordered' | 'fulfilled'
   line_total: string
   image_url: string
   available_stock: number | null
@@ -225,7 +229,7 @@ export interface Order {
   source: 'direct' | 'quote' | 'admin'
   user_id: number | null
   is_paid: boolean
-  status: 'draft' | 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
+  status: 'draft' | 'pending' | 'backordered' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
   customer_first_name: string
   customer_last_name: string
   customer_email: string
