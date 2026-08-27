@@ -24,7 +24,8 @@ export function RegisterPage() {
     const navigate = useNavigate();
     const location = useLocation();
     const [submitting, setSubmitting] = useState(false);
-    const { register, handleSubmit, setError, formState: { errors } } = useForm<RegistrationForm>();
+    const quoteEmail = (location.state as { quoteEmail?: string } | null)?.quoteEmail ?? '';
+    const { register, handleSubmit, setError, formState: { errors } } = useForm<RegistrationForm>({ defaultValues: { email: quoteEmail } });
     const from = (location.state as { from?: string } | null)?.from;
     if (auth.user)
         return <Navigate to={from || "/account"} replace/>;
@@ -56,7 +57,7 @@ export function RegisterPage() {
         <div className={tw("register-grid")}>
           <label>First name<input {...register('first_name')}/><small>{errors.first_name?.message}</small></label>
           <label>Last name<input {...register('last_name')}/><small>{errors.last_name?.message}</small></label>
-          <label className={tw("wide")}>Email<input type="email" {...register('email')}/><small>{errors.email?.message}</small></label>
+          <label className={tw("wide")}>Email<input type="email" readOnly={Boolean(quoteEmail)} {...register('email')}/>{quoteEmail ? <small className="text-brand">We&apos;ve filled this from your quote link so we can connect your quote after registration.</small> : <small>{errors.email?.message}</small>}</label>
           <label className={tw("wide")}>Phone<input {...register('phone_number')}/><small>{errors.phone_number?.message}</small></label>
           <label>Password<input type="password" {...register('password')}/><small>{errors.password?.message}</small></label>
           <label>Confirm password<input type="password" {...register('confirm_password')}/><small>{errors.confirm_password?.message}</small></label>

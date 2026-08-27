@@ -1,4 +1,5 @@
 export type LicenseStatus = 'draft' | 'pending_payment' | 'active' | 'expiring_soon' | 'expired' | 'cancelled'
+export type OrganizationLicenseStatus = LicenseStatus | 'no_licenses'
 export type OrganizationRole = 'owner' | 'license_manager'
 export type OrganizationStatus = 'draft' | 'active' | 'inactive'
 
@@ -160,7 +161,7 @@ export interface AdminOrganizationLicenseListResponse {
   count: number
   next: string | null
   previous: string | null
-  results: Array<{ id: number; name: string; owner: { name: string; email: string } | null; license_count: number; used_capacity: number; total_capacity: number; next_expiry: string | null; status: LicenseStatus }>
+  results: Array<{ id: number; name: string; owner: { name: string; email: string } | null; license_count: number; used_capacity: number; total_capacity: number; next_expiry: string | null; status: OrganizationLicenseStatus }>
 }
 
 export interface AdminLicenseEvent {
@@ -175,7 +176,7 @@ export interface AdminLicenseEvent {
 
 export interface AdminOrganizationLicenseDetail {
   organization: { id: number; name: string; owner: { name: string; email: string } | null; license_manager_count: number }
-  summary: { subscription_starts_on: string | null; subscription_expires_on: string | null; licensed_product_count: number; active_quantity: number; status: LicenseStatus }
+  summary: { subscription_starts_on: string | null; subscription_expires_on: string | null; licensed_product_count: number; active_quantity: number; status: OrganizationLicenseStatus }
   licenses: ClientLicenseDetail[]
   notifications: { renewal_reminder_scheduled_for: string | null; renewal_invoice_status: string }
   events: AdminLicenseEvent[]

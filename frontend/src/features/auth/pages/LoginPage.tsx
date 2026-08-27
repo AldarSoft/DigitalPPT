@@ -21,7 +21,8 @@ export function LoginPage() {
     const [showPassword, setShowPassword] = useState(false);
     const [forgotOpen, setForgotOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
-    const { register, handleSubmit, setError, formState: { errors } } = useForm<LoginForm>();
+    const quoteEmail = (location.state as { quoteEmail?: string } | null)?.quoteEmail ?? '';
+    const { register, handleSubmit, setError, formState: { errors } } = useForm<LoginForm>({ defaultValues: { email: quoteEmail, password: '' } });
     if (auth.user) {
         const from = (location.state as { from?: string } | null)?.from;
         return <Navigate to={from || (auth.user.is_staff ? '/admin' : '/account')} replace/>;

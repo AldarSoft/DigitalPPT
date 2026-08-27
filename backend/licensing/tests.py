@@ -1267,6 +1267,47 @@ class LicenseLifecycleTests(TestCase):
         )
         self.assertEqual(active_license.organization, self.organization)
 
+    def test_admin_license_views_calculate_expiry_status_and_empty_organizations(self):
+        expiring_license = self.provision(name="Soon To Expire License")
+        License.objects.filter(pk=expiring_license.pk).update(
+            expires_on=timezone.localdate() + timedelta(days=30),
+            status=License.Status.ACTIVE,
+        )
+        empty_organization = OrganizationService.create(
+            name="Empty License Organization",
+            owner=self.outsider,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+
+        listed = api_client.get(
+            "/api/v1/admin/licensing/organizations/",
+            {"status": License.Status.EXPIRING_SOON},
+        )
+        detail = api_client.get(
+            f"/api/v1/admin/licensing/organizations/{self.organization.pk}/"
+        )
+        all_organizations = api_client.get("/api/v1/admin/licensing/organizations/")
+
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data["count"], 1)
+        self.assertEqual(listed.data["results"][0]["id"], self.organization.pk)
+        self.assertEqual(
+            listed.data["results"][0]["status"],
+            License.Status.EXPIRING_SOON,
+        )
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(
+            detail.data["licenses"][0]["status"],
+            License.Status.EXPIRING_SOON,
+        )
+        empty_row = next(
+            row
+            for row in all_organizations.data["results"]
+            if row["id"] == empty_organization.pk
+        )
+        self.assertEqual(empty_row["status"], "no_licenses")
+
     def test_admin_organization_detail_reuses_license_allocations_and_history(self):
         license = self.provision(name="Admin Detail License")
         LicenseLifecycleService.allocate(

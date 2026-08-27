@@ -132,7 +132,7 @@ export function PaymentPage() {
   const purchaseItems = order?.items ?? cart.items.map(({ product }) => product)
   const organizationRequiredForPayment = !staffPreview && !renewal && purchaseItems.some((item) => item.licensing_role === 'license_product' || item.licensing_role === 'licensed_product')
 
-  const { register, handleSubmit, reset, setError, formState: { errors } } = useForm<BillingForm>({
+  const { register, handleSubmit, reset, setError, setValue, formState: { errors } } = useForm<BillingForm>({
     defaultValues: billingDefaults(auth.user),
   })
 
@@ -149,6 +149,16 @@ export function PaymentPage() {
       country: order.shipping_country || auth.user?.profile.country || '',
     })
   }, [auth.user, order, reset])
+
+  const selectedOrganization = workspacesQuery.data?.organizations.find(
+    (organization) => organization.id === selectedOrganizationId,
+  )
+
+  useEffect(() => {
+    if (!order && selectedOrganization) {
+      setValue('company', selectedOrganization.name)
+    }
+  }, [order, selectedOrganization, setValue])
 
   const createSession = useMutation({
     mutationFn: async (billing: BillingDetails) => {

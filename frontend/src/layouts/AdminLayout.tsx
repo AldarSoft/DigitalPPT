@@ -17,15 +17,11 @@ export function AdminLayout() {
         queryKey: ['admin-quotes', 'sidebar-count'],
         queryFn: () => api.quotes('status=new&page=1&page_size=1'),
         enabled: Boolean(auth.user?.is_staff),
-        refetchInterval: 10_000,
-        refetchIntervalInBackground: false,
     });
     const orderCountQuery = useQuery({
         queryKey: ['admin-orders', 'sidebar-count'],
         queryFn: () => api.orders('status=pending&page=1&page_size=1'),
         enabled: Boolean(auth.user?.is_staff),
-        refetchInterval: 10_000,
-        refetchIntervalInBackground: false,
     });
     const badgeCounts = {
         quotes: resultCount(quoteCountQuery.data),

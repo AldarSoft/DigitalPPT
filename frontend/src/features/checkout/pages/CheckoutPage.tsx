@@ -73,8 +73,10 @@ export function CheckoutPage() {
         <p className={tw('eyebrow')}>QUOTE REQUEST RECEIVED</p>
         <h1>Thank you. Our team will review your request.</h1>
         <p>Quote request <strong>{completedQuote.quote_number}</strong> was created with {completedQuote.items.length} {completedQuote.items.length === 1 ? 'item' : 'items'}. A specialist will confirm pricing, availability and delivery.</p>
+        {!auth.user ? <p>We also sent a secure quote link to your email. Create an account with that same email, then open the email link to connect and track your quote.</p> : null}
         <div>
-          <Link className={tw('primary-action')} to={auth.user ? '/account' : '/shop'}>{auth.user ? 'View quote requests' : 'Continue shopping'} <ArrowRight size={17} /></Link>
+          <Link className={tw('primary-action')} to={auth.user ? '/account' : '/register'}>{auth.user ? 'View quote requests' : 'Create account'} <ArrowRight size={17} /></Link>
+          {!auth.user ? <Link to="/shop">Continue shopping</Link> : null}
           <button type="button" onClick={() => navigate('/')}>Return home</button>
         </div>
       </main>

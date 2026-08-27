@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Building2, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Package, Settings, UserRound, Users, X, type LucideIcon } from 'lucide-react'
+import { Building2, CreditCard, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Package, Settings, UserRound, Users, X, type LucideIcon } from 'lucide-react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { Pagination } from '../../../components/Pagination'
@@ -26,7 +26,7 @@ type AccountNavItem = readonly [AccountTab, LucideIcon, string]
 const ACCOUNT_NAV_ITEMS: AccountNavItem[] = [
   ['overview', LayoutDashboard, 'Overview'],
   ['quotes', FileText, 'Quote requests'],
-  ['orders', Package, 'Past orders'],
+  ['orders', Package, 'Orders'],
   ['licenses', KeyRound, 'Licenses'],
   ['team', Users, 'Organization Team'],
   ['organization', Building2, 'Organization settings'],
@@ -121,6 +121,7 @@ export function AccountPage() {
     return <Navigate to="/login" state={{ from: "/account" }} replace />;
   const orders = ordersQuery.data ? unwrap(ordersQuery.data) : [];
   const quotes = quotesQuery.data ? unwrap(quotesQuery.data) : [];
+  const pendingInvoiceQuote = quotes.find((quote) => quote.status === 'quoted' && quote.order_status === 'pending');
   const selectedRecord = selectedRecordState ?? (linkedQuoteQuery.data ? { kind: 'quote' as const, value: linkedQuoteQuery.data } : null);
   const orderCount = ordersQuery.data && !Array.isArray(ordersQuery.data) ? ordersQuery.data.count : orders.length;
   const quoteCount = quotesQuery.data && !Array.isArray(quotesQuery.data) ? quotesQuery.data.count : quotes.length;
@@ -155,7 +156,7 @@ export function AccountPage() {
       <section className={tw("account-welcome shell")}>
         <p className={tw("eyebrow")}>MY ACCOUNT</p>
         <h1>Welcome back, {auth.user.first_name || "there"}</h1>
-        <p>{isStaff ? 'Manage your account details.' : 'Manage quote requests, past orders, account details and your saved address.'}</p>
+        <p>{isStaff ? 'Manage your account details.' : 'Manage quote requests, orders, account details and your saved address.'}</p>
       </section>
       <section className={tw("account-body")}>
         <div className={tw("shell account-grid")}>
@@ -196,6 +197,10 @@ export function AccountPage() {
             </nav>
           </aside>
           <div className={tw("account-content")}>
+            {!isStaff && pendingInvoiceQuote ? <section className="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-control border border-warning bg-warning-soft p-4 text-sm text-warning" aria-label="Invoice awaiting payment">
+              <div className="flex min-w-0 items-start gap-3"><CreditCard className="mt-0.5 shrink-0" size={20} /><div><strong className="block text-base text-ink">Invoice ready for payment</strong><p className="mt-1">Quote {pendingInvoiceQuote.quote_number} created order {pendingInvoiceQuote.order_number}. Review the invoice and complete payment to continue.</p></div></div>
+              <button className={tw('action-button action-button-primary action-button-compact')} type="button" onClick={() => selectQuote({ kind: 'quote', value: pendingInvoiceQuote })}>Review invoice</button>
+            </section> : null}
             {!isStaff && tab === "overview" ? (
               <AccountOverview
                 user={auth.user}
@@ -212,7 +217,7 @@ export function AccountPage() {
             </> : null}
             {!isStaff && tab === "orders" ? (
               <>
-                <OrdersTable orders={orders} loading={ordersQuery.isLoading} paymentsEnabled={paymentStatusQuery.data?.storefront_enabled} onSelect={(order) => setSelectedRecordState({ kind: 'order', value: order })} />
+                <OrdersTable orders={orders} loading={ordersQuery.isLoading} paymentsEnabled={paymentStatusQuery.data?.storefront_enabled} organizationId={organizationId} onSelect={(order) => setSelectedRecordState({ kind: 'order', value: order })} />
                 <Pagination page={orderPage} pageSize={ORDER_PAGE_SIZE} total={orderCount} loading={ordersQuery.isFetching} className="mt-3" onPageChange={setOrderPage} />
               </>
             ) : null}

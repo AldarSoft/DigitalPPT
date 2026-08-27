@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Boxes, Download, Package, Plus, Search, ShoppingCart, X } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api, ApiError, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
@@ -54,8 +54,9 @@ function availableTransitions(order: Order) {
 
 export function AdminOrdersPage() {
     const queryClient = useQueryClient();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [search, setSearch] = useState('');
-    const [status, setStatus] = useState('');
+    const [status, setStatus] = useState(() => searchParams.get('status') ?? '');
     const [page, setPage] = useState(1);
     const [selected, setSelected] = useState<Order | null>(null);
     const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -75,6 +76,16 @@ export function AdminOrdersPage() {
     });
     const orders = ordersQuery.data ? unwrap(ordersQuery.data) : [];
     const orderTotal = ordersQuery.data && !Array.isArray(ordersQuery.data) ? ordersQuery.data.count : orders.length;
+    const changeStatusFilter = (value: string) => {
+        setStatus(value);
+        setPage(1);
+        setSearchParams((current) => {
+            const next = new URLSearchParams(current);
+            if (value) next.set('status', value);
+            else next.delete('status');
+            return next;
+        }, { replace: true });
+    };
 
     const update = useMutation({
         mutationFn: ({ orderNumber, value }: {
@@ -100,7 +111,7 @@ export function AdminOrdersPage() {
         <Metric label="Cancelled on page" value={String(orders.filter((order) => orderStatusKey(order.status) === 'cancelled').length)} icon={X}/>
       </section>
       <section className={tw("admin-panel admin-section-gap")}>
-        <div className={tw("orders-toolbar")}><h2>Recent orders</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }}/></div><AdminSelect aria-label="Filter by order status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">All status</option><option value="draft">Draft</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
+        <div className={tw("orders-toolbar")}><h2>Recent orders</h2><div><Search size={18}/><input placeholder="Search order or customer" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }}/></div><AdminSelect aria-label="Filter by order status" value={status} onChange={(event) => changeStatusFilter(event.target.value)}><option value="">All status</option><option value="draft">Draft</option><option value="pending">Awaiting payment</option><option value="processing">Processing</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></AdminSelect></div>
         <OrderRows orders={orders} onSelect={(order) => { setConfirmingCancel(false); setSelected(order); }}/>
       </section>
       <Pagination

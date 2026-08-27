@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, BadgeCheck, Clock3, Download, FileText, MessageSquare, Search, Send, X } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, Clock3, CreditCard, Download, FileText, MessageSquare, Search, Send, X } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api'
@@ -20,7 +20,7 @@ const PAGE_SIZE = 10
 const QUOTE_STEPS = [
   { value: 'new', label: 'Pending' },
   { value: 'reviewing', label: 'Processing' },
-  { value: 'quoted', label: 'Processing' },
+  { value: 'quoted', label: 'Invoice ready' },
   { value: 'approved', label: 'Completed' },
 ] as const
 
@@ -28,7 +28,7 @@ export function AdminQuotesPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState('')
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState(() => searchParams.get('status') ?? '')
   const [page, setPage] = useState(1)
   const [selectedQuote, setSelectedQuote] = useState<QuoteRequest | null>(null)
   const [confirmingClose, setConfirmingClose] = useState(false)
@@ -71,6 +71,12 @@ export function AdminQuotesPage() {
   const quotes = quotesQuery.data ? unwrap(quotesQuery.data) : []
   const quoteTotal = quotesQuery.data && !Array.isArray(quotesQuery.data) ? quotesQuery.data.count : quotes.length
   const selected = linkedQuoteQuery.data ?? selectedQuote ?? null
+  useEffect(() => {
+    const requestedStatus = searchParams.get('status') ?? ''
+    if (requestedStatus === status) return
+    setStatus(requestedStatus)
+    setPage(1)
+  }, [searchParams, status])
   useEffect(() => {
     const messageList = messagesRef.current
     if (messageList) messageList.scrollTop = messageList.scrollHeight
@@ -144,6 +150,17 @@ export function AdminQuotesPage() {
     }, { replace: true })
   }
 
+  const changeStatusFilter = (value: string) => {
+    setStatus(value)
+    setPage(1)
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (value) next.set('status', value)
+      else next.delete('status')
+      return next
+    }, { replace: true })
+  }
+
   const sendInvoice = () => {
     if (!selected) return
     if (selected.items.some((item) => Number(itemPrices[item.id] ?? item.quoted_unit_price ?? item.suggested_unit_price ?? 0) <= 0)) {
@@ -165,29 +182,29 @@ export function AdminQuotesPage() {
       </div>
       <section className={tw('admin-stats order-stats')}>
         <Metric label="Total requests" value={String(allQuotes.length)} icon={FileText} />
-        <Metric label="Pending" value={String(allQuotes.filter((quote) => quoteStatusKey(quote.status) === 'pending').length)} icon={Clock3} />
-        <Metric label="Processing" value={String(allQuotes.filter((quote) => quoteStatusKey(quote.status) === 'processing').length)} icon={Search} />
+        <Metric label="Needs review" value={String(allQuotes.filter((quote) => quote.status === 'new' || quote.status === 'reviewing').length)} icon={Clock3} />
+        <Metric label="Awaiting payment" value={String(allQuotes.filter((quote) => quote.status === 'quoted' && quote.order_status === 'pending').length)} icon={CreditCard} />
         <Metric label="Completed" value={String(allQuotes.filter((quote) => quoteStatusKey(quote.status) === 'completed').length)} icon={BadgeCheck} />
       </section>
       <section className={tw('admin-panel admin-section-gap')}>
         <div className={tw('orders-toolbar')}>
           <h2>Recent requests</h2>
           <div><Search size={18} /><input placeholder="Search quote or customer" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} /></div>
-          <AdminSelect aria-label="Filter by quote status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1) }}>
-            <option value="">All status</option><option value="pending">Pending</option><option value="processing">Processing</option><option value="completed">Completed</option>
+          <AdminSelect aria-label="Filter by quote status" value={status} onChange={(event) => changeStatusFilter(event.target.value)}>
+            <option value="">All status</option><option value="pending">Pending review</option><option value="processing">In progress</option><option value="completed">Completed</option>
           </AdminSelect>
         </div>
         <div className={tw('admin-table-wrap')}>
           <table className={tw('admin-table')}>
             <thead><tr><th>Quote ID</th><th>Requester</th><th>Date</th><th>Items</th><th>Linked order</th><th>Status</th><th>Action</th></tr></thead>
             <tbody>{quotes.length ? quotes.map((quote) => (
-              <tr className={tw('record-row')} key={quote.id} onDoubleClick={() => openQuote(quote)}>
+              <tr className={tw(`record-row ${quote.status === 'new' || (quote.status === 'quoted' && quote.order_status === 'pending') ? 'bg-warning-soft hover:bg-warning-soft' : ''}`)} key={quote.id} onDoubleClick={() => openQuote(quote)}>
                 <td><button className={tw('record-link')} type="button" onClick={() => openQuote(quote)}>{quote.quote_number}</button></td>
                 <td><div className={tw('quote-requester')}><strong>{quote.requester_contact_person}</strong><small>{quote.requester_company_name || quote.requester_email}</small></div></td>
                 <td>{new Date(quote.created_at).toLocaleDateString()}</td>
                 <td>{quote.items.reduce((total, item) => total + item.quantity, 0)}</td>
                 <td>{quote.order_number || 'No order'}</td>
-                <td><span className={tw(`status status-${quoteStatusKey(quote.status)}`)}>{quoteStatusLabel(quote.status)}</span></td>
+                <td><span className={tw(`status status-${quoteStatusKey(quote.status, quote.order_status)}`)}>{quoteStatusLabel(quote.status, quote.order_status)}</span></td>
                 <td><button className={tw('table-action')} type="button" onClick={() => openQuote(quote)}>View</button></td>
               </tr>
             )) : <tr><td colSpan={7}>No quote requests found.</td></tr>}</tbody>

@@ -15,8 +15,6 @@ export function NotificationMenu({ userId, variant }: { userId: number; variant:
   const notificationsQuery = useQuery({
     queryKey,
     queryFn: api.notifications,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
   })
   const markRead = useMutation({
     mutationFn: (id: number) => api.readNotification(id),

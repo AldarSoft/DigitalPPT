@@ -222,3 +222,14 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         if self.action in {"create", "update", "partial_update"}:
             return AdminUserWriteSerializer
         return UserSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        response_data = UserSerializer(user).data
+        response_data["account_setup_email_queued"] = bool(
+            getattr(user, "_account_setup_email_queued", False)
+        )
+        headers = self.get_success_headers(response_data)
+        return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)

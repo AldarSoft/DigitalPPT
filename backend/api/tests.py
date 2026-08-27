@@ -110,6 +110,32 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data["user"]["is_staff"])
 
+    def test_customer_can_log_in_with_mixed_case_email(self):
+        response = self.client.post(
+            "/api/v1/users/auth/login/",
+            {"email": "Customer@Example.COM", "password": "StrongPass123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["user"]["is_staff"])
+
+    def test_customer_can_log_in_when_an_existing_account_stored_a_mixed_case_email(self):
+        legacy_customer = get_user_model().objects.create_user(
+            username="legacy-customer",
+            email="Legacy.Customer@Example.COM",
+            password="StrongPass123!",
+        )
+
+        response = self.client.post(
+            "/api/v1/users/auth/login/",
+            {"email": "legacy.customer@example.com", "password": "StrongPass123!"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["user"]["id"], legacy_customer.pk)
+
     def test_admin_can_request_and_complete_password_reset(self):
         request_response = self.client.post(
             "/api/v1/users/auth/password-reset/",
@@ -177,6 +203,51 @@ class ActiveApiPermissionTests(APITestCase):
             format="json",
         )
         self.assertEqual(reused_response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_admin_customer_creation_queues_a_single_use_setup_email(self):
+        self.client.force_authenticate(self.admin)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                "/api/v1/users/accounts/",
+                {
+                    "email": "customer-created-by-staff@example.com",
+                    "username": "customer-created-by-staff",
+                    "first_name": "Created",
+                    "last_name": "Customer",
+                    "is_customer": True,
+                    "is_staff": False,
+                    "is_active": True,
+                    "profile": {"company_name": "Example Co"},
+                },
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data["account_setup_email_queued"])
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn("Set up your Digital PTT account", mail.outbox[0].subject)
+        user = get_user_model().objects.get(email="customer-created-by-staff@example.com")
+        self.assertFalse(user.has_usable_password())
+        self.assertEqual(user.profile.company_name, "Example Co")
+
+    def test_admin_customer_creation_rejects_a_staff_entered_password(self):
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post(
+            "/api/v1/users/accounts/",
+            {
+                "email": "password-customer@example.com",
+                "username": "password-customer",
+                "password": "StrongPass123!",
+                "is_customer": True,
+                "is_staff": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("password", response.data)
 
     @override_settings(PASSWORD_RESET_TIMEOUT=60)
     def test_password_reset_rejects_an_expired_token(self):
@@ -393,6 +464,7 @@ class ActiveApiPermissionTests(APITestCase):
             message for message in mail.outbox if message.to == ["customer@example.com"]
         )
         self.assertIn("/auth/claim-quote?quote=", customer_message.body)
+        self.assertIn("sign in or create an account", customer_message.body)
         event_sender.assert_called_once()
         event_name, event_data = event_sender.call_args.args
         self.assertEqual(event_name, "quote.created")
@@ -876,6 +948,38 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(quote_request.user, self.customer)
         self.assertEqual(order.user, self.customer)
         self.assertEqual(self.client.get("/api/v1/quotes/").data["count"], 1)
+
+    def test_guest_quote_claim_access_returns_the_recipient_email_for_a_valid_link(self):
+        quote_request = QuoteRequest.objects.create(
+            requester_company_name="Example Co",
+            requester_contact_person="Test Customer",
+            requester_email=self.customer.email,
+            requester_phone="+1 555 111 2222",
+        )
+
+        response = self.client.get(
+            f"/api/v1/quotes/{quote_request.quote_number}/claim-access/",
+            {"token": make_guest_quote_claim_token(quote_request)},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["requester_email"], self.customer.email)
+
+    def test_guest_quote_claim_access_returns_the_recipient_email_for_a_valid_link(self):
+        quote_request = QuoteRequest.objects.create(
+            requester_company_name="Example Co",
+            requester_contact_person="Test Customer",
+            requester_email=self.customer.email,
+            requester_phone="+1 555 111 2222",
+        )
+
+        response = self.client.get(
+            f"/api/v1/quotes/{quote_request.quote_number}/claim-access/",
+            {"token": make_guest_quote_claim_token(quote_request)},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["requester_email"], self.customer.email)
 
     def test_guest_quote_claim_rejects_a_different_account(self):
         User = get_user_model()

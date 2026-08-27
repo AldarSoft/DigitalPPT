@@ -182,6 +182,7 @@ const componentStyles = {
   "editor-actions": "[display:grid] [grid-template-columns:1fr_1fr] [gap:10px] [margin-top:8px] [&_button]:min-h-10 [&_button]:rounded-control [&_button]:border [&_button]:border-border-input [&_button]:bg-white [&_button]:px-3.5 [&_button]:text-sm [&_button]:font-bold",
   "editor-backdrop": "fixed inset-0 z-90 flex justify-end bg-[rgba(5,17,38,.45)]",
   "editor-check": "[align-items:center] [grid-template-columns:20px_1fr] [align-self:end] [min-height:46px] [&_input]:[min-height:auto] [&_input]:[accent-color:var(--blue)]",
+  "editor-help": "rounded-control bg-surface-raised px-3 py-2 text-xs leading-relaxed text-text-soft",
   "editor-row": "[display:grid] [grid-template-columns:1fr_1fr] [gap:13px] max-[600px]:[grid-template-columns:1fr]",
   "banner-cell": "flex min-w-[260px] items-center gap-3 [&_>_span]:flex [&_>_span]:size-12 [&_>_span]:shrink-0 [&_>_span]:items-center [&_>_span]:justify-center [&_>_span]:overflow-hidden [&_>_span]:rounded-control [&_>_span]:bg-surface-raised [&_>_span]:text-text-soft [&_img]:size-full [&_img]:object-cover [&_div]:flex [&_div]:min-w-0 [&_div]:flex-col [&_strong]:truncate [&_small]:mt-0.5 [&_small]:truncate [&_small]:text-text-soft",
   "banner-editor": "[&_.banner-preview]:mb-1",

@@ -1,5 +1,6 @@
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
@@ -31,7 +32,7 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
     ordering_fields = ("created_at", "status")
 
     def get_permissions(self):
-        if self.action == "create":
+        if self.action in {"create", "claim_access"}:
             return [AllowAny()]
         if self.action in {"partial_update", "update", "destroy"}:
             return [IsAdminUser()]
@@ -69,7 +70,7 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         return queryset.filter(user=user)
 
     def get_serializer_class(self):
-        if self.action == "create":
+        if self.action in {"create", "claim_access"}:
             return QuoteRequestCreateSerializer
         if self.action in {"partial_update", "update"}:
             return QuoteRequestStatusSerializer
@@ -109,6 +110,20 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
         return self._serialize(serializer.save())
+
+    @action(detail=True, methods=["get"], url_path="claim-access")
+    def claim_access(self, request, quote_number=None):
+        quote_request = self.queryset.filter(quote_number=quote_number).first()
+        if not quote_request:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+        token = request.query_params.get("token", "")
+        if not token:
+            raise ValidationError({"token": "This quote access link is incomplete or invalid."})
+
+        from quotes.claims import validate_guest_quote_claim_token
+
+        validate_guest_quote_claim_token(quote_request=quote_request, token=token)
+        return Response({"requester_email": quote_request.requester_email})
 
     @action(detail=True, methods=["post"])
     def messages(self, request, quote_number=None):

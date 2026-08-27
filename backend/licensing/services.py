@@ -485,31 +485,22 @@ class OrganizationSummaryService:
         licenses = License.objects.filter(organization=organization).exclude(
             status=License.Status.CANCELLED
         )
-        totals = licenses.aggregate(
-            license_count=models.Count("pk"),
-            active_license_count=models.Count(
-                "pk",
-                filter=models.Q(status__in=cls.ACTIVE_LICENSE_STATUSES),
-            ),
-            expired_license_count=models.Count(
-                "pk",
-                filter=models.Q(status=License.Status.EXPIRED),
-            ),
-            expiring_soon_count=models.Count(
-                "pk",
-                filter=models.Q(status=License.Status.EXPIRING_SOON),
-            ),
-            total_capacity=models.Sum("capacity"),
-            used_capacity=models.Sum("used_capacity"),
-        )
-        total_capacity = totals["total_capacity"] or 0
-        used_capacity = totals["used_capacity"] or 0
         today = timezone.localdate()
-        next_license = (
-            licenses.filter(expires_on__gte=today)
-            .exclude(expires_on__isnull=True)
-            .order_by("expires_on", "pk")
-            .first()
+        current_licenses = list(licenses)
+        effective_statuses = [
+            LicenseExpiryService.effective_status(license, on_date=today)
+            for license in current_licenses
+        ]
+        total_capacity = sum(license.capacity for license in current_licenses)
+        used_capacity = sum(license.used_capacity for license in current_licenses)
+        next_license = min(
+            (
+                license
+                for license in current_licenses
+                if license.expires_on is not None and license.expires_on >= today
+            ),
+            key=lambda license: (license.expires_on, license.pk),
+            default=None,
         )
         owner_membership = (
             organization.memberships.select_related("user")
@@ -538,10 +529,17 @@ class OrganizationSummaryService:
                 "current_user_role": membership.role,
             },
             "summary": {
-                "license_count": totals["license_count"],
-                "active_license_count": totals["active_license_count"],
-                "expiring_soon_count": totals["expiring_soon_count"],
-                "expired_license_count": totals["expired_license_count"],
+                "license_count": len(current_licenses),
+                "active_license_count": sum(
+                    status in cls.ACTIVE_LICENSE_STATUSES
+                    for status in effective_statuses
+                ),
+                "expiring_soon_count": effective_statuses.count(
+                    License.Status.EXPIRING_SOON
+                ),
+                "expired_license_count": effective_statuses.count(
+                    License.Status.EXPIRED
+                ),
                 "total_capacity": total_capacity,
                 "used_capacity": used_capacity,
                 "available_capacity": total_capacity - used_capacity,
@@ -599,7 +597,7 @@ class OrganizationLicenseListService:
                     "name": license.name,
                     "plan_name": license.license_product.name,
                     "plan_sku": license.license_product.sku,
-                    "status": license.status,
+                    "status": LicenseExpiryService.effective_status(license),
                     "capacity": license.capacity,
                     "used_capacity": license.used_capacity,
                     "available_capacity": license.available_capacity,
@@ -621,9 +619,11 @@ class OrganizationLicenseListService:
             .values("created_at")
             .first()
         )
-        has_current_renewal_need = licenses.filter(
-            status__in=(License.Status.EXPIRING_SOON, License.Status.EXPIRED),
-        ).exists()
+        has_current_renewal_need = any(
+            LicenseExpiryService.effective_status(license)
+            in (License.Status.EXPIRING_SOON, License.Status.EXPIRED)
+            for license in licenses
+        )
 
         return {
             "organization": {
@@ -676,7 +676,7 @@ class ClientLicenseDetailService:
             "name": license.name,
             "plan_name": license.license_product.name,
             "plan_sku": license.license_product.sku,
-            "status": license.status,
+            "status": LicenseExpiryService.effective_status(license),
             "capacity": license.capacity,
             "used_capacity": license.used_capacity,
             "available_capacity": license.available_capacity,
@@ -830,10 +830,15 @@ class OrganizationOwnershipService:
                 "Only the Organization Owner can transfer organization ownership."
             )
 
-        current_owner = OrganizationMembership.objects.select_for_update().get(
-            organization=organization,
-            role=OrganizationMembership.Role.OWNER,
-            is_active=True,
+        current_owner = (
+            OrganizationMembership.objects.select_for_update()
+            .select_related("user")
+            .filter(
+                organization=organization,
+                role=OrganizationMembership.Role.OWNER,
+                is_active=True,
+            )
+            .first()
         )
         target = (
             OrganizationMembership.objects.select_for_update()
@@ -855,17 +860,31 @@ class OrganizationOwnershipService:
                 }
             )
 
-        current_owner.role = OrganizationMembership.Role.LICENSE_MANAGER
-        current_owner.save(update_fields=("role", "updated_at"))
+        if current_owner is None and organization.status != Organization.Status.DRAFT:
+            raise ValidationError(
+                {
+                    "organization": (
+                        "An active organization must have an Owner before ownership can be transferred."
+                    )
+                }
+            )
+
+        if current_owner is not None:
+            current_owner.role = OrganizationMembership.Role.LICENSE_MANAGER
+            current_owner.save(update_fields=("role", "updated_at"))
         target.role = OrganizationMembership.Role.OWNER
         target.save(update_fields=("role", "updated_at"))
+        if current_owner is None:
+            organization.status = Organization.Status.ACTIVE
+            organization.save(update_fields=("status", "updated_at"))
         LicenseEvent.objects.create(
             organization=organization,
             event_type=LicenseEvent.Type.OWNERSHIP_TRANSFERRED,
             actor=transferred_by,
             metadata={
-                "previous_owner_id": current_owner.user_id,
-                "previous_owner_email": current_owner.user.email,
+                "initial_owner_assigned": current_owner is None,
+                "previous_owner_id": current_owner.user_id if current_owner else None,
+                "previous_owner_email": current_owner.user.email if current_owner else None,
                 "new_owner_id": target.user_id,
                 "new_owner_email": target.user.email,
             },
@@ -1322,6 +1341,20 @@ class LicenseLifecycleService:
 
 class LicenseExpiryService:
     WARNING_DAYS = (60, 30, 7)
+
+    @classmethod
+    def effective_status(cls, license, *, on_date=None):
+        """Return the expiry state users should see before reconciliation runs."""
+        if license.status != License.Status.ACTIVE:
+            return license.status
+        remaining_days = license.calculate_remaining_days(on_date)
+        if remaining_days is None:
+            return license.status
+        if remaining_days < 0:
+            return License.Status.EXPIRED
+        if remaining_days <= max(cls.WARNING_DAYS):
+            return License.Status.EXPIRING_SOON
+        return license.status
 
     @classmethod
     def _notification_stage(cls, remaining_days):

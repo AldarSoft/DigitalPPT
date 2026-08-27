@@ -40,7 +40,8 @@ export function orderStatusKey(status: Order['status']) {
   return ORDER_STATUS[status]
 }
 
-export function quoteStatusKey(status: QuoteRequest['status']) {
+export function quoteStatusKey(status: QuoteRequest['status'], orderStatus?: QuoteRequest['order_status']) {
+  if (status === 'quoted' && orderStatus === 'pending') return 'pending'
   return QUOTE_STATUS[status]
 }
 
@@ -52,12 +53,17 @@ export function simpleStatusLabel(status: SimpleStatus) {
   return LABELS[status]
 }
 
-export function orderStatusLabel(status: Order['status']) {
+export function orderStatusLabel(status: Order['status'], source?: Order['source']) {
+  if (status === 'pending' && source === 'quote') return 'Awaiting payment'
   return simpleStatusLabel(orderStatusKey(status))
 }
 
-export function quoteStatusLabel(status: QuoteRequest['status']) {
-  return simpleStatusLabel(quoteStatusKey(status))
+export function quoteStatusLabel(status: QuoteRequest['status'], orderStatus?: QuoteRequest['order_status']) {
+  if (status === 'new') return 'Pending review'
+  if (status === 'reviewing') return 'In review'
+  if (status === 'quoted' && orderStatus === 'pending') return 'Invoice ready'
+  if (status === 'quoted') return 'Invoice sent'
+  return simpleStatusLabel(quoteStatusKey(status, orderStatus))
 }
 
 export function paymentStatusLabel(status: PaymentAttempt['status']) {

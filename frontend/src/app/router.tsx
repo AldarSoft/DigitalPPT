@@ -55,9 +55,9 @@ export function AppRouter() {
           <Route path="login" element={<LoginPage />} />
           <Route path="register" element={<RegisterPage />} />
           <Route path="auth/reset-password" element={<ResetPasswordPage />} />
+          <Route path="auth/claim-quote" element={<ClaimQuotePage />} />
           <Route path="invite" element={<AcceptOrganizationInvitationPage />} />
           <Route element={<RequireAuth />}>
-            <Route path="auth/claim-quote" element={<ClaimQuotePage />} />
             <Route path="account" element={<AccountPage />} />
             <Route path="payment" element={<PaymentPage />} />
           </Route>

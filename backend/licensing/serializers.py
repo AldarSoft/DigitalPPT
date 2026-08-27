@@ -380,7 +380,7 @@ class AdminOrganizationLicenseRowSerializer(serializers.Serializer):
     total_capacity = serializers.IntegerField()
     next_expiry = serializers.DateField(allow_null=True)
     status = serializers.ChoiceField(
-        choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"))
+        choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"), ("no_licenses", "No licenses"))
     )
 
 
@@ -405,7 +405,7 @@ class AdminOrganizationDetailSummarySerializer(serializers.Serializer):
     licensed_product_count = serializers.IntegerField()
     active_quantity = serializers.IntegerField()
     status = serializers.ChoiceField(
-        choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"))
+        choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"), ("no_licenses", "No licenses"))
     )
 
 

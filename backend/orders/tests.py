@@ -3,7 +3,7 @@ from django.test import TestCase
 from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
-from licensing.models import License, Organization
+from licensing.models import License, LicenseEvent, Organization, OrganizationMembership
 from licensing.services import OrganizationService
 from orders.models import InventoryReservation, Order, OrderItem
 from orders.services import OrderService
@@ -359,3 +359,34 @@ class AdminOrganizationCreationTests(TestCase):
         organization.refresh_from_db()
         self.assertEqual(organization.status, Organization.Status.ACTIVE)
         self.assertEqual(organization.memberships.get(role="owner").user, owner)
+
+    def test_staff_can_assign_the_initial_owner_from_a_draft_license_manager(self):
+        manager = get_user_model().objects.create_user(
+            username="draft-manager",
+            email="draft-manager@example.com",
+            password="StrongPass123!",
+        )
+        organization = OrganizationService.create_draft(
+            name="Owner Assignment Corp",
+            created_by=self.staff,
+        )
+        membership = OrganizationMembership.objects.create(
+            organization=organization,
+            user=manager,
+            role=OrganizationMembership.Role.LICENSE_MANAGER,
+        )
+
+        response = self.api.post(
+            f"/api/v1/admin/licensing/organizations/{organization.pk}/users/ownership-transfer/",
+            {"membership_id": membership.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        organization.refresh_from_db()
+        membership.refresh_from_db()
+        self.assertEqual(organization.status, Organization.Status.ACTIVE)
+        self.assertEqual(membership.role, OrganizationMembership.Role.OWNER)
+        event = LicenseEvent.objects.get(organization=organization)
+        self.assertTrue(event.metadata["initial_owner_assigned"])
+        self.assertIsNone(event.metadata["previous_owner_id"])

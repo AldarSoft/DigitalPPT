@@ -130,7 +130,7 @@ def _send_quote_customer_email(payload: dict) -> None:
     quote = _quote_context(payload)
     quote_url = _customer_quote_url(quote)
     access_copy = (
-        "Use the secure link below to connect this quote to an account registered with this email address:\n"
+        "Use the secure link below to sign in or create an account with this email address, then connect this quote:\n"
         f"{quote_url}\n\n"
         if not quote.user_id
         else "You can review this quote in your account:\n"
@@ -152,7 +152,7 @@ def _send_quote_customer_email(payload: dict) -> None:
         "No order has been created yet.</p>"
         "<p><strong>Requested products</strong></p>"
         f"{_quote_items_html(quote)}"
-        f'<p><a href="{escape(quote_url, quote=True)}">Open your quote securely</a></p>'
+        f'<p><a href="{escape(quote_url, quote=True)}">Open your quote securely</a> (sign in or create an account with this email address).</p>'
         "<p>Our sales team will contact you with confirmed pricing and delivery details.</p>"
         f"<p>{escape(settings.SITE_NAME)}</p>"
     )

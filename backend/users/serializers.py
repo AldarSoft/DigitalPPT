@@ -7,6 +7,7 @@ from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 
 from users.models import User, UserProfile
+from users.services import AccountSetupService
 from common.validators import validate_phone
 
 
@@ -59,9 +60,11 @@ class LoginSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         request = self.context.get("request")
+        email = attrs["email"].strip().casefold()
+        matched_user = User.objects.filter(email__iexact=email).first()
         user = authenticate(
             request=request,
-            username=attrs["email"],
+            username=matched_user.email if matched_user else email,
             password=attrs["password"],
         )
         if not user:
@@ -196,7 +199,29 @@ class AdminUserWriteSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         profile_data = validated_data.pop("profile", {})
         password = validated_data.pop("password", None)
-        user = User.objects.create_user(password=password, **validated_data)
+
+        # Customer accounts created by staff must choose their own password from
+        # the single-use setup email. Staff accounts retain the existing path.
+        is_customer = validated_data.get("is_customer", True)
+        is_staff = validated_data.get("is_staff", False)
+        if is_customer and not is_staff:
+            if password:
+                raise serializers.ValidationError(
+                    {"password": "Customer accounts use the emailed password setup link."}
+                )
+
+            user = AccountSetupService.create_user(
+                email=validated_data["email"],
+                first_name=validated_data.get("first_name", ""),
+                last_name=validated_data.get("last_name", ""),
+                phone_number=validated_data.get("phone_number", ""),
+            )
+            user.is_active = validated_data.get("is_active", True)
+            user.save(update_fields=["is_active", "updated_at"])
+            user._account_setup_email_queued = True
+        else:
+            user = User.objects.create_user(password=password, **validated_data)
+
         if profile_data:
             for field, value in profile_data.items():
                 setattr(user.profile, field, value)

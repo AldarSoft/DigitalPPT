@@ -13,7 +13,11 @@ from licensing.models import (
     OrganizationMembership,
     ProductLicenseAllocation,
 )
-from licensing.services import ClientLicenseDetailService, LicenseLifecycleService
+from licensing.services import (
+    ClientLicenseDetailService,
+    LicenseExpiryService,
+    LicenseLifecycleService,
+)
 from payments.models import PaymentAttempt
 
 
@@ -45,6 +49,32 @@ class AdminOrganizationLicenseService:
             )
         if status == Organization.Status.DRAFT:
             queryset = queryset.filter(status=Organization.Status.DRAFT)
+        elif status == License.Status.ACTIVE:
+            queryset = queryset.filter(licenses__status=License.Status.ACTIVE).filter(
+                models.Q(licenses__expires_on__isnull=True)
+                | models.Q(
+                    licenses__expires_on__gt=timezone.localdate() + timedelta(days=60)
+                )
+            )
+        elif status == License.Status.EXPIRING_SOON:
+            queryset = queryset.filter(
+                models.Q(licenses__status=License.Status.EXPIRING_SOON)
+                | models.Q(
+                    licenses__status=License.Status.ACTIVE,
+                    licenses__expires_on__range=(
+                        timezone.localdate(),
+                        timezone.localdate() + timedelta(days=60),
+                    ),
+                )
+            )
+        elif status == License.Status.EXPIRED:
+            queryset = queryset.filter(
+                models.Q(licenses__status=License.Status.EXPIRED)
+                | models.Q(
+                    licenses__status=License.Status.ACTIVE,
+                    licenses__expires_on__lt=timezone.localdate(),
+                )
+            )
         elif status:
             queryset = queryset.filter(licenses__status=status)
         if product:
@@ -105,12 +135,8 @@ class AdminOrganizationLicenseService:
         licenses = list(licenses)
         today = timezone.localdate()
         if any(
-            license.status == License.Status.EXPIRING_SOON
-            or (
-                license.status == License.Status.ACTIVE
-                and license.expires_on
-                and license.expires_on <= today + timedelta(days=60)
-            )
+            LicenseExpiryService.effective_status(license, on_date=today)
+            == License.Status.EXPIRING_SOON
             for license in licenses
         ):
             return License.Status.EXPIRING_SOON
@@ -120,9 +146,12 @@ class AdminOrganizationLicenseService:
             License.Status.PENDING_PAYMENT,
             License.Status.CANCELLED,
         ):
-            if any(license.status == status for license in licenses):
+            if any(
+                LicenseExpiryService.effective_status(license, on_date=today) == status
+                for license in licenses
+            ):
                 return status
-        return License.Status.CANCELLED
+        return "no_licenses"
 
     @classmethod
     def organization_row(cls, organization):

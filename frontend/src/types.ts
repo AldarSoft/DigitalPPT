@@ -103,6 +103,7 @@ export interface User {
   is_active: boolean
   date_joined: string
   profile: UserProfile
+  account_setup_email_queued?: boolean
 }
 
 export interface Promotion {

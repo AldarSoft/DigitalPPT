@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
-import { CalendarClock, ChevronRight, Download, Search, Trash2, UserPlus, Users, X } from 'lucide-react'
+import { CalendarClock, ChevronRight, Download, KeyRound, Search, Trash2, UserPlus, Users, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
@@ -56,7 +56,6 @@ type CustomerForm = {
     phone_number: string;
     company_name: string;
     job_title: string;
-    password: string;
     is_active: boolean;
 };
 function CustomerEditor({ user, onClose }: {
@@ -72,9 +71,8 @@ function CustomerEditor({ user, onClose }: {
             phone_number: user.phone_number,
             company_name: user.profile.company_name,
             job_title: user.profile.job_title,
-            password: '',
             is_active: user.is_active,
-        } : { is_active: true, password: '' },
+        } : { is_active: true },
     });
     const save = useMutation({
         mutationFn: (values: CustomerForm) => {
@@ -88,16 +86,20 @@ function CustomerEditor({ user, onClose }: {
                 is_staff: false,
                 is_active: values.is_active,
                 profile: { company_name: values.company_name, job_title: values.job_title },
-                ...(values.password ? { password: values.password } : {}),
             };
             return user ? api.updateUser(user.id, payload) : api.createUser(payload);
         },
-        onSuccess: () => {
+        onSuccess: (response) => {
             queryClient.invalidateQueries({ queryKey: ['admin-users'] });
-            toast.success(user ? 'Customer saved' : 'Customer created');
+            toast.success(user ? 'Customer saved' : response.account_setup_email_queued ? 'Customer created. Password setup email queued.' : 'Customer created');
             onClose();
         },
         onError: () => toast.error('Could not save customer'),
+    });
+    const resetPassword = useMutation({
+        mutationFn: () => api.resetPassword(user!.email),
+        onSuccess: () => toast.success('Password reset email sent.'),
+        onError: () => toast.error('Could not send a password reset email'),
     });
     return (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={onClose}>
       <aside className={tw("product-editor")} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
@@ -107,9 +109,10 @@ function CustomerEditor({ user, onClose }: {
           <div className={tw("editor-row")}><label>First name<input required {...register('first_name')}/></label><label>Last name<input required {...register('last_name')}/></label></div>
           <label>Phone<input {...register('phone_number')}/></label>
           <div className={tw("editor-row")}><label>Company<input {...register('company_name')}/></label><label>Job title<input {...register('job_title')}/></label></div>
-          <label>{user ? 'New password (optional)' : 'Temporary password'}<input type="password" minLength={8} required={!user} {...register('password')}/></label>
+          {!user ? <p className={tw("editor-help")}>The customer will receive a single-use email to choose their password.</p> : null}
           <label className={tw("editor-check")}><input type="checkbox" {...register('is_active')}/>Account is active</label>
-          <div className={tw("editor-actions")}><button type="button" onClick={onClose}>Cancel</button><button className={tw("admin-primary")} type="submit" disabled={save.isPending}>{save.isPending ? 'Saving...' : 'Save customer'}</button></div>
+          {user ? <button className={tw("action-button action-button-secondary action-button-compact")} type="button" disabled={resetPassword.isPending} onClick={() => resetPassword.mutate()}><KeyRound size={15} />{resetPassword.isPending ? 'Sending reset...' : 'Send password reset'}</button> : null}
+          <div className={tw("editor-actions")}><button type="button" onClick={onClose}>Cancel</button><button className={tw("admin-primary")} type="submit" disabled={save.isPending}>{save.isPending ? 'Saving...' : user ? 'Save customer' : 'Create customer'}</button></div>
         </form>
       </aside>
     </div>);

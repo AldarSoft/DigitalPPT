@@ -19,7 +19,11 @@ export function AccountOverview({
   onTab: (tab: AccountTab) => void;
   onQuoteSelect: (quote: QuoteRequest) => void;
 }) {
-  const inReview = quotes.filter((quote) => quote.status === 'new' || quote.status === 'reviewing').length;
+  const needsAttention = quotes.filter((quote) => (
+    quote.status === 'new'
+    || quote.status === 'reviewing'
+    || (quote.status === 'quoted' && quote.order_status === 'pending')
+  )).length;
   return (
     <>
       <div className={tw("account-stats")}>
@@ -30,13 +34,13 @@ export function AccountOverview({
         </article>
         <article>
           <Search size={23} />
-          <strong>{inReview}</strong>
-          <span>Processing</span>
+          <strong>{needsAttention}</strong>
+          <span>Needs attention</span>
         </article>
         <article>
           <Package size={23} />
           <strong>{orderCount}</strong>
-          <span>Past orders</span>
+          <span>Orders</span>
         </article>
       </div>
       <section className={tw("account-panel")}>

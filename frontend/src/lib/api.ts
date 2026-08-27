@@ -317,6 +317,8 @@ export const api = {
   quote: (quoteNumber: string) => request<QuoteRequest>(`/quotes/${quoteNumber}/`),
   createQuote: (data: unknown) =>
     request<QuoteRequest>('/quotes/', { method: 'POST', body: JSON.stringify(data) }),
+  quoteClaimAccess: (quoteNumber: string, token: string) =>
+    request<{ requester_email: string }>(`/quotes/${encodeURIComponent(quoteNumber)}/claim-access/?token=${encodeURIComponent(token)}`),
   claimQuote: (quoteNumber: string, token: string) =>
     request<QuoteRequest>(`/quotes/${encodeURIComponent(quoteNumber)}/claim/`, {
       method: 'POST',
