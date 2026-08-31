@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -14,6 +15,9 @@ from orders.models import Order
 from orders.services import InventoryReservationService, OrderService
 from payments.models import PaymentAttempt, PaymentProvider, PaymentProviderEvent
 from payments.providers import get_provider_adapter, provider_is_available
+
+
+security_logger = logging.getLogger("security.payments")
 
 
 class PaymentService:
@@ -95,12 +99,29 @@ class PaymentService:
         if PaymentAttempt.objects.filter(order=locked_order, status=PaymentAttempt.Status.SUCCEEDED).exists():
             raise ValidationError({"order": "This order is already paid."})
 
-        provider = PaymentProvider.objects.filter(
+        provider = PaymentProvider.objects.select_for_update().filter(
             code=PaymentProvider.Code.BANK_TRANSFER,
             is_enabled=True,
         ).first()
         if not provider:
             raise ValidationError({"provider": "Enable the Bank transfer provider before confirming payment."})
+
+        bank_transaction_reference = bank_transaction_reference.strip().upper()
+        if PaymentAttempt.objects.filter(
+            provider=provider,
+            external_reference=bank_transaction_reference,
+            status=PaymentAttempt.Status.SUCCEEDED,
+        ).exists():
+            security_logger.warning(
+                "Duplicate bank reference blocked for order_id=%s actor_id=%s",
+                locked_order.pk,
+                actor.pk,
+            )
+            raise ValidationError({
+                "bank_transaction_reference": (
+                    "This bank transaction reference was already confirmed for another payment."
+                )
+            })
 
         attempt = PaymentAttempt.objects.create(
             order=locked_order,
@@ -417,15 +438,21 @@ class PaymentService:
         locked.failure_message = ""
         locked.external_reference = external_reference
         locked.paid_at = timezone.now()
-        locked.save(
-            update_fields=[
-                "status",
-                "failure_message",
-                "external_reference",
-                "paid_at",
-                "updated_at",
-            ]
-        )
+        try:
+            with transaction.atomic():
+                locked.save(
+                    update_fields=[
+                        "status",
+                        "failure_message",
+                        "external_reference",
+                        "paid_at",
+                        "updated_at",
+                    ]
+                )
+        except IntegrityError as exc:
+            raise ValidationError({
+                "external_reference": "This payment reference has already been confirmed."
+            }) from exc
         InventoryReservationService.reserve_for_order(order=locked_order)
         PaymentSuccessProvisioningService.provision(
             payment_attempt=locked,

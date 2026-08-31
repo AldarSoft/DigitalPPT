@@ -37,9 +37,9 @@ export function RegisterPage() {
         }
         setSubmitting(true);
         try {
-            await auth.register(parsed.data);
-            toast.success('Your account is ready');
-            navigate(from || '/account', { replace: true });
+            const result = await auth.register(parsed.data);
+            toast.success(result.detail);
+            navigate('/login', { replace: true, state: { ...location.state, quoteEmail: result.email, verificationPending: true, from } });
         }
         catch (error) {
             toast.error(error instanceof ApiError ? error.message : 'Could not create account');

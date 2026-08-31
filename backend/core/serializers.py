@@ -22,7 +22,55 @@ class BannerSerializer(serializers.ModelSerializer):
         )
 
 
-class SiteSettingSerializer(serializers.ModelSerializer):
+PUBLIC_SITE_SETTING_FIELDS = (
+    "site_name",
+    "tagline",
+    "support_email",
+    "support_phone",
+    "company_address",
+    "facebook_url",
+    "twitter_url",
+    "linkedin_url",
+    "instagram_url",
+    "working_hours",
+    "about_story",
+    "about_mission",
+    "about_vision",
+    "about_image_url",
+    "about_team",
+    "about_values",
+    "about_stats",
+    "meta_title",
+    "meta_description",
+    "homepage_hero_secondary_cta_label",
+    "homepage_hero_secondary_cta_url",
+    "homepage_hero_stats",
+    "homepage_solution_eyebrow",
+    "homepage_solution_title",
+    "homepage_solution_description",
+    "homepage_solution_benefits",
+    "homepage_comparison_eyebrow",
+    "homepage_comparison_title",
+    "homepage_comparison_products",
+    "homepage_resources_eyebrow",
+    "homepage_resources_title",
+    "homepage_resources",
+    "homepage_contact_eyebrow",
+    "homepage_contact_title",
+    "homepage_contact_description",
+    "homepage_contact_cta_label",
+    "homepage_contact_cta_url",
+)
+
+
+class PublicSiteSettingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SiteSetting
+        fields = PUBLIC_SITE_SETTING_FIELDS
+        read_only_fields = PUBLIC_SITE_SETTING_FIELDS
+
+
+class AdminSiteSettingSerializer(serializers.ModelSerializer):
     class Meta:
         model = SiteSetting
         fields = (
@@ -76,6 +124,8 @@ class SiteSettingSerializer(serializers.ModelSerializer):
             "homepage_contact_cta_label",
             "homepage_contact_cta_url",
         )
+
+
 class ContactMessageSerializer(serializers.ModelSerializer):
     phone = serializers.CharField(required=False, allow_blank=True, validators=[validate_phone])
     class Meta:

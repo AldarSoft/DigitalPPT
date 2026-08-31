@@ -1,12 +1,49 @@
+from io import BytesIO
+import tempfile
+
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
 from orders.models import InventoryReservation, Order, OrderItem
 from products.models import Category, InventoryAdjustment, Product
 from products.serializers import ProductSerializer, ProductWriteSerializer
+from PIL import Image
+
+
+class ProductImageSecurityTests(TestCase):
+    def setUp(self):
+        self.staff = get_user_model().objects.create_user(
+            username="image-admin",
+            email="image-admin@example.com",
+            password="StrongPass123!",
+            is_staff=True,
+        )
+        self.api = APIClient()
+        self.api.force_authenticate(self.staff)
+
+    def test_upload_decodes_and_reencodes_a_valid_image(self):
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            source = BytesIO()
+            Image.new("RGB", (24, 24), (20, 80, 180)).save(source, format="PNG")
+            response = self.api.post(
+                "/api/v1/products/upload-image/",
+                {"image": SimpleUploadedFile("photo.png", source.getvalue(), content_type="image/png")},
+                format="multipart",
+            )
+            self.assertEqual(response.status_code, 201)
+            self.assertTrue(response.data["image_url"].endswith(".png"))
+
+    def test_upload_rejects_spoofed_image_content(self):
+        response = self.api.post(
+            "/api/v1/products/upload-image/",
+            {"image": SimpleUploadedFile("fake.png", b"not-an-image", content_type="image/png")},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, 400)
 
 
 class ProductLicensingContractTests(TestCase):

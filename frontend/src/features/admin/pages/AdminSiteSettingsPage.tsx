@@ -13,7 +13,7 @@ type BannerForm = Omit<Banner, 'id'>
 export function AdminSiteSettingsPage() {
   const queryClient = useQueryClient()
   const [editingBanner, setEditingBanner] = useState<Banner | 'new' | null>(null)
-  const settingsQuery = useQuery({ queryKey: ['site-settings'], queryFn: api.siteSettings })
+  const settingsQuery = useQuery({ queryKey: ['admin-site-settings'], queryFn: api.adminSiteSettings })
   const bannersQuery = useQuery({ queryKey: ['banners'], queryFn: api.banners })
   const banners = useMemo(
     () => (bannersQuery.data ? unwrap(bannersQuery.data) : []),
@@ -116,7 +116,8 @@ function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
   const save = useMutation({
     mutationFn: api.updateSiteSettings,
     onSuccess: (value) => {
-      queryClient.setQueryData(['site-settings'], value)
+      queryClient.setQueryData(['admin-site-settings'], value)
+      queryClient.invalidateQueries({ queryKey: ['site-settings'] })
       reset(value)
       toast.success('Site settings saved')
     },

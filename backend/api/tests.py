@@ -1,10 +1,14 @@
 import json
+import re
 import tempfile
+from io import BytesIO
+from pathlib import Path
 from uuid import uuid4
 from decimal import Decimal
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
@@ -17,6 +21,7 @@ from django.utils import timezone
 from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
+from PIL import Image
 
 from products.models import Category, Product, ProductImage, ProductSpecification
 from quotes.models import QuoteRequest
@@ -144,9 +149,18 @@ class ActiveApiPermissionTests(APITestCase):
             {"email": self.admin.email, "password": "StrongPass123!"},
             format="json",
         )
+        self.assertEqual(login_response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertTrue(login_response.data["mfa_required"])
+        code = re.search(r"\b(\d{6})\b", mail.outbox[-1].body).group(1)
+        login_response = self.client.post(
+            "/api/v1/users/auth/staff-mfa/",
+            {"challenge": login_response.data["challenge"], "code": code},
+            format="json",
+        )
         self.assertEqual(login_response.status_code, status.HTTP_200_OK)
         previous_access = login_response.data["access"]
-        previous_refresh = login_response.cookies["rack_refresh"].value
+        previous_refresh = login_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME].value
+        mail.outbox.clear()
 
         request_response = self.client.post(
             "/api/v1/users/auth/password-reset/",
@@ -170,7 +184,7 @@ class ActiveApiPermissionTests(APITestCase):
             format="json",
         )
         self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
-        self.assertEqual(confirm_response.cookies["rack_refresh"]["max-age"], 0)
+        self.assertEqual(confirm_response.cookies[settings.AUTH_REFRESH_COOKIE_NAME]["max-age"], 0)
         self.admin.refresh_from_db()
         self.assertTrue(self.admin.check_password("NewStrongPass456!"))
 
@@ -179,7 +193,7 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(invalid_access.status_code, status.HTTP_401_UNAUTHORIZED)
 
         self.client.credentials()
-        self.client.cookies["rack_refresh"] = previous_refresh
+        self.client.cookies[settings.AUTH_REFRESH_COOKIE_NAME] = previous_refresh
         invalid_refresh = self.client.post("/api/v1/users/auth/refresh/", {}, format="json")
         self.assertEqual(invalid_refresh.status_code, status.HTTP_401_UNAUTHORIZED)
 
@@ -385,9 +399,11 @@ class ActiveApiPermissionTests(APITestCase):
 
     def test_admin_can_upload_product_image(self):
         self.client.force_authenticate(self.admin)
+        image_bytes = BytesIO()
+        Image.new("RGB", (16, 16), (30, 90, 170)).save(image_bytes, format="PNG")
         image = SimpleUploadedFile(
             "radio.png",
-            b"\x89PNG\r\n\x1a\n",
+            image_bytes.getvalue(),
             content_type="image/png",
         )
         with tempfile.TemporaryDirectory() as media_root:
@@ -447,7 +463,8 @@ class ActiveApiPermissionTests(APITestCase):
             format="json",
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["user"]["email"], "new@example.com")
+        self.assertEqual(response.data["email"], "new@example.com")
+        self.assertNotIn("access", response.data)
 
     def test_admin_can_create_order(self):
         self.client.force_authenticate(self.admin)
@@ -532,7 +549,7 @@ class ActiveApiPermissionTests(APITestCase):
         self.client.force_authenticate(self.admin)
         self.product.inventory_quantity = 0
         self.product.save(update_fields=["inventory_quantity", "updated_at"])
-        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+        with tempfile.TemporaryDirectory() as media_root, override_settings(PRIVATE_MEDIA_ROOT=media_root):
             with self.captureOnCommitCallbacks(execute=True):
                 invoiced = self.client.post(
                     f"{quote_url}invoice/", invoice_payload, format="json"
@@ -543,6 +560,9 @@ class ActiveApiPermissionTests(APITestCase):
             invoice_download_url = f"{quote_url}invoice-pdf/"
             self.assertTrue(invoiced.data["invoice_pdf_url"].endswith(invoice_download_url))
             quote.refresh_from_db()
+            self.assertTrue(
+                Path(quote.invoice_pdf.path).resolve().is_relative_to(Path(media_root).resolve())
+            )
             with quote.invoice_pdf.open("rb") as invoice_file:
                 self.assertEqual(invoice_file.read(4), b"%PDF")
             self.assertEqual(len(mail.outbox), 1)
@@ -782,9 +802,16 @@ class ActiveApiPermissionTests(APITestCase):
             {"email": self.admin.email, "password": "StrongPass123!"},
             format="json",
         )
+        self.assertEqual(login.status_code, status.HTTP_202_ACCEPTED)
+        code = re.search(r"\b(\d{6})\b", mail.outbox[-1].body).group(1)
+        login = self.client.post(
+            "/api/v1/users/auth/staff-mfa/",
+            {"challenge": login.data["challenge"], "code": code},
+            format="json",
+        )
         self.assertEqual(login.status_code, status.HTTP_200_OK)
         self.assertNotIn("refresh", login.data)
-        refresh_cookie = login.cookies["rack_refresh"]
+        refresh_cookie = login.cookies[settings.AUTH_REFRESH_COOKIE_NAME]
         self.assertTrue(refresh_cookie["httponly"])
 
         refreshed = self.client.post("/api/v1/users/auth/refresh/", {}, format="json")
@@ -1078,7 +1105,7 @@ class ActiveApiPermissionTests(APITestCase):
     def test_staff_can_update_structured_homepage_content(self):
         self.client.force_authenticate(self.admin)
         response = self.client.patch(
-            "/api/v1/core/site-settings/",
+            "/api/v1/core/site-settings/admin/",
             {
                 "homepage_solution_title": "Connected teams everywhere",
                 "homepage_hero_stats": [

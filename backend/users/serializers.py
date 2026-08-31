@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from django.contrib.auth import authenticate, password_validation
 from django.contrib.auth.tokens import default_token_generator
+from django.db import transaction
+from django.utils import timezone
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 
 from users.models import User, UserProfile
 from users.services import AccountSetupService
+from users.security import EmailVerificationService
 from common.validators import validate_phone
 
 
@@ -71,6 +74,10 @@ class LoginSerializer(serializers.Serializer):
             raise serializers.ValidationError("Invalid credentials.")
         if not user.is_active:
             raise serializers.ValidationError("This account is inactive.")
+        if not user.is_email_verified:
+            raise serializers.ValidationError(
+                "Verify your email address before signing in. You can request a new verification email."
+            )
         attrs["user"] = user
         return attrs
 
@@ -107,12 +114,28 @@ class RegistrationSerializer(serializers.ModelSerializer):
         while User.objects.filter(username=username).exists():
             counter += 1
             username = f"{username_root}{counter}"
-        return User.objects.create_user(
+        user = User.objects.create_user(
             username=username,
             password=password,
             is_customer=True,
+            email_verified_at=None,
             **validated_data,
         )
+        transaction.on_commit(lambda: EmailVerificationService.send_safely(user))
+        return user
+
+
+class EmailVerificationSerializer(serializers.Serializer):
+    token = serializers.CharField()
+
+
+class EmailVerificationResendSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+
+class StaffMfaVerifySerializer(serializers.Serializer):
+    challenge = serializers.CharField(max_length=255)
+    code = serializers.RegexField(r"^\d{6}$")
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
@@ -145,7 +168,11 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
     def save(self):
         user = self.validated_data["user"]
         user.set_password(self.validated_data["new_password"])
-        user.save(update_fields=["password", "updated_at"])
+        if not user.is_email_verified:
+            user.email_verified_at = timezone.now()
+            user.save(update_fields=["password", "email_verified_at", "updated_at"])
+        else:
+            user.save(update_fields=["password", "updated_at"])
         return user
 
 
@@ -220,6 +247,8 @@ class AdminUserWriteSerializer(serializers.ModelSerializer):
             user.save(update_fields=["is_active", "updated_at"])
             user._account_setup_email_queued = True
         else:
+            if is_staff:
+                validated_data.setdefault("email_verified_at", timezone.now())
             user = User.objects.create_user(password=password, **validated_data)
 
         if profile_data:

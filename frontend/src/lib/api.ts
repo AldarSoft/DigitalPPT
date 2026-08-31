@@ -87,6 +87,17 @@ export function mediaUrl(value?: string) {
   return `${API_ORIGIN}${value.startsWith('/') ? value : `/${value}`}`
 }
 
+export interface AuthSuccess {
+  user: User
+  access: string
+}
+
+export interface StaffMfaChallenge {
+  mfa_required: true
+  challenge: string
+  detail: string
+}
+
 async function requestResponse(
   path: string,
   init: RequestInit = {},
@@ -255,14 +266,29 @@ export const api = {
     return request<{ image_url: string }>('/products/upload-image/', { method: 'POST', body })
   },
   login: (data: { email: string; password: string }) =>
-    request<{ user: User; access: string }>('/users/auth/login/', {
+    request<AuthSuccess | StaffMfaChallenge>('/users/auth/login/', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
   register: (data: unknown) =>
-    request<{ user: User; access: string }>('/users/auth/register/', {
+    request<{ detail: string; email: string }>('/users/auth/register/', {
       method: 'POST',
       body: JSON.stringify(data),
+    }),
+  verifyEmail: (token: string) =>
+    request<AuthSuccess>('/users/auth/verify-email/', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    }),
+  resendVerification: (email: string) =>
+    request<{ detail: string }>('/users/auth/resend-verification/', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+  verifyStaffMfa: (challenge: string, code: string) =>
+    request<AuthSuccess>('/users/auth/staff-mfa/', {
+      method: 'POST',
+      body: JSON.stringify({ challenge, code }),
     }),
   refresh: async () => ({ access: await refreshAccessToken() }),
   me: () => request<User>('/users/auth/me/'),
@@ -401,8 +427,9 @@ export const api = {
   deleteBanner: (id: number) =>
     request<void>(`/core/banners/${id}/`, { method: 'DELETE' }),
   siteSettings: () => request<SiteSettings>('/core/site-settings/'),
+  adminSiteSettings: () => request<SiteSettings>('/core/site-settings/admin/'),
   updateSiteSettings: (data: unknown) =>
-    request<SiteSettings>('/core/site-settings/', { method: 'PATCH', body: JSON.stringify(data) }),
+    request<SiteSettings>('/core/site-settings/admin/', { method: 'PATCH', body: JSON.stringify(data) }),
 }
 
 function organizationQuery(organizationId?: number | null) {

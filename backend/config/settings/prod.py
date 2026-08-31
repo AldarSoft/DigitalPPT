@@ -6,6 +6,17 @@ PAYMENTS_DEVELOPMENT_SIMULATOR = False
 if SECRET_KEY == "unsafe-dev-secret-key":  # noqa: F405
     raise RuntimeError("DJANGO_SECRET_KEY must be set for production.")
 
+CONTENT_SECURITY_POLICY = env(  # noqa: F405
+    "CONTENT_SECURITY_POLICY",
+    default=(
+        "default-src 'self'; base-uri 'self'; object-src 'none'; "
+        "frame-ancestors 'none'; form-action 'self'; img-src 'self' data: https:; "
+        "font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; "
+        "connect-src 'self'"
+    ),
+)
+MIDDLEWARE.insert(1, "common.security_headers.SecurityHeadersMiddleware")  # noqa: F405
+
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
@@ -22,3 +33,7 @@ SECURE_REFERRER_POLICY = "same-origin"
 REST_FRAMEWORK["DEFAULT_RENDERER_CLASSES"] = [  # noqa: F405
     "rest_framework.renderers.JSONRenderer",
 ]
+
+# Production logs are structured for collection by the hosting platform.
+LOGGING["handlers"]["console"]["formatter"] = "json"  # noqa: F405
+LOGGING["root"]["handlers"] = ["console"]  # noqa: F405

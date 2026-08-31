@@ -7,11 +7,12 @@ from rest_framework.response import Response
 from common.permissions import IsAdminOrReadOnly
 from core.models import Banner, ContactMessage, Promotion, SiteSetting, UserNotification
 from core.serializers import (
+    AdminSiteSettingSerializer,
+    PublicSiteSettingSerializer,
     UserNotificationSerializer,
     BannerSerializer,
     ContactMessageSerializer,
     PromotionSerializer,
-    SiteSettingSerializer,
 )
 
 
@@ -56,28 +57,32 @@ class BannerViewSet(viewsets.ModelViewSet):
 
 
 class SiteSettingView(generics.GenericAPIView):
-    serializer_class = SiteSettingSerializer
-
-    def get_permissions(self):
-        if self.request.method == "PATCH":
-            return [IsAdminUser()]
-        return []
+    serializer_class = PublicSiteSettingSerializer
+    permission_classes = [AllowAny]
 
     def get(self, request):
-        cached = cache.get("core:site-settings")
+        cached = cache.get("core:public-site-settings")
         if cached:
             return Response(cached)
 
-        data = SiteSettingSerializer(SiteSetting.get_solo()).data
-        cache.set("core:site-settings", data, timeout=300)
+        data = self.get_serializer(SiteSetting.get_solo()).data
+        cache.set("core:public-site-settings", data, timeout=300)
         return Response(data)
+
+
+class AdminSiteSettingView(generics.GenericAPIView):
+    serializer_class = AdminSiteSettingSerializer
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        return Response(self.get_serializer(SiteSetting.get_solo()).data)
 
     def patch(self, request):
         settings_obj = SiteSetting.get_solo()
         serializer = self.get_serializer(settings_obj, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        cache.delete("core:site-settings")
+        cache.delete("core:public-site-settings")
         return Response(serializer.data)
 
 

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.db import models
 
 from common.models import TimeStampedModel
+from common.storage import private_media_storage
 
 
 class QuoteRequest(TimeStampedModel):
@@ -41,7 +42,11 @@ class QuoteRequest(TimeStampedModel):
     admin_agreed = models.BooleanField(default=False)
     customer_agreed = models.BooleanField(default=False)
     invoice_number = models.CharField(max_length=40, unique=True, blank=True, null=True)
-    invoice_pdf = models.FileField(upload_to="quotes/invoices/", blank=True)
+    invoice_pdf = models.FileField(
+        upload_to="quotes/invoices/",
+        storage=private_media_storage,
+        blank=True,
+    )
     invoiced_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:

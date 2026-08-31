@@ -18,13 +18,17 @@ from common.email_delivery import send_application_email
 from users.models import User
 from users.serializers import (
     AdminUserWriteSerializer,
+    EmailVerificationResendSerializer,
+    EmailVerificationSerializer,
     LoginSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     ProfileUpdateSerializer,
     RegistrationSerializer,
+    StaffMfaVerifySerializer,
     UserSerializer,
 )
+from users.security import EmailVerificationService, StaffMfaService
 
 logger = logging.getLogger(__name__)
 
@@ -99,21 +103,27 @@ class AuthViewSet(viewsets.GenericViewSet):
             "register",
             "password_reset_request",
             "password_reset_confirm",
+            "verify_email",
+            "resend_verification",
+            "verify_staff_mfa",
         }:
             return [AllowAny()]
         return [IsAuthenticated()]
 
     def get_throttles(self):
-        self.throttle_scope = (
-            "auth"
-            if self.action in {
+        if self.action in {"verify_email", "resend_verification"}:
+            self.throttle_scope = "email_verification"
+        elif self.action == "verify_staff_mfa":
+            self.throttle_scope = "staff_mfa"
+        else:
+            self.throttle_scope = (
+                "auth" if self.action in {
                 "login",
                 "register",
                 "password_reset_request",
                 "password_reset_confirm",
-            }
-            else None
-        )
+                } else None
+            )
         return super().get_throttles()
 
     def get_serializer_class(self):
@@ -121,6 +131,12 @@ class AuthViewSet(viewsets.GenericViewSet):
             return LoginSerializer
         if self.action == "register":
             return RegistrationSerializer
+        if self.action == "verify_email":
+            return EmailVerificationSerializer
+        if self.action == "resend_verification":
+            return EmailVerificationResendSerializer
+        if self.action == "verify_staff_mfa":
+            return StaffMfaVerifySerializer
         if self.action == "password_reset_request":
             return PasswordResetRequestSerializer
         if self.action == "password_reset_confirm":
@@ -134,6 +150,16 @@ class AuthViewSet(viewsets.GenericViewSet):
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data["user"]
+        if user.is_staff:
+            challenge = StaffMfaService.begin(user)
+            return Response(
+                {
+                    "mfa_required": True,
+                    "challenge": challenge,
+                    "detail": "Enter the six-digit code sent to your administrator email.",
+                },
+                status=status.HTTP_202_ACCEPTED,
+            )
         response_data, refresh_value = build_auth_response(user)
         response = Response(response_data)
         set_refresh_cookie(response, refresh_value)
@@ -144,8 +170,49 @@ class AuthViewSet(viewsets.GenericViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        return Response(
+            {
+                "detail": "Check your email to verify your account before signing in.",
+                "email": user.email,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=False, methods=["post"], url_path="verify-email")
+    def verify_email(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = EmailVerificationService.verify(serializer.validated_data["token"])
         response_data, refresh_value = build_auth_response(user)
-        response = Response(response_data, status=status.HTTP_201_CREATED)
+        response = Response(response_data)
+        set_refresh_cookie(response, refresh_value)
+        return response
+
+    @action(detail=False, methods=["post"], url_path="resend-verification")
+    def resend_verification(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = User.objects.filter(
+            email__iexact=serializer.validated_data["email"],
+            is_active=True,
+            email_verified_at__isnull=True,
+        ).first()
+        if user:
+            EmailVerificationService.send(user)
+        return Response({
+            "detail": "If that account still needs verification, a new email has been sent."
+        })
+
+    @action(detail=False, methods=["post"], url_path="staff-mfa")
+    def verify_staff_mfa(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = StaffMfaService.verify(
+            serializer.validated_data["challenge"],
+            serializer.validated_data["code"],
+        )
+        response_data, refresh_value = build_auth_response(user)
+        response = Response(response_data)
         set_refresh_cookie(response, refresh_value)
         return response
 

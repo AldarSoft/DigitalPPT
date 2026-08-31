@@ -50,7 +50,7 @@ jobs:
       - run: python manage.py migrate --noinput
       - run: python manage.py check
       - run: python manage.py spectacular --file ../openapi.yml --validate
-      - run: python manage.py test core licensing payments orders quotes api
+      - run: python manage.py test users products core licensing payments orders quotes api
       - uses: actions/upload-artifact@v4
         with:
           name: openapi-schema

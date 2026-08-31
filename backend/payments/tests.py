@@ -235,6 +235,46 @@ class PaymentFoundationTests(APITestCase):
         )
         self.assertEqual(repeated.status_code, status.HTTP_400_BAD_REQUEST)
 
+    def test_bank_transaction_reference_cannot_confirm_two_orders(self):
+        self.client.force_authenticate(self.admin)
+        orders = []
+        for suffix in ("101", "102"):
+            quote = QuoteRequest.objects.create(
+                user=self.customer,
+                status=QuoteRequest.Status.QUOTED,
+                requester_contact_person="Payment Tester",
+                requester_email=self.customer.email,
+                invoice_number=f"INV-2026-00{suffix}",
+                quoted_total="100.00",
+            )
+            orders.append(Order.objects.create(
+                user=self.customer,
+                quote_request=quote,
+                source=Order.Source.QUOTE,
+                customer_first_name="Payment",
+                customer_last_name="Tester",
+                customer_email=self.customer.email,
+                shipping_address="1 Main Street",
+                shipping_city="Ulaanbaatar",
+                shipping_country="Mongolia",
+                subtotal="100.00",
+                total="100.00",
+            ))
+
+        first = self.client.post(
+            f"/api/v1/payments/orders/{orders[0].order_number}/confirm-bank-transfer/",
+            {"bank_transaction_reference": "duplicate-bank-reference"},
+            format="json",
+        )
+        second = self.client.post(
+            f"/api/v1/payments/orders/{orders[1].order_number}/confirm-bank-transfer/",
+            {"bank_transaction_reference": "duplicate-bank-reference"},
+            format="json",
+        )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 400)
+        self.assertEqual(orders[1].payment_attempts.filter(status="succeeded").count(), 0)
+
     def test_customer_cannot_list_or_simulate_payments(self):
         self.client.force_authenticate(self.customer)
         list_response = self.client.get("/api/v1/payments/attempts/")

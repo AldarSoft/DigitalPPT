@@ -19,6 +19,7 @@ const AdminSiteSettingsPage = lazy(() => import('../features/admin/pages/AdminSi
 const LoginPage = lazy(() => import('../features/auth/pages/LoginPage').then((module) => ({ default: module.LoginPage })))
 const RegisterPage = lazy(() => import('../features/auth/pages/RegisterPage').then((module) => ({ default: module.RegisterPage })))
 const ResetPasswordPage = lazy(() => import('../features/auth/pages/ResetPasswordPage').then((module) => ({ default: module.ResetPasswordPage })))
+const VerifyEmailPage = lazy(() => import('../features/auth/pages/VerifyEmailPage').then((module) => ({ default: module.VerifyEmailPage })))
 const ClaimQuotePage = lazy(() => import('../features/auth/pages/ClaimQuotePage').then((module) => ({ default: module.ClaimQuotePage })))
 const CartPage = lazy(() => import('../features/cart/pages/CartPage').then((module) => ({ default: module.CartPage })))
 const CheckoutPage = lazy(() => import('../features/checkout/pages/CheckoutPage').then((module) => ({ default: module.CheckoutPage })))
@@ -55,6 +56,7 @@ export function AppRouter() {
           <Route path="login" element={<LoginPage />} />
           <Route path="register" element={<RegisterPage />} />
           <Route path="auth/reset-password" element={<ResetPasswordPage />} />
+          <Route path="auth/verify-email" element={<VerifyEmailPage />} />
           <Route path="auth/claim-quote" element={<ClaimQuotePage />} />
           <Route path="invite" element={<AcceptOrganizationInvitationPage />} />
           <Route element={<RequireAuth />}>

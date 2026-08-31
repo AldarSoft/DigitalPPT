@@ -9,6 +9,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]
 load_env_file(BASE_DIR / ".env")
 
 SECRET_KEY = env("DJANGO_SECRET_KEY", default="unsafe-dev-secret-key")
+JWT_SIGNING_KEY = env("JWT_SIGNING_KEY", default=f"{SECRET_KEY}:jwt-development-only")
 DEBUG = env("DJANGO_DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS", default="127.0.0.1,localhost", cast=list)
 SITE_NAME = env("SITE_NAME", default="Digital PTT")
@@ -123,6 +124,9 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+PRIVATE_MEDIA_ROOT = Path(env("PRIVATE_MEDIA_ROOT", default=str(BASE_DIR / "private_media")))
+MAX_IMAGE_UPLOAD_BYTES = env("MAX_IMAGE_UPLOAD_BYTES", default=5 * 1024 * 1024, cast=int)
+MAX_IMAGE_PIXELS = env("MAX_IMAGE_PIXELS", default=25_000_000, cast=int)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -155,6 +159,8 @@ REST_FRAMEWORK = {
         "checkout": env("THROTTLE_CHECKOUT", default="20/hour"),
         "image_upload": env("THROTTLE_IMAGE_UPLOAD", default="30/hour"),
         "payment_test": env("THROTTLE_PAYMENT_TEST", default="30/hour"),
+        "email_verification": env("THROTTLE_EMAIL_VERIFICATION", default="5/hour"),
+        "staff_mfa": env("THROTTLE_STAFF_MFA", default="10/min"),
     },
     "COERCE_DECIMAL_TO_STRING": False,
 }
@@ -186,10 +192,16 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": True,
     "CHECK_REVOKE_TOKEN": True,
+    "SIGNING_KEY": JWT_SIGNING_KEY,
 }
 
 CORS_ALLOWED_ORIGINS = env(
     "CORS_ALLOWED_ORIGINS",
+    default="http://localhost:3000,http://localhost:5173",
+    cast=list,
+)
+CSRF_TRUSTED_ORIGINS = env(
+    "CSRF_TRUSTED_ORIGINS",
     default="http://localhost:3000,http://localhost:5173",
     cast=list,
 )
@@ -245,7 +257,11 @@ NOTIFICATION_WORKER_MAX_AGE_MINUTES = env("NOTIFICATION_WORKER_MAX_AGE_MINUTES",
 
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 PASSWORD_RESET_TIMEOUT = env("PASSWORD_RESET_TIMEOUT", default=3600, cast=int)
+EMAIL_VERIFICATION_TIMEOUT = env("EMAIL_VERIFICATION_TIMEOUT", default=86400, cast=int)
+STAFF_MFA_TIMEOUT = env("STAFF_MFA_TIMEOUT", default=600, cast=int)
 QUOTE_GUEST_CLAIM_TIMEOUT = env("QUOTE_GUEST_CLAIM_TIMEOUT", default=604800, cast=int)
+
+CONTENT_SECURITY_POLICY = env("CONTENT_SECURITY_POLICY", default="")
 
 LOGGING = {
     "version": 1,
@@ -253,6 +269,9 @@ LOGGING = {
     "formatters": {
         "standard": {
             "format": "%(levelname)s %(asctime)s %(name)s %(message)s",
+        },
+        "json": {
+            "()": "common.security_logging.JsonFormatter",
         },
     },
     "handlers": {
@@ -286,13 +305,27 @@ LOGGING = {
 }
 
 CACHE_TTL_SECONDS = env("CACHE_TTL_SECONDS", default=300, cast=int)
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-        "LOCATION": "commerce-platform-cache",
-        "TIMEOUT": CACHE_TTL_SECONDS,
+REDIS_URL = env("REDIS_URL", default="").strip()
+if REDIS_URL:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+            "TIMEOUT": CACHE_TTL_SECONDS,
+            "OPTIONS": {
+                "socket_connect_timeout": 5,
+                "socket_timeout": 5,
+            },
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "commerce-platform-cache",
+            "TIMEOUT": CACHE_TTL_SECONDS,
+        }
+    }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": f"{SITE_NAME} API",

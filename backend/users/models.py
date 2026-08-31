@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
 from django.db import models
+from django.utils import timezone
 
 from common.models import TimeStampedModel
 
@@ -20,6 +21,9 @@ class UserManager(DjangoUserManager):
         email = self.normalize_email(email)
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
+        # Internal account creation is trusted. Public registration explicitly
+        # passes None and must complete the verification-email flow.
+        extra_fields.setdefault("email_verified_at", timezone.now())
         return super().create_user(
             username=username,
             email=email,
@@ -31,6 +35,7 @@ class UserManager(DjangoUserManager):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
         extra_fields.setdefault("is_customer", False)
+        extra_fields.setdefault("email_verified_at", timezone.now())
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("Superuser must have is_staff=True.")
@@ -44,6 +49,7 @@ class User(TimeStampedModel, AbstractUser):
     email = models.EmailField(unique=True, db_index=True)
     phone_number = models.CharField(max_length=32, blank=True)
     is_customer = models.BooleanField(default=True, db_index=True)
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["username"]
@@ -60,6 +66,15 @@ class User(TimeStampedModel, AbstractUser):
 
     def __str__(self):
         return self.get_full_name() or self.email
+
+    @property
+    def is_email_verified(self):
+        return self.email_verified_at is not None
+
+    def mark_email_verified(self):
+        if self.email_verified_at is None:
+            self.email_verified_at = timezone.now()
+            self.save(update_fields=["email_verified_at", "updated_at"])
 
 
 class UserProfile(TimeStampedModel):

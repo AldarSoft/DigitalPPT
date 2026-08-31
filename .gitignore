@@ -29,6 +29,7 @@ htmlcov/
 /backend/db.sqlite3
 /backend/commerce.sqlite3
 /backend/media/
+/backend/private_media/
 /backend/staticfiles/
 *.log
 

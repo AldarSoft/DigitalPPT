@@ -7,15 +7,17 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, setAccessToken } from "../lib/api";
+import { api, setAccessToken, type StaffMfaChallenge } from "../lib/api";
 import { queryClient } from "../lib/query-client";
 import type { User } from "../types";
 
 interface AuthContextValue {
   user: User | null;
   ready: boolean;
-  login: (email: string, password: string) => Promise<User>;
-  register: (data: unknown) => Promise<User>;
+  login: (email: string, password: string) => Promise<User | StaffMfaChallenge>;
+  verifyStaffMfa: (challenge: string, code: string) => Promise<User>;
+  register: (data: unknown) => Promise<{ detail: string; email: string }>;
+  verifyEmail: (token: string) => Promise<User>;
   updateProfile: (data: unknown) => Promise<User>;
   logout: () => Promise<void>;
 }
@@ -48,6 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await api.login({ email, password });
+    if ('mfa_required' in result) return result;
     queryClient.clear();
     setAccessToken(result.access);
     setUser(result.user);
@@ -55,12 +58,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const register = useCallback(async (data: unknown) => {
-    const result = await api.register(data);
+    return api.register(data);
+  }, []);
+
+  const applyAuth = useCallback((result: { access: string; user: User }) => {
     queryClient.clear();
     setAccessToken(result.access);
     setUser(result.user);
     return result.user;
   }, []);
+
+  const verifyStaffMfa = useCallback(async (challenge: string, code: string) => {
+    return applyAuth(await api.verifyStaffMfa(challenge, code));
+  }, [applyAuth]);
+
+  const verifyEmail = useCallback(async (token: string) => {
+    return applyAuth(await api.verifyEmail(token));
+  }, [applyAuth]);
 
   const updateProfile = useCallback(async (data: unknown) => {
     const result = await api.updateMe(data);
@@ -79,8 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, ready, login, register, updateProfile, logout }),
-    [user, ready, login, register, updateProfile, logout],
+    () => ({ user, ready, login, verifyStaffMfa, register, verifyEmail, updateProfile, logout }),
+    [user, ready, login, verifyStaffMfa, register, verifyEmail, updateProfile, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

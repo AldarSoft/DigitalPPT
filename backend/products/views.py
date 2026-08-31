@@ -1,7 +1,5 @@
-from pathlib import Path
 from uuid import uuid4
 
-from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import DecimalField, ExpressionWrapper, F, IntegerField, OuterRef, Q, Subquery, Sum, Value
@@ -14,6 +12,7 @@ from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 
 from common.permissions import IsAdminOrReadOnly
+from common.images import sanitize_uploaded_image
 from products.models import Category, InventoryAdjustment, Product
 from orders.models import Order, OrderItem
 from orders.models import InventoryReservation
@@ -34,10 +33,6 @@ class ProductImageUploadView(APIView):
     throttle_scope = "image_upload"
     parser_classes = [parsers.MultiPartParser, parsers.FormParser]
 
-    allowed_extensions = {".webp", ".jpg", ".jpeg", ".png"}
-    allowed_content_types = {"image/webp", "image/jpeg", "image/png"}
-    max_file_size = 5 * 1024 * 1024
-
     @extend_schema(
         request=ProductImageUploadRequestSerializer,
         responses={201: ProductImageUploadResponseSerializer},
@@ -47,22 +42,10 @@ class ProductImageUploadView(APIView):
         if not image:
             return Response({"detail": "Image file is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if image.size > self.max_file_size:
-            return Response(
-                {"detail": "Image must be 5 MB or smaller."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        extension = Path(image.name).suffix.lower()
-        if extension not in self.allowed_extensions or image.content_type not in self.allowed_content_types:
-            return Response(
-                {"detail": "Only WEBP, JPG, JPEG, and PNG images are allowed."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+        sanitized_image, extension = sanitize_uploaded_image(image)
         filename = f"products/{uuid4().hex}{extension}"
-        saved_path = default_storage.save(filename, image)
-        image_url = settings.MEDIA_URL + saved_path.replace("\\", "/")
+        saved_path = default_storage.save(filename, sanitized_image)
+        image_url = default_storage.url(saved_path)
 
         return Response({"image_url": image_url}, status=status.HTTP_201_CREATED)
 

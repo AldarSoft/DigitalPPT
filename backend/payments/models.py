@@ -91,6 +91,14 @@ class PaymentAttempt(TimeStampedModel):
                 condition=models.Q(status="succeeded"),
                 name="payments_one_success_per_order",
             ),
+            models.UniqueConstraint(
+                fields=["provider", "external_reference"],
+                condition=(
+                    models.Q(status="succeeded")
+                    & ~models.Q(external_reference="")
+                ),
+                name="payments_unique_confirmed_external_reference",
+            ),
         ]
 
     def save(self, *args, **kwargs):
