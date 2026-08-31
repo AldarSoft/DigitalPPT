@@ -95,7 +95,7 @@ export function LoginPage() {
             <label>Password<div><LockKeyhole size={19}/><input type={showPassword ? 'text' : 'password'} {...register('password')}/><button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} onClick={() => setShowPassword((value) => !value)}>{showPassword ? <EyeOff size={19}/> : <Eye size={19}/>}</button></div><small>{errors.password?.message}</small></label>
             <button className={tw("forgot-link")} type="button" onClick={() => setForgotOpen(true)}>Forgot password?</button>
           </>}
-          <button className={tw("auth-submit")} type="submit" disabled={submitting || Boolean(mfaChallenge && mfaCode.length !== 6)}>{submitting ? 'Checking...' : mfaChallenge ? 'Verify code' : 'Sign in'}</button>
+          <button className={`${tw("auth-submit")} ${mfaChallenge ? 'mt-4' : ''}`} type="submit" disabled={submitting || Boolean(mfaChallenge && mfaCode.length !== 6)}>{submitting ? 'Checking...' : mfaChallenge ? 'Verify code' : 'Sign in'}</button>
           {!mfaChallenge && verificationNeeded ? <button className={tw("forgot-link")} type="button" onClick={async () => {
             const email = getValues('email');
             if (!email) return;
