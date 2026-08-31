@@ -151,15 +151,8 @@ def build_invoice_pdf(*, quote_request, site_settings) -> bytes:
             Paragraph(escape(quote_request.admin_message).replace("\n", "<br/>"), body),
             Spacer(1, 6 * mm),
         ])
-    # The invoice should only offer a method that is currently enabled for customers.
-    from payments.models import PaymentProvider
-
-    bank_transfer_available = PaymentProvider.objects.filter(
-        code=PaymentProvider.Code.BANK_TRANSFER,
-        is_enabled=True,
-        is_customer_available=True,
-    ).exists()
-    if site_settings.bank_transfer_is_configured and bank_transfer_available:
+    # Invoice instructions are controlled independently from storefront payment methods.
+    if site_settings.bank_transfer_is_configured:
         bank_rows = [
             [Paragraph("<b>Bank transfer payment instructions</b>", body), ""],
             [Paragraph("Beneficiary", small), Paragraph(escape(site_settings.bank_beneficiary_name), small)],

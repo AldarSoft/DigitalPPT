@@ -139,7 +139,7 @@ function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
       </section>
 
       <section className={tw('admin-panel settings-section')}>
-        <div className={tw('settings-section-title')}><Settings2 size={19} /><div><h2>Bank transfer invoices</h2><p>Details printed on quote invoices when manual bank transfer is available to customers.</p><label className={tw('settings-feature-toggle')}><input type="checkbox" {...register('bank_transfer_enabled')} /><span><strong>Include bank transfer instructions on invoices</strong><small>Also enable Bank transfer for customers in the Payments workspace.</small></span></label></div></div>
+        <div className={tw('settings-section-title')}><Settings2 size={19} /><div><h2>Bank transfer invoices</h2><p>Bank details printed on new quote invoices.</p><label className={tw('settings-feature-toggle')}><input type="checkbox" {...register('bank_transfer_enabled')} /><span><strong>Include bank transfer instructions on invoices</strong><small>The customer payment option is controlled separately in the Payments workspace.</small></span></label></div></div>
         <div className={tw(`settings-fields two-column ${bankTransferEnabled ? '' : 'settings-fields-disabled'}`)}>
           <label>Beneficiary name<input maxLength={255} disabled={!bankTransferEnabled} {...register('bank_beneficiary_name')} /></label>
           <label>Bank name<input maxLength={255} disabled={!bankTransferEnabled} {...register('bank_name')} /></label>
