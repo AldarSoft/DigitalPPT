@@ -3,6 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from rest_framework import serializers
+from rest_framework.reverse import reverse
 from drf_spectacular.utils import extend_schema_field
 
 from common.validators import validate_phone
@@ -89,7 +90,11 @@ class QuoteRequestSerializer(serializers.ModelSerializer):
         if not obj.invoice_pdf:
             return ""
         request = self.context.get("request")
-        return request.build_absolute_uri(obj.invoice_pdf.url) if request else obj.invoice_pdf.url
+        return reverse(
+            "quote-request-invoice-pdf",
+            kwargs={"quote_number": obj.quote_number},
+            request=request,
+        )
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

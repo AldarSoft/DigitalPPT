@@ -87,11 +87,11 @@ export function mediaUrl(value?: string) {
   return `${API_ORIGIN}${value.startsWith('/') ? value : `/${value}`}`
 }
 
-async function request<T>(
+async function requestResponse(
   path: string,
   init: RequestInit = {},
   retry = true,
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(init.headers)
   if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
@@ -110,19 +110,50 @@ async function request<T>(
   if (response.status === 401 && accessToken && retry) {
     try {
       await refreshAccessToken()
-      return request<T>(path, init, false)
+      return requestResponse(path, init, false)
     } catch {
       setAccessToken(null)
     }
   }
+
+  return response
+}
+
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const response = await requestResponse(path, init)
 
   const data = response.status === 204 ? null : await response.json().catch(() => null)
   if (!response.ok) throw new ApiError(response.status, data)
   return data as T
 }
 
+async function download(path: string, filename: string) {
+  const response = await requestResponse(path)
+  if (!response.ok) {
+    const data = await response.json().catch(() => null)
+    throw new ApiError(response.status, data)
+  }
+
+  const objectUrl = URL.createObjectURL(await response.blob())
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
 export const api = {
   categories: () => request<Paginated<Category> | Category[]>('/products/categories/'),
+  downloadQuoteInvoice: (quoteNumber: string, invoiceNumber: string) =>
+    download(
+      `/quotes/${encodeURIComponent(quoteNumber)}/invoice-pdf/`,
+      `${invoiceNumber || quoteNumber}.pdf`,
+    ),
   cartCapacity: (items: Array<{ product: number; quantity: number }>) =>
     request<CartCapacityResponse>('/licensing/cart-capacity/', {
       method: 'POST',

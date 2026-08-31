@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { AlertTriangle, BadgeCheck, Clock3, CreditCard, Download, FileText, MessageSquare, Search, Send, X } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api'
+import { api, ApiError, unwrap } from '../../../lib/api'
 import { StatusTimeline } from '../../../components/StatusTimeline'
 import { ProductThumbnail } from '../../../components/ProductThumbnail'
 import { Pagination } from '../../../components/Pagination'
@@ -28,7 +28,7 @@ export function AdminQuotesPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState('')
-  const [status, setStatus] = useState(() => searchParams.get('status') ?? '')
+  const status = searchParams.get('status') ?? ''
   const [page, setPage] = useState(1)
   const [selectedQuote, setSelectedQuote] = useState<QuoteRequest | null>(null)
   const [confirmingClose, setConfirmingClose] = useState(false)
@@ -74,12 +74,6 @@ export function AdminQuotesPage() {
   const quotes = quotesQuery.data ? unwrap(quotesQuery.data) : []
   const quoteTotal = quotesQuery.data && !Array.isArray(quotesQuery.data) ? quotesQuery.data.count : quotes.length
   const selected = linkedQuoteQuery.data ?? selectedQuote ?? null
-  useEffect(() => {
-    const requestedStatus = searchParams.get('status') ?? ''
-    if (requestedStatus === status) return
-    setStatus(requestedStatus)
-    setPage(1)
-  }, [searchParams, status])
   useEffect(() => {
     const messageList = messagesRef.current
     if (messageList) messageList.scrollTop = messageList.scrollHeight
@@ -147,6 +141,11 @@ export function AdminQuotesPage() {
     },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not confirm the bank transfer'),
   })
+  const downloadInvoice = useMutation({
+    mutationFn: ({ quoteNumber, invoiceNumber }: { quoteNumber: string; invoiceNumber: string }) =>
+      api.downloadQuoteInvoice(quoteNumber, invoiceNumber),
+    onError: mutationError,
+  })
   if (quotesQuery.isError || summaryQuery.isError) return <AdminErrorState resource="quote requests" />
 
   const openQuote = (quote: QuoteRequest) => {
@@ -174,7 +173,6 @@ export function AdminQuotesPage() {
   }
 
   const changeStatusFilter = (value: string) => {
-    setStatus(value)
     setPage(1)
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
@@ -254,7 +252,7 @@ export function AdminQuotesPage() {
             {requestAdditionalInformation && (selected.status === 'reviewing' || (selected.status === 'quoted' && selected.order_status === 'pending')) ? <section className="mt-5 border-t border-border-soft pt-5"><h3 className="mb-3 flex items-center gap-2 text-sm font-extrabold"><MessageSquare size={17} />Review messages</h3><div ref={messagesRef} className="grid max-h-60 gap-2 overflow-y-auto rounded-control bg-surface-raised p-3" aria-live="polite">{selected.messages.length ? selected.messages.map((item) => <div className={item.sender_role === 'admin' ? 'ml-8 rounded-control bg-brand-soft p-3 text-sm' : 'mr-8 rounded-control border border-border bg-white p-3 text-sm'} key={item.id}><strong className="block text-xs">{item.author_name}</strong><p className="mt-1 whitespace-pre-wrap break-words text-text-subtle">{item.body}</p><small className="mt-1 block text-[10px] text-text-soft">{new Date(item.created_at).toLocaleString()}</small></div>) : <p className="text-sm text-text-soft">No messages yet. Send a message only if you need more information.</p>}</div><label className="mt-3 grid w-full gap-2 text-xs font-bold">Message<textarea ref={messageInputRef} rows={3} className="min-h-20 w-full resize-y overflow-y-auto rounded-control border border-border-input p-3 text-sm font-normal" value={message} onChange={(event) => setMessage(event.target.value)} /></label><button className={tw('record-payment-link')} type="button" disabled={!message.trim() || sendMessage.isPending} onClick={() => sendMessage.mutate()}><Send size={16} />Send message</button></section> : null}
             {canEditInvoice ? <div className={tw('quote-pricing-form')}><h3>{invoiceSent ? 'Revise invoice' : 'Invoice'}</h3><label>Shipping<input type="number" min="0" step="0.01" value={quotedShipping ?? selected.quoted_shipping ?? '0.00'} onChange={(event) => setQuotedShipping(event.target.value)} /></label><label>Invoice terms<textarea rows={3} value={adminMessage ?? selected.admin_message ?? ''} onChange={(event) => setAdminMessage(event.target.value)} placeholder="Validity, delivery timing and terms" /></label><button type="button" disabled={!canSendInvoice || invoice.isPending} onClick={sendInvoice}><FileText size={17} />{invoice.isPending ? 'Sending...' : invoiceSent ? 'Update and resend invoice' : 'Send invoice'}</button></div> : null}
             {invoiceSent ? <dl className={tw('record-totals')}><div><dt>Subtotal</dt><dd>${Number(selected.quoted_subtotal).toFixed(2)}</dd></div><div><dt>Shipping</dt><dd>${Number(selected.quoted_shipping).toFixed(2)}</dd></div><div><dt>Invoice total</dt><dd>${Number(selected.quoted_total).toFixed(2)}</dd></div></dl> : null}
-            {selected.invoice_pdf_url ? <a className={`${tw('record-payment-link')} !text-white [&>svg]:text-white`} href={mediaUrl(selected.invoice_pdf_url)} target="_blank" rel="noreferrer"><Download size={17} />Download {selected.invoice_number}</a> : null}
+            {selected.invoice_pdf_url ? <button className={`${tw('record-payment-link')} !text-white [&>svg]:text-white`} type="button" disabled={downloadInvoice.isPending} onClick={() => downloadInvoice.mutate({ quoteNumber: selected.quote_number, invoiceNumber: selected.invoice_number || selected.quote_number })}><Download size={17} />{downloadInvoice.isPending ? 'Downloading...' : `Download ${selected.invoice_number}`}</button> : null}
             {selected.order_number ? <p>Invoice order: <strong>{selected.order_number}</strong></p> : <p>No order has been created from this quote.</p>}
             {selected.status === 'quoted' && selected.order_status === 'pending' && selected.order_number ? (
               <section className="mt-5 rounded-control border border-warning bg-warning-soft p-4">

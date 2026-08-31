@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.cache import cache
 from django.core import mail, signing
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
@@ -30,6 +31,7 @@ from users.services import AccountSetupService
 
 class ActiveApiPermissionTests(APITestCase):
     def setUp(self):
+        cache.clear()
         User = get_user_model()
         self.customer = User.objects.create_user(
             username="customer@example.com",
@@ -137,6 +139,15 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(response.data["user"]["id"], legacy_customer.pk)
 
     def test_admin_can_request_and_complete_password_reset(self):
+        login_response = self.client.post(
+            "/api/v1/users/auth/login/",
+            {"email": self.admin.email, "password": "StrongPass123!"},
+            format="json",
+        )
+        self.assertEqual(login_response.status_code, status.HTTP_200_OK)
+        previous_access = login_response.data["access"]
+        previous_refresh = login_response.cookies["rack_refresh"].value
+
         request_response = self.client.post(
             "/api/v1/users/auth/password-reset/",
             {"email": self.admin.email},
@@ -159,8 +170,18 @@ class ActiveApiPermissionTests(APITestCase):
             format="json",
         )
         self.assertEqual(confirm_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(confirm_response.cookies["rack_refresh"]["max-age"], 0)
         self.admin.refresh_from_db()
         self.assertTrue(self.admin.check_password("NewStrongPass456!"))
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {previous_access}")
+        invalid_access = self.client.get("/api/v1/users/auth/me/")
+        self.assertEqual(invalid_access.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        self.client.credentials()
+        self.client.cookies["rack_refresh"] = previous_refresh
+        invalid_refresh = self.client.post("/api/v1/users/auth/refresh/", {}, format="json")
+        self.assertEqual(invalid_refresh.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_customer_can_request_password_reset(self):
         response = self.client.post(
@@ -519,12 +540,33 @@ class ActiveApiPermissionTests(APITestCase):
             self.assertEqual(invoiced.status_code, status.HTTP_200_OK)
             self.assertEqual(invoiced.data["status"], QuoteRequest.Status.QUOTED)
             self.assertTrue(invoiced.data["invoice_number"].startswith("INV-"))
-            self.assertTrue(invoiced.data["invoice_pdf_url"].endswith(".pdf"))
+            invoice_download_url = f"{quote_url}invoice-pdf/"
+            self.assertTrue(invoiced.data["invoice_pdf_url"].endswith(invoice_download_url))
             quote.refresh_from_db()
             with quote.invoice_pdf.open("rb") as invoice_file:
                 self.assertEqual(invoice_file.read(4), b"%PDF")
             self.assertEqual(len(mail.outbox), 1)
             self.assertEqual(mail.outbox[0].attachments[0][2], "application/pdf")
+
+            admin_download = self.client.get(invoice_download_url)
+            self.assertEqual(admin_download.status_code, status.HTTP_200_OK)
+            self.assertEqual(admin_download["Content-Type"], "application/pdf")
+            self.assertEqual(admin_download["Cache-Control"], "private, no-store")
+            self.assertEqual(b"".join(admin_download.streaming_content)[:4], b"%PDF")
+
+            self.client.force_authenticate(self.customer)
+            customer_download = self.client.get(invoice_download_url)
+            self.assertEqual(customer_download.status_code, status.HTTP_200_OK)
+            customer_download.close()
+
+            outsider = get_user_model().objects.create_user(
+                username="invoice-outsider",
+                email="invoice-outsider@example.com",
+                password="StrongPass123!",
+            )
+            self.client.force_authenticate(outsider)
+            outsider_download = self.client.get(invoice_download_url)
+            self.assertEqual(outsider_download.status_code, status.HTTP_404_NOT_FOUND)
 
             order_number = invoiced.data["order_number"]
             self.client.force_authenticate(self.customer)

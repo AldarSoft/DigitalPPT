@@ -8,6 +8,8 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -70,10 +72,12 @@ class CookieTokenRefreshView(TokenRefreshView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        serializer = self.get_serializer(data={"refresh": refresh_value})
         try:
+            refresh_token = RefreshToken(refresh_value)
+            JWTAuthentication().get_user(refresh_token)
+            serializer = self.get_serializer(data={"refresh": refresh_value})
             serializer.is_valid(raise_exception=True)
-        except User.DoesNotExist:
+        except (AuthenticationFailed, TokenError, User.DoesNotExist):
             response = Response(
                 {"detail": "Refresh session is no longer valid."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -183,7 +187,9 @@ class AuthViewSet(viewsets.GenericViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response({"detail": "Your password has been reset. You can now sign in."})
+        response = Response({"detail": "Your password has been reset. You can now sign in."})
+        clear_refresh_cookie(response)
+        return response
 
     @action(detail=False, methods=["post"])
     def logout(self, request):

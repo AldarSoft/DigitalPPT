@@ -37,6 +37,12 @@ class PaymentSuccessProvisioningTests(TestCase):
             code=PaymentProvider.Code.STRIPE,
             defaults={"display_name": "Stripe", "test_mode": True},
         )
+        self.provider.is_enabled = True
+        self.provider.is_customer_available = True
+        self.provider.test_mode = True
+        self.provider.save(
+            update_fields=["is_enabled", "is_customer_available", "test_mode", "updated_at"]
+        )
         license_category = Category.objects.create(name="Payment licenses")
         radio_category = Category.objects.create(name="Payment radios")
         self.license_product = Product.objects.create(

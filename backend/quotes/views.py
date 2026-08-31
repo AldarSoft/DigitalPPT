@@ -1,3 +1,4 @@
+from django.http import FileResponse
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -144,6 +145,22 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         )
         serializer.is_valid(raise_exception=True)
         return self._serialize(serializer.save())
+
+    @action(detail=True, methods=["get"], url_path="invoice-pdf")
+    def invoice_pdf(self, request, quote_number=None):
+        quote_request = self.get_object()
+        if not quote_request.invoice_pdf:
+            return Response({"detail": "Invoice PDF is not available."}, status=status.HTTP_404_NOT_FOUND)
+
+        response = FileResponse(
+            quote_request.invoice_pdf.open("rb"),
+            as_attachment=True,
+            filename=f"{quote_request.invoice_number or quote_request.quote_number}.pdf",
+            content_type="application/pdf",
+        )
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
 
     @action(detail=True, methods=["post"])

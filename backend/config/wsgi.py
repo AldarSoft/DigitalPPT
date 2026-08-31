@@ -13,6 +13,6 @@ from django.core.wsgi import get_wsgi_application
 
 current_settings = os.environ.get("DJANGO_SETTINGS_MODULE")
 if not current_settings or current_settings == "config.settings":
-    os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings.dev"
+    os.environ["DJANGO_SETTINGS_MODULE"] = "config.settings.prod"
 
 application = get_wsgi_application()

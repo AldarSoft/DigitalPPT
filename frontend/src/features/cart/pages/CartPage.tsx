@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle, ArrowRight, Building2, FileText, LockKeyhole, Minus, Plus, ShoppingBag } from 'lucide-react'
 import { Link, Navigate } from 'react-router-dom'
@@ -130,16 +129,10 @@ export function CartPage() {
 }
 
 function CartQuantityControl({ productId, productName, quantity, onQuantityChange }: { productId: number; productName: string; quantity: number; onQuantityChange: (productId: number, quantity: number) => void }) {
-  const [value, setValue] = useState(String(quantity))
-
-  useEffect(() => {
-    setValue(String(quantity))
-  }, [quantity])
-
-  const commit = (nextValue: string) => {
+  const commit = (nextValue: string, input?: HTMLInputElement) => {
     const nextQuantity = Number(nextValue)
     if (!Number.isInteger(nextQuantity) || nextQuantity < 1 || nextQuantity > 1000) {
-      setValue(String(quantity))
+      if (input) input.value = String(quantity)
       return
     }
     onQuantityChange(productId, nextQuantity)
@@ -149,12 +142,11 @@ function CartQuantityControl({ productId, productName, quantity, onQuantityChang
     <button type="button" aria-label={`Decrease ${productName} quantity`} disabled={quantity <= 1} onClick={() => onQuantityChange(productId, quantity - 1)}>
       <Minus size={16}/>
     </button>
-    <input aria-label={`${productName} quantity`} inputMode="numeric" maxLength={4} pattern="[0-9]*" value={value} onFocus={(event) => event.currentTarget.select()} onChange={(event) => {
-      const nextValue = event.target.value
-      if (!/^\d*$/.test(nextValue)) return
-      setValue(nextValue)
-      if (nextValue) commit(nextValue)
-    }} onBlur={() => commit(value)} onKeyDown={(event) => {
+    <input key={quantity} aria-label={`${productName} quantity`} inputMode="numeric" maxLength={4} pattern="[0-9]*" defaultValue={quantity} onFocus={(event) => event.currentTarget.select()} onChange={(event) => {
+      const nextValue = event.currentTarget.value.replace(/\D/g, '')
+      if (nextValue !== event.currentTarget.value) event.currentTarget.value = nextValue
+      if (nextValue) commit(nextValue, event.currentTarget)
+    }} onBlur={(event) => commit(event.currentTarget.value, event.currentTarget)} onKeyDown={(event) => {
       if (event.key === 'Enter') event.currentTarget.blur()
     }} />
     <button type="button" aria-label={`Increase ${productName} quantity`} disabled={quantity >= 1000} onClick={() => onQuantityChange(productId, quantity + 1)}>
