@@ -1,4 +1,5 @@
 from django.http import FileResponse
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -93,6 +94,20 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
             headers=headers,
         )
+
+    @extend_schema(
+        request=QuoteRequestStatusSerializer,
+        responses=QuoteRequestSerializer,
+    )
+    def partial_update(self, request, *args, **kwargs):
+        quote_request = self.get_object()
+        serializer = self.get_serializer(
+            quote_request,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        return self._serialize(serializer.save())
 
     def _serialize(self, quote_request):
         return Response(QuoteRequestSerializer(

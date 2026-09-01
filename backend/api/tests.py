@@ -522,6 +522,10 @@ class ActiveApiPermissionTests(APITestCase):
 
         reviewing = self.client.patch(quote_url, {"status": "reviewing"}, format="json")
         self.assertEqual(reviewing.status_code, status.HTTP_200_OK)
+        self.assertEqual(reviewing.data["quote_number"], created.data["quote_number"])
+        self.assertEqual(reviewing.data["status"], QuoteRequest.Status.REVIEWING)
+        self.assertEqual(len(reviewing.data["items"]), 1)
+        self.assertEqual(reviewing.data["items"][0]["sku"], self.product.sku)
         quote = QuoteRequest.objects.get()
         invoice_payload = {
             "items": [{"id": quote.items.get().id, "quoted_unit_price": "900.00"}],
