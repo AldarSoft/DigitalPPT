@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, BadgeCheck, Clock3, CreditCard, Download, FileText, MessageSquare, Search, Send, X } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, ChevronDown, ChevronUp, Clock3, CreditCard, Download, FilePenLine, FileText, MessageSquare, Search, Send, X } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api, ApiError, unwrap } from '../../../lib/api'
@@ -36,6 +36,7 @@ export function AdminQuotesPage() {
   const [quotedShipping, setQuotedShipping] = useState<string | null>(null)
   const [adminMessage, setAdminMessage] = useState<string | null>(null)
   const [requestAdditionalInformation, setRequestAdditionalInformation] = useState(false)
+  const [revisingInvoice, setRevisingInvoice] = useState(false)
   const [confirmingBankTransfer, setConfirmingBankTransfer] = useState(false)
   const [bankTransactionReference, setBankTransactionReference] = useState('')
   const [bankTransferNote, setBankTransferNote] = useState('')
@@ -91,6 +92,7 @@ export function AdminQuotesPage() {
     setQuotedShipping(value.quoted_shipping || '0.00')
     setAdminMessage(value.admin_message || '')
     setRequestAdditionalInformation(false)
+    setRevisingInvoice(false)
     setConfirmingBankTransfer(false)
     setBankTransactionReference('')
     setBankTransferNote('')
@@ -154,6 +156,10 @@ export function AdminQuotesPage() {
     setQuotedShipping(quote.quoted_shipping || '0.00')
     setAdminMessage(quote.admin_message || '')
     setRequestAdditionalInformation(false)
+    setRevisingInvoice(false)
+    setConfirmingBankTransfer(false)
+    setBankTransactionReference('')
+    setBankTransferNote('')
     setMessage('')
     setSelectedQuote(quote)
     setSearchParams((current) => {
@@ -194,6 +200,7 @@ export function AdminQuotesPage() {
   const invoiceSent = Boolean(selected?.invoiced_at && selected.quoted_total)
   const canEditInvoice = selected?.status === 'reviewing' || (selected?.status === 'quoted' && selected.order_status === 'pending')
   const canSendInvoice = Boolean(canEditInvoice)
+  const invoiceFormOpen = Boolean(canEditInvoice && (!invoiceSent || revisingInvoice))
 
   return (
     <main className={tw('admin-page')}>
@@ -246,16 +253,17 @@ export function AdminQuotesPage() {
             <div className={tw('panel-heading')}><div><p className={tw('eyebrow')}>QUOTE REQUEST</p><h2 id="quote-details-title">{selected.quote_number}</h2></div><button type="button" aria-label="Close quote details" onClick={closeQuote}><X /></button></div>
             <p>{selected.requester_contact_person}<br />{selected.requester_company_name ? <>{selected.requester_company_name}<br /></> : null}{selected.requester_email}<br />{selected.requester_phone}</p>
             {selected.status === 'new' ? <button className={tw('record-payment-link')} type="button" disabled={update.isPending} onClick={() => update.mutate({ quoteNumber: selected.quote_number, data: { status: 'reviewing' } })}>Start review</button> : null}
-            <div className={tw('order-editor-items')}>{selected.items.map((item) => <div key={item.id}><div className={tw('record-item-main')}><ProductThumbnail imageUrl={item.image_url} name={item.product_name} /><span>{item.product_name}<small>{item.sku || 'Product'} · Qty {item.quantity}</small></span></div>{canEditInvoice ? <label className={tw('quote-price-input')}>Unit price{item.bulk_price_applied ? <small>Bulk price</small> : null}<input type="number" min="0.01" step="0.01" value={itemPrices[item.id] ?? item.quoted_unit_price ?? item.suggested_unit_price ?? ''} onChange={(event) => setItemPrices((current) => ({ ...current, [item.id]: event.target.value }))} /></label> : <strong>{invoiceSent && item.quoted_line_total ? `$${Number(item.quoted_line_total).toFixed(2)}` : `Qty ${item.quantity}`}</strong>}</div>)}</div>
+            <div className={tw('order-editor-items')}>{selected.items.map((item) => <div key={item.id}><div className={tw('record-item-main')}><ProductThumbnail imageUrl={item.image_url} name={item.product_name} /><span>{item.product_name}<small>{item.sku || 'Product'} · Qty {item.quantity}</small></span></div>{invoiceFormOpen ? <label className={tw('quote-price-input')}>Unit price{item.bulk_price_applied ? <small>Bulk price</small> : null}<input type="number" min="0.01" step="0.01" value={itemPrices[item.id] ?? item.quoted_unit_price ?? item.suggested_unit_price ?? ''} onChange={(event) => setItemPrices((current) => ({ ...current, [item.id]: event.target.value }))} /></label> : <strong>{invoiceSent && item.quoted_line_total ? `$${Number(item.quoted_line_total).toFixed(2)}` : `Qty ${item.quantity}`}</strong>}</div>)}</div>
             {selected.notes ? <p className={tw('quote-notes')}>{selected.notes}</p> : null}
             {canEditInvoice ? <div className="mt-5 flex w-full flex-row flex-nowrap items-center gap-2.5"><input id="request-additional-information" className="m-0 size-4 shrink-0 accent-brand" type="checkbox" checked={requestAdditionalInformation} onChange={(event) => setRequestAdditionalInformation(event.target.checked)} /><label htmlFor="request-additional-information" className="m-0 inline text-sm font-bold leading-5">Request additional information before sending an invoice</label></div> : null}
             {requestAdditionalInformation && (selected.status === 'reviewing' || (selected.status === 'quoted' && selected.order_status === 'pending')) ? <section className="mt-5 border-t border-border-soft pt-5"><h3 className="mb-3 flex items-center gap-2 text-sm font-extrabold"><MessageSquare size={17} />Review messages</h3><div ref={messagesRef} className="grid max-h-60 gap-2 overflow-y-auto rounded-control bg-surface-raised p-3" aria-live="polite">{selected.messages.length ? selected.messages.map((item) => <div className={item.sender_role === 'admin' ? 'ml-8 rounded-control bg-brand-soft p-3 text-sm' : 'mr-8 rounded-control border border-border bg-white p-3 text-sm'} key={item.id}><strong className="block text-xs">{item.author_name}</strong><p className="mt-1 whitespace-pre-wrap break-words text-text-subtle">{item.body}</p><small className="mt-1 block text-[10px] text-text-soft">{new Date(item.created_at).toLocaleString()}</small></div>) : <p className="text-sm text-text-soft">No messages yet. Send a message only if you need more information.</p>}</div><label className="mt-3 grid w-full gap-2 text-xs font-bold">Message<textarea ref={messageInputRef} rows={3} className="min-h-20 w-full resize-y overflow-y-auto rounded-control border border-border-input p-3 text-sm font-normal" value={message} onChange={(event) => setMessage(event.target.value)} /></label><button className={tw('record-payment-link')} type="button" disabled={!message.trim() || sendMessage.isPending} onClick={() => sendMessage.mutate()}><Send size={16} />Send message</button></section> : null}
-            {canEditInvoice ? <div className={tw('quote-pricing-form')}><h3>{invoiceSent ? 'Revise invoice' : 'Invoice'}</h3><label>Shipping<input type="number" min="0" step="0.01" value={quotedShipping ?? selected.quoted_shipping ?? '0.00'} onChange={(event) => setQuotedShipping(event.target.value)} /></label><label>Invoice terms<textarea rows={3} value={adminMessage ?? selected.admin_message ?? ''} onChange={(event) => setAdminMessage(event.target.value)} placeholder="Validity, delivery timing and terms" /></label><button type="button" disabled={!canSendInvoice || invoice.isPending} onClick={sendInvoice}><FileText size={17} />{invoice.isPending ? 'Sending...' : invoiceSent ? 'Update and resend invoice' : 'Send invoice'}</button></div> : null}
+            {canEditInvoice && invoiceSent ? <button className="mt-5 flex min-h-12 w-full items-center justify-between rounded-control border border-border bg-white px-4 py-3 text-left text-sm font-extrabold text-ink transition-colors hover:border-brand hover:text-brand" type="button" aria-expanded={revisingInvoice} onClick={() => setRevisingInvoice((value) => !value)}><span className="flex items-center gap-2.5"><FilePenLine size={18} />Revise invoice</span>{revisingInvoice ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button> : null}
+            {invoiceFormOpen ? <div className={tw('quote-pricing-form')}><h3>{invoiceSent ? 'Revise invoice' : 'Invoice'}</h3><label>Shipping<input type="number" min="0" step="0.01" value={quotedShipping ?? selected.quoted_shipping ?? '0.00'} onChange={(event) => setQuotedShipping(event.target.value)} /></label><label>Invoice terms<textarea rows={3} value={adminMessage ?? selected.admin_message ?? ''} onChange={(event) => setAdminMessage(event.target.value)} placeholder="Validity, delivery timing and terms" /></label><button type="button" disabled={!canSendInvoice || invoice.isPending} onClick={sendInvoice}><FileText size={17} />{invoice.isPending ? 'Sending...' : invoiceSent ? 'Update and resend invoice' : 'Send invoice'}</button></div> : null}
             {invoiceSent ? <dl className={tw('record-totals')}><div><dt>Subtotal</dt><dd>${Number(selected.quoted_subtotal).toFixed(2)}</dd></div><div><dt>Shipping</dt><dd>${Number(selected.quoted_shipping).toFixed(2)}</dd></div><div><dt>Invoice total</dt><dd>${Number(selected.quoted_total).toFixed(2)}</dd></div></dl> : null}
             {selected.invoice_pdf_url ? <button className={`${tw('record-payment-link')} !text-white [&>svg]:text-white`} type="button" disabled={downloadInvoice.isPending} onClick={() => downloadInvoice.mutate({ quoteNumber: selected.quote_number, invoiceNumber: selected.invoice_number || selected.quote_number })}><Download size={17} />{downloadInvoice.isPending ? 'Downloading...' : `Download ${selected.invoice_number}`}</button> : null}
             {selected.order_number ? <p>Invoice order: <strong>{selected.order_number}</strong></p> : <p>No order has been created from this quote.</p>}
-            {selected.status === 'quoted' && selected.order_status === 'pending' && selected.order_number ? (
-              <section className="mt-5 rounded-control border border-warning bg-warning-soft p-4">
+            {selected.status === 'quoted' && selected.order_status === 'pending' && selected.order_number ? confirmingBankTransfer ? (
+              <section className="mt-3 rounded-control border border-warning bg-warning-soft p-4">
                 <div className="flex items-start gap-3">
                   <CreditCard className="mt-0.5 shrink-0 text-warning" size={19} />
                   <div>
@@ -263,18 +271,16 @@ export function AdminQuotesPage() {
                     <p className="mt-1 text-sm text-warning">Match the bank statement to invoice reference <strong>{selected.invoice_number}</strong> and the invoice amount before confirming. This activates fulfillment and cannot be undone here.</p>
                   </div>
                 </div>
-                {confirmingBankTransfer ? (
-                  <div className="mt-4 grid gap-3">
-                    <label className="grid gap-2 text-xs font-bold text-ink">Bank transaction reference<input className="min-h-10 rounded-control border border-border-input bg-white px-3 text-sm font-normal" value={bankTransactionReference} onChange={(event) => setBankTransactionReference(event.target.value)} /></label>
-                    <label className="grid gap-2 text-xs font-bold text-ink">Internal note <span className="font-normal text-muted">(optional)</span><textarea rows={2} className="rounded-control border border-border-input bg-white p-3 text-sm font-normal" value={bankTransferNote} onChange={(event) => setBankTransferNote(event.target.value)} /></label>
-                    <div className="flex flex-wrap items-center gap-2.5">
-                      <button className={tw('table-action')} type="button" onClick={() => setConfirmingBankTransfer(false)}>Cancel</button>
-                      <button className={tw('record-payment-link !mt-0')} type="button" disabled={!bankTransactionReference.trim() || confirmBankTransfer.isPending} onClick={() => confirmBankTransfer.mutate()}>{confirmBankTransfer.isPending ? 'Confirming...' : 'Confirm payment received'}</button>
-                    </div>
+                <div className="mt-4 grid gap-3">
+                  <label className="grid gap-2 text-xs font-bold text-ink">Bank transaction reference<input className="min-h-10 rounded-control border border-border-input bg-white px-3 text-sm font-normal" value={bankTransactionReference} onChange={(event) => setBankTransactionReference(event.target.value)} /></label>
+                  <label className="grid gap-2 text-xs font-bold text-ink">Internal note <span className="font-normal text-muted">(optional)</span><textarea rows={2} className="rounded-control border border-border-input bg-white p-3 text-sm font-normal" value={bankTransferNote} onChange={(event) => setBankTransferNote(event.target.value)} /></label>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    <button className={tw('table-action')} type="button" onClick={() => setConfirmingBankTransfer(false)}>Cancel</button>
+                    <button className={tw('record-payment-link !mt-0')} type="button" disabled={!bankTransactionReference.trim() || confirmBankTransfer.isPending} onClick={() => confirmBankTransfer.mutate()}>{confirmBankTransfer.isPending ? 'Confirming...' : 'Confirm payment received'}</button>
                   </div>
-                ) : <button className={`${tw('record-payment-link')} mt-4`} type="button" onClick={() => setConfirmingBankTransfer(true)}>Confirm payment received</button>}
+                </div>
               </section>
-            ) : null}
+            ) : <button className="mt-5 flex min-h-12 w-full items-center justify-between rounded-control border border-border bg-white px-4 py-3 text-left text-sm font-extrabold text-ink transition-colors hover:border-brand hover:text-brand" type="button" aria-expanded="false" onClick={() => setConfirmingBankTransfer(true)}><span className="flex items-center gap-2.5"><CreditCard size={18} />Confirm bank transfer received</span><ChevronDown size={18} /></button> : null}
             <StatusTimeline noun="Quote request" currentStatus={selected.status} initialStatus="new" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={QUOTE_STEPS} />
             {selected.status !== 'approved' && selected.status !== 'quoted' && selected.status !== 'cancelled' ? (
               <div className={tw('quote-close-section')}>
