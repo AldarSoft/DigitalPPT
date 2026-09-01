@@ -3,6 +3,7 @@ from django.urls import path
 from licensing.views import (
     CartCapacityView,
     ClientLicenseDetailView,
+    LicenseCancellationView,
     LicenseAdjustmentView,
     LicenseRenewalOrderView,
     OrganizationInvitationAcceptView,
@@ -79,6 +80,11 @@ urlpatterns = [
         "licenses/<str:license_number>/renew/",
         LicenseRenewalOrderView.as_view(),
         name="licensing-license-renewal-order",
+    ),
+    path(
+        "licenses/<str:license_number>/cancel/",
+        LicenseCancellationView.as_view(),
+        name="licensing-license-cancel",
     ),
     path(
         "licenses/<int:pk>/adjust/",

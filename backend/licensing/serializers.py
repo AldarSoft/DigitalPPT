@@ -68,6 +68,15 @@ class LicenseAdjustmentSerializer(serializers.Serializer):
         return attrs
 
 
+class LicenseCancellationSerializer(serializers.Serializer):
+    password = serializers.CharField(
+        max_length=128,
+        trim_whitespace=False,
+        write_only=True,
+    )
+    reason = serializers.CharField(max_length=500, trim_whitespace=True)
+
+
 class OrganizationIdentitySerializer(serializers.Serializer):
     id = serializers.IntegerField()
     public_id = serializers.UUIDField()
@@ -88,6 +97,10 @@ class OrganizationLicenseSummarySerializer(serializers.Serializer):
     available_capacity = serializers.IntegerField()
     next_expiry = serializers.DateField(allow_null=True)
     next_expiry_remaining_days = serializers.IntegerField(allow_null=True)
+    licensed_product_count = serializers.IntegerField()
+    licensed_product_quantity = serializers.IntegerField()
+    usable_license_capacity = serializers.IntegerField()
+    overflow_quantity = serializers.IntegerField()
 
 
 class OrganizationOwnerSummarySerializer(serializers.Serializer):
@@ -378,6 +391,9 @@ class AdminOrganizationLicenseRowSerializer(serializers.Serializer):
     license_count = serializers.IntegerField()
     used_capacity = serializers.IntegerField()
     total_capacity = serializers.IntegerField()
+    licensed_product_quantity = serializers.IntegerField()
+    usable_license_capacity = serializers.IntegerField()
+    overflow_quantity = serializers.IntegerField()
     next_expiry = serializers.DateField(allow_null=True)
     status = serializers.ChoiceField(
         choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"), ("no_licenses", "No licenses"))
@@ -404,6 +420,8 @@ class AdminOrganizationDetailSummarySerializer(serializers.Serializer):
     subscription_expires_on = serializers.DateField(allow_null=True)
     licensed_product_count = serializers.IntegerField()
     active_quantity = serializers.IntegerField()
+    usable_license_capacity = serializers.IntegerField()
+    overflow_quantity = serializers.IntegerField()
     status = serializers.ChoiceField(
         choices=(*License.Status.choices, (Organization.Status.DRAFT, "Draft"), ("no_licenses", "No licenses"))
     )

@@ -11,12 +11,12 @@ from licensing.models import (
     LicenseEvent,
     Organization,
     OrganizationMembership,
-    ProductLicenseAllocation,
 )
 from licensing.services import (
     ClientLicenseDetailService,
     LicenseExpiryService,
     LicenseLifecycleService,
+    OrganizationCoverageService,
 )
 from payments.models import PaymentAttempt
 
@@ -176,6 +176,7 @@ class AdminOrganizationLicenseService:
             (license.expires_on for license in dated_licenses),
             default=None,
         )
+        coverage = OrganizationCoverageService.summary(organization=organization)
         return {
             "id": organization.pk,
             "name": organization.name,
@@ -192,6 +193,7 @@ class AdminOrganizationLicenseService:
                 license.used_capacity for license in capacity_licenses
             ),
             "total_capacity": sum(license.capacity for license in capacity_licenses),
+            **coverage,
             "next_expiry": next_expiry,
             "status": cls.status_for(licenses, organization),
         }
@@ -228,8 +230,11 @@ class AdminOrganizationLicenseService:
                 "Organization ownership transferred to "
                 f"{metadata.get('new_owner_email', 'the new Owner')}."
             ),
-            LicenseEvent.Type.ADJUSTED: metadata.get(
-                "reason", "License manually adjusted."
+            LicenseEvent.Type.ADJUSTED: (
+                f"{license_name} cancelled by the Organization Owner: "
+                f"{metadata.get('reason', 'No reason provided.')}"
+                if metadata.get("action") == "owner_cancelled"
+                else metadata.get("reason", "License manually adjusted.")
             ),
             LicenseEvent.Type.ALLOCATED: (
                 f"{metadata.get('quantity', 0)} product license(s) allocated."
@@ -280,14 +285,6 @@ class AdminOrganizationLicenseService:
                 "license_product", "source_order_item__order"
             ).order_by("expires_on", "pk")
         )
-        active_allocations = ProductLicenseAllocation.objects.filter(
-            license__organization=organization,
-            status=ProductLicenseAllocation.Status.ACTIVE,
-        )
-        allocation_totals = active_allocations.aggregate(
-            licensed_product_count=models.Count("product_id", distinct=True),
-            active_quantity=models.Sum("quantity"),
-        )
         current_licenses = [
             license
             for license in licenses
@@ -314,6 +311,7 @@ class AdminOrganizationLicenseService:
             metadata__notification_type="renewal_invoice",
         ).exists()
         recent_events = cls.event_queryset(organization)[:20]
+        coverage = OrganizationCoverageService.summary(organization=organization)
         return {
             "organization": {
                 "id": organization.pk,
@@ -334,10 +332,10 @@ class AdminOrganizationLicenseService:
             "summary": {
                 "subscription_starts_on": starts_on,
                 "subscription_expires_on": expires_on,
-                "licensed_product_count": (
-                    allocation_totals["licensed_product_count"] or 0
-                ),
-                "active_quantity": allocation_totals["active_quantity"] or 0,
+                "licensed_product_count": coverage["licensed_product_count"],
+                "active_quantity": coverage["licensed_product_quantity"],
+                "usable_license_capacity": coverage["usable_license_capacity"],
+                "overflow_quantity": coverage["overflow_quantity"],
                 "status": cls.status_for(current_licenses, organization),
             },
             "licenses": [

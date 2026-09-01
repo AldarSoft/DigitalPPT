@@ -520,6 +520,8 @@ class OrganizationSummaryService:
             expires_at__gt=timezone.now(),
         ).count()
 
+        coverage = OrganizationCoverageService.summary(organization=organization)
+
         return {
             "organization": {
                 "id": organization.pk,
@@ -549,6 +551,7 @@ class OrganizationSummaryService:
                     if next_license
                     else None
                 ),
+                **coverage,
             },
             "team": {
                 "owner": (
@@ -563,6 +566,170 @@ class OrganizationSummaryService:
                 "pending_invitation_count": pending_invitation_count,
             },
         }
+
+
+class OrganizationCoverageService:
+    """Compare purchased licensed radios with currently usable compatible capacity."""
+
+    @classmethod
+    def summary(cls, *, organization, on_date=None):
+        on_date = on_date or timezone.localdate()
+        purchased_by_license_product = {}
+        licensed_product_ids = set()
+        represented_order_item_ids = set()
+        provisioning_records = (
+            LicenseOrderItemProvisioning.objects.select_related(
+                "order_item__product__required_license_product"
+            )
+            .filter(
+                organization=organization,
+                operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+            )
+            .order_by("pk")
+        )
+        for record in provisioning_records:
+            order_item = record.order_item
+            product = order_item.product
+            if not product.required_license_product_id:
+                continue
+            represented_order_item_ids.add(order_item.pk)
+            licensed_product_ids.add(product.pk)
+            purchased_by_license_product[product.required_license_product_id] = (
+                purchased_by_license_product.get(product.required_license_product_id, 0)
+                + order_item.quantity
+            )
+
+        # Preserve coverage reporting for legacy allocations created before
+        # immutable order-item provisioning records were introduced.
+        legacy_allocations = (
+            ProductLicenseAllocation.objects.select_related(
+                "order_item__product__required_license_product"
+            )
+            .filter(
+                license__organization=organization,
+                status=ProductLicenseAllocation.Status.ACTIVE,
+            )
+            .exclude(order_item_id__in=represented_order_item_ids)
+            .order_by("order_item_id", "pk")
+        )
+        for allocation in legacy_allocations:
+            order_item = allocation.order_item
+            if order_item.pk in represented_order_item_ids:
+                continue
+            product = order_item.product
+            if not product.required_license_product_id:
+                continue
+            represented_order_item_ids.add(order_item.pk)
+            licensed_product_ids.add(product.pk)
+            purchased_by_license_product[product.required_license_product_id] = (
+                purchased_by_license_product.get(product.required_license_product_id, 0)
+                + order_item.quantity
+            )
+
+        usable_by_license_product = {}
+        usable_licenses = License.objects.filter(
+            organization=organization,
+            status__in=LicenseCapacityService.ELIGIBLE_STATUSES,
+        ).filter(models.Q(expires_on__isnull=True) | models.Q(expires_on__gte=on_date))
+        for license in usable_licenses:
+            usable_by_license_product[license.license_product_id] = (
+                usable_by_license_product.get(license.license_product_id, 0)
+                + license.capacity
+            )
+
+        licensed_product_quantity = sum(purchased_by_license_product.values())
+        usable_license_capacity = sum(usable_by_license_product.values())
+        overflow_quantity = sum(
+            max(0, quantity - usable_by_license_product.get(license_product_id, 0))
+            for license_product_id, quantity in purchased_by_license_product.items()
+        )
+        return {
+            "licensed_product_count": len(licensed_product_ids),
+            "licensed_product_quantity": licensed_product_quantity,
+            "usable_license_capacity": usable_license_capacity,
+            "overflow_quantity": overflow_quantity,
+        }
+
+    @classmethod
+    @transaction.atomic
+    def reconcile(cls, *, organization, on_date=None):
+        from core.models import UserNotification
+
+        on_date = on_date or timezone.localdate()
+        organization = Organization.objects.select_for_update().get(pk=organization.pk)
+        coverage = cls.summary(organization=organization, on_date=on_date)
+        if coverage["overflow_quantity"] <= 0:
+            return coverage, False
+
+        notification_key = f"license_coverage_overflow:{organization.pk}:{on_date.isoformat()}"
+        if LicenseEvent.objects.filter(
+            organization=organization,
+            event_type=LicenseEvent.Type.NOTIFICATION_SENT,
+            metadata__notification_key=notification_key,
+        ).exists():
+            return coverage, False
+
+        overflow = coverage["overflow_quantity"]
+        title = f"License capacity required for {overflow} radio(s)"
+        message = (
+            f"{organization.name} has {overflow} licensed radio product(s) beyond usable "
+            "license capacity. Add or renew a compatible license to restore full coverage."
+        )
+        User = get_user_model()
+        recipients = User.objects.filter(
+            models.Q(
+                organization_memberships__organization=organization,
+                organization_memberships__is_active=True,
+            )
+            | models.Q(is_staff=True),
+            is_active=True,
+        ).distinct()
+        recipient_ids = []
+        notifications = []
+        for recipient in recipients:
+            recipient_ids.append(recipient.pk)
+            notifications.append(
+                UserNotification(
+                    recipient=recipient,
+                    title=title,
+                    message=message,
+                    url=(
+                        f"/admin/licenses/{organization.pk}"
+                        if recipient.is_staff
+                        else f"/account?tab=licenses&org={organization.pk}"
+                    ),
+                )
+            )
+        UserNotification.objects.bulk_create(notifications)
+        LicenseLifecycleService.record_event(
+            organization=organization,
+            event_type=LicenseEvent.Type.NOTIFICATION_SENT,
+            metadata={
+                "notification_type": "license_coverage_overflow",
+                "notification_key": notification_key,
+                "message": message,
+                "on_date": on_date.isoformat(),
+                "recipient_ids": recipient_ids,
+                **coverage,
+            },
+        )
+        return coverage, True
+
+    @classmethod
+    def reconcile_all(cls, *, on_date=None):
+        organization_ids = list(
+            Organization.objects.filter(status=Organization.Status.ACTIVE).values_list(
+                "pk", flat=True
+            )
+        )
+        notified = 0
+        for organization_id in organization_ids:
+            _, was_notified = cls.reconcile(
+                organization=Organization(pk=organization_id),
+                on_date=on_date,
+            )
+            notified += int(was_notified)
+        return {"processed": len(organization_ids), "notified": notified}
 
 
 class OrganizationLicenseListService:
@@ -620,7 +787,8 @@ class OrganizationLicenseListService:
             .first()
         )
         has_current_renewal_need = any(
-            LicenseExpiryService.effective_status(license)
+            license.status in (License.Status.EXPIRING_SOON, License.Status.EXPIRED)
+            or LicenseExpiryService.effective_status(license)
             in (License.Status.EXPIRING_SOON, License.Status.EXPIRED)
             for license in licenses
         )
@@ -1338,6 +1506,48 @@ class LicenseLifecycleService:
         )
         return locked
 
+    @classmethod
+    @transaction.atomic
+    def cancel_by_owner(cls, *, license, actor, password, reason):
+        reason = (reason or "").strip()
+        if not reason:
+            raise ValidationError({"reason": "A reason is required to cancel a license."})
+        membership = OrganizationSummaryService.membership_for_user(
+            actor,
+            organization_id=license.organization_id,
+        )
+        if membership is None or membership.role != OrganizationMembership.Role.OWNER:
+            raise PermissionDenied("Only the Organization Owner can cancel a license.")
+        if not actor.check_password(password or ""):
+            raise ValidationError({"password": "Password is incorrect."})
+
+        locked = (
+            License.objects.select_for_update()
+            .select_related("organization")
+            .get(pk=license.pk)
+        )
+        if locked.status == License.Status.CANCELLED:
+            raise ValidationError({"license": "This license is already cancelled."})
+        previous_status = locked.status
+        locked.status = License.Status.CANCELLED
+        locked.save(update_fields=["status", "updated_at"])
+        cls.record_event(
+            organization=locked.organization,
+            license=locked,
+            event_type=LicenseEvent.Type.ADJUSTED,
+            actor=actor,
+            metadata={
+                "action": "owner_cancelled",
+                "reason": reason,
+                "previous": {"status": previous_status},
+                "current": {"status": License.Status.CANCELLED},
+                "cancelled_capacity": locked.capacity,
+                "cancelled_used_capacity": locked.used_capacity,
+            },
+        )
+        OrganizationCoverageService.reconcile(organization=locked.organization)
+        return locked
+
 
 class LicenseExpiryService:
     WARNING_DAYS = (60, 30, 7)
@@ -1345,7 +1555,11 @@ class LicenseExpiryService:
     @classmethod
     def effective_status(cls, license, *, on_date=None):
         """Return the expiry state users should see before reconciliation runs."""
-        if license.status != License.Status.ACTIVE:
+        if license.status not in {
+            License.Status.ACTIVE,
+            License.Status.EXPIRING_SOON,
+            License.Status.EXPIRED,
+        }:
             return license.status
         remaining_days = license.calculate_remaining_days(on_date)
         if remaining_days is None:
@@ -1354,7 +1568,7 @@ class LicenseExpiryService:
             return License.Status.EXPIRED
         if remaining_days <= max(cls.WARNING_DAYS):
             return License.Status.EXPIRING_SOON
-        return license.status
+        return License.Status.ACTIVE
 
     @classmethod
     def _notification_stage(cls, remaining_days):
@@ -1505,7 +1719,13 @@ class LicenseExpiryService:
                 on_date=on_date,
             )
             notified += int(was_notified)
-        return {"processed": len(license_ids), "notified": notified}
+        coverage_result = OrganizationCoverageService.reconcile_all(on_date=on_date)
+        return {
+            "processed": len(license_ids),
+            "notified": notified,
+            "coverage_processed": coverage_result["processed"],
+            "coverage_notified": coverage_result["notified"],
+        }
 
 
 

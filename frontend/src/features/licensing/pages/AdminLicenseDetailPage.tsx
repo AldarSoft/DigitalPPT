@@ -62,12 +62,13 @@ export function AdminLicenseDetailPage() {
       {detailQuery.isLoading ? <AdminDetailState icon={<LoaderCircle className="animate-spin text-brand" size={22} />} title="Loading organization licenses" text="Retrieving subscription, license capacity, and support history." /> : null}
       {accessDenied ? <AdminDetailState icon={<ShieldCheck className="text-warning" size={22} />} title="Organization license access is required" text="Only Digital PTT administrators can open this organization." /> : null}
       {detailQuery.isError && !accessDenied ? <AdminDetailState icon={<AlertTriangle className="text-danger" size={22} />} title="Organization details could not be loaded" text={messageFrom(detailQuery.error)} action={<button className="min-h-9 rounded-control border border-border-input bg-white px-3 text-xs font-bold text-brand" type="button" onClick={() => void detailQuery.refetch()}>Try again</button>} /> : null}
+      {detail?.summary.overflow_quantity ? <section className="mb-4 flex items-start gap-3 rounded-panel border border-danger bg-danger-soft px-5 py-4 text-danger"><AlertTriangle className="mt-0.5 shrink-0" size={21} /><div><h2 className="text-base">License capacity warning</h2><p className="mt-1 text-sm">{detail.summary.overflow_quantity} purchased radio product(s) are beyond usable compatible capacity. The organization and staff receive one in-app reminder per day until coverage is restored.</p></div></section> : null}
       {detail ? (
         <div className="grid gap-4">
           <section className="grid gap-3 md:grid-cols-3">
             <SummaryCard icon={CalendarDays} label="Subscription" value={`${formatDate(detail.summary.subscription_starts_on)} – ${formatDate(detail.summary.subscription_expires_on)}`} note="Annual subscription" />
             <SummaryCard icon={Users} label="Organization control" value={`${detail.organization.owner ? 1 : 0} Owner · ${detail.organization.license_manager_count} License Managers`} note={detail.organization.owner ? `${detail.organization.owner.name} · ${detail.organization.owner.email}` : 'No owner'} action="Manage users" onAction={() => setOrganizationUsersOpen(true)} />
-            <SummaryCard icon={CreditCard} label="Licensed products" value={`${detail.summary.licensed_product_count} products · ${detail.summary.active_quantity} active product licenses`} note="Current licensed quantity" />
+            <SummaryCard icon={CreditCard} label="Licensed products" value={`${detail.summary.licensed_product_count} products · ${detail.summary.active_quantity} radios`} note={`${detail.summary.usable_license_capacity} usable capacity`} />
           </section>
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(280px,.7fr)]">
             <section className={tw('admin-panel admin-table-wrap')}>

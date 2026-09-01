@@ -1,7 +1,8 @@
-import { Boxes, FileText, Package, Search } from 'lucide-react'
+import { Boxes, FileText, Gauge, Package, RadioTower, Search } from 'lucide-react'
 import { tw } from '../../../lib/tailwind-styles'
 import type { QuoteRequest, User } from '../../../types'
 import type { AccountTab } from '../types'
+import type { OrganizationLicenseSummary } from '../../licensing/types'
 import { QuotesTable } from './QuotesTable'
 
 export function AccountOverview({
@@ -9,6 +10,7 @@ export function AccountOverview({
   quotes,
   orderCount,
   quoteCount,
+  licenseSummary,
   onTab,
   onQuoteSelect,
 }: {
@@ -16,6 +18,7 @@ export function AccountOverview({
   quotes: QuoteRequest[];
   orderCount: number;
   quoteCount: number;
+  licenseSummary?: OrganizationLicenseSummary;
   onTab: (tab: AccountTab) => void;
   onQuoteSelect: (quote: QuoteRequest) => void;
 }) {
@@ -41,6 +44,16 @@ export function AccountOverview({
           <Package size={23} />
           <strong>{orderCount}</strong>
           <span>Orders</span>
+        </article>
+        <article>
+          <RadioTower size={23} />
+          <strong>{licenseSummary?.licensed_product_quantity ?? 0}</strong>
+          <span>Licensed radios across {licenseSummary?.licensed_product_count ?? 0} product types</span>
+        </article>
+        <article>
+          <Gauge size={23} />
+          <strong>{licenseSummary?.usable_license_capacity ?? 0}</strong>
+          <span>Usable license capacity</span>
         </article>
       </div>
       <section className={tw("account-panel")}>

@@ -12,6 +12,7 @@ from licensing.serializers import (
     CartCapacityRequirementSerializer,
     ClientLicenseDetailSerializer,
     ClientLicenseListSerializer,
+    LicenseCancellationSerializer,
     LicenseRenewalSummarySerializer,
     LicenseAdjustmentSerializer,
     LicenseSummarySerializer,
@@ -221,6 +222,45 @@ class ClientLicenseDetailView(APIView):
         if payload is None:
             return Response({"detail": "License not found."}, status=404)
         return Response(ClientLicenseDetailSerializer(payload).data)
+
+
+class LicenseCancellationView(APIView):
+    permission_classes = (IsAuthenticated,)
+    throttle_scope = "auth"
+
+    @extend_schema(
+        summary="Cancel an organization license as its Owner",
+        request=LicenseCancellationSerializer,
+        responses=LicenseSummarySerializer,
+    )
+    def post(self, request, license_number):
+        organization_id = _requested_organization_id(request)
+        membership = OrganizationSummaryService.membership_for_user(
+            request.user,
+            organization_id=organization_id,
+        )
+        if membership is None:
+            return Response(
+                {"detail": "No active organization membership was found."},
+                status=404,
+            )
+        license = get_object_or_404(
+            License.objects.select_related("organization"),
+            organization=membership.organization,
+            license_number=license_number,
+        )
+        serializer = LicenseCancellationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            cancelled = LicenseLifecycleService.cancel_by_owner(
+                license=license,
+                actor=request.user,
+                password=serializer.validated_data["password"],
+                reason=serializer.validated_data["reason"],
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+        return Response(LicenseSummarySerializer(cancelled).data)
 
 
 class LicenseRenewalOrderView(APIView):

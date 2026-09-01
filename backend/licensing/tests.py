@@ -11,13 +11,19 @@ from rest_framework.test import APIClient
 from core.models import NotificationJob, UserNotification
 from licensing.models import Organization, OrganizationInvitation, OrganizationMembership
 from licensing.permissions import OrganizationAccessPolicy
-from licensing.models import License, LicenseEvent, ProductLicenseAllocation
+from licensing.models import (
+    License,
+    LicenseEvent,
+    LicenseOrderItemProvisioning,
+    ProductLicenseAllocation,
+)
 from licensing.services import (
     InvitationService,
     LicenseCapacityService,
     LicenseExpiryService,
     LicenseLifecycleService,
     LicenseRenewalOrderService,
+    OrganizationCoverageService,
     OrganizationService,
     ProductLicenseCompatibilityService,
 )
@@ -601,6 +607,20 @@ class LicenseLifecycleTests(TestCase):
             1,
         )
 
+    def test_effective_status_advances_expiring_license_after_expiry_date(self):
+        license = self.provision()
+        License.objects.filter(pk=license.pk).update(
+            status=License.Status.EXPIRING_SOON,
+            expires_on=timezone.localdate() - timedelta(days=1),
+            renews_on=timezone.localdate(),
+        )
+        license.refresh_from_db()
+
+        self.assertEqual(
+            LicenseExpiryService.effective_status(license),
+            License.Status.EXPIRED,
+        )
+
     @override_settings(NOTIFICATIONS_ASYNC=True)
     def test_expiry_reconciliation_queues_email_for_owner_and_license_manager(self):
         license = self.provision()
@@ -718,6 +738,162 @@ class LicenseLifecycleTests(TestCase):
                 event_type=LicenseEvent.Type.ADJUSTED,
             ).exists()
         )
+
+    def test_owner_cancellation_requires_password_and_records_overflow(self):
+        license = self.provision(name="Owner Controlled License")
+        allocation = LicenseLifecycleService.allocate(
+            license=license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=3,
+        )
+        LicenseOrderItemProvisioning.objects.create(
+            organization=self.organization,
+            order_item=self.radio_order_item,
+            operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+            allocation_ids=[allocation.pk],
+        )
+        url = f"/api/v1/licensing/licenses/{license.license_number}/cancel/"
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.manager)
+        forbidden = api_client.post(
+            url,
+            {"password": "StrongPass123!", "reason": "Manager attempt"},
+            format="json",
+        )
+        api_client.force_authenticate(user=self.owner)
+        wrong_password = api_client.post(
+            url,
+            {"password": "WrongPass123!", "reason": "Testing confirmation"},
+            format="json",
+        )
+        license.refresh_from_db()
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(wrong_password.status_code, 400)
+        self.assertEqual(license.status, License.Status.ACTIVE)
+
+        cancelled = api_client.post(
+            url,
+            {
+                "password": "StrongPass123!",
+                "reason": "Replacing this annual license",
+            },
+            format="json",
+        )
+
+        license.refresh_from_db()
+        self.assertEqual(cancelled.status_code, 200)
+        self.assertEqual(license.status, License.Status.CANCELLED)
+        event = LicenseEvent.objects.get(
+            license=license,
+            event_type=LicenseEvent.Type.ADJUSTED,
+            metadata__action="owner_cancelled",
+        )
+        self.assertEqual(event.actor, self.owner)
+        self.assertEqual(event.metadata["cancelled_used_capacity"], 3)
+        summary = OrganizationCoverageService.summary(organization=self.organization)
+        self.assertEqual(summary["licensed_product_count"], 1)
+        self.assertEqual(summary["licensed_product_quantity"], 3)
+        self.assertEqual(summary["usable_license_capacity"], 0)
+        self.assertEqual(summary["overflow_quantity"], 3)
+        self.assertEqual(UserNotification.objects.count(), 3)
+
+        listed = api_client.get("/api/v1/licensing/organization/licenses/")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual(listed.data["licenses"], [])
+        self.assertEqual(listed.data["summary"]["overflow_quantity"], 3)
+
+    def test_overflow_reminder_is_deduplicated_once_per_day(self):
+        license = self.provision()
+        allocation = LicenseLifecycleService.allocate(
+            license=license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=3,
+        )
+        LicenseOrderItemProvisioning.objects.create(
+            organization=self.organization,
+            order_item=self.radio_order_item,
+            operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+            allocation_ids=[allocation.pk],
+        )
+        License.objects.filter(pk=license.pk).update(status=License.Status.CANCELLED)
+        today = timezone.localdate()
+
+        _, first = OrganizationCoverageService.reconcile(
+            organization=self.organization,
+            on_date=today,
+        )
+        _, repeated = OrganizationCoverageService.reconcile(
+            organization=self.organization,
+            on_date=today,
+        )
+        _, next_day = OrganizationCoverageService.reconcile(
+            organization=self.organization,
+            on_date=today + timedelta(days=1),
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(repeated)
+        self.assertTrue(next_day)
+        self.assertEqual(UserNotification.objects.count(), 6)
+
+    def test_coverage_does_not_mix_incompatible_license_capacity(self):
+        first_license = self.provision()
+        LicenseLifecycleService.allocate(
+            license=first_license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=3,
+        )
+        LicenseOrderItemProvisioning.objects.create(
+            organization=self.organization,
+            order_item=self.radio_order_item,
+            operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+        )
+        other_radio = Product.objects.create(
+            category=self.radio.category,
+            name="Other Licensed Radio",
+            sku="OTHER-LICENSED-RADIO",
+            price="200.00",
+            licensing_role=Product.LicensingRole.LICENSED_PRODUCT,
+            required_license_product=self.other_license_product,
+            status=Product.Status.PUBLISHED,
+        )
+        other_order_item = OrderItem.objects.create(
+            order=self.order,
+            product=other_radio,
+            product_name=other_radio.name,
+            sku=other_radio.sku,
+            unit_price="200.00",
+            quantity=2,
+            line_total="400.00",
+        )
+        other_license = LicenseLifecycleService.provision(
+            organization=self.organization,
+            license_product=self.other_license_product,
+        )
+        LicenseLifecycleService.allocate(
+            license=other_license,
+            product=other_radio,
+            order_item=other_order_item,
+            quantity=2,
+        )
+        LicenseOrderItemProvisioning.objects.create(
+            organization=self.organization,
+            order_item=other_order_item,
+            operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+        )
+        License.objects.filter(pk=other_license.pk).update(
+            status=License.Status.CANCELLED
+        )
+
+        summary = OrganizationCoverageService.summary(organization=self.organization)
+
+        self.assertEqual(summary["licensed_product_count"], 2)
+        self.assertEqual(summary["licensed_product_quantity"], 5)
+        self.assertEqual(summary["usable_license_capacity"], 3)
+        self.assertEqual(summary["overflow_quantity"], 2)
 
     def test_client_organization_summary_aggregates_licenses_and_team(self):
         today = timezone.localdate()
@@ -1332,7 +1508,9 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(detail.data["organization"]["id"], self.organization.pk)
         self.assertEqual(detail.data["organization"]["license_manager_count"], 1)
         self.assertEqual(detail.data["summary"]["licensed_product_count"], 1)
-        self.assertEqual(detail.data["summary"]["active_quantity"], 2)
+        self.assertEqual(detail.data["summary"]["active_quantity"], 3)
+        self.assertEqual(detail.data["summary"]["usable_license_capacity"], 3)
+        self.assertEqual(detail.data["summary"]["overflow_quantity"], 0)
         self.assertEqual(len(detail.data["licenses"]), 1)
         self.assertEqual(
             detail.data["licenses"][0]["license_number"],

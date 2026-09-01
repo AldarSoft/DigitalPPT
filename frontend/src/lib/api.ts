@@ -182,6 +182,11 @@ export const api = {
     request<ClientLicenseListResponse>(`/licensing/organization/licenses/${organizationQuery(organizationId)}`),
   organizationLicense: (licenseNumber: string, organizationId?: number | null) =>
     request<ClientLicenseDetail>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/${organizationQuery(organizationId)}`),
+  cancelOrganizationLicense: (licenseNumber: string, organizationId: number | null, data: { password: string; reason: string }) =>
+    request<LicenseSummary>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/cancel/${organizationQuery(organizationId)}`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   licenseRenewalSummary: (licenseNumber: string, organizationId?: number | null) =>
     request<LicenseRenewalSummary>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/renew/${organizationQuery(organizationId)}`),
   organizationTeam: (organizationId?: number | null) =>

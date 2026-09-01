@@ -16,6 +16,8 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"Processed {result['processed']} license(s); "
-                f"created {result['notified']} notification stage(s)."
+                f"created {result['notified']} expiry notification stage(s); "
+                f"checked {result['coverage_processed']} organization(s) and created "
+                f"{result['coverage_notified']} license-capacity reminder(s)."
             )
         )

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Building2, CreditCard, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Package, Settings, UserRound, Users, X, type LucideIcon } from 'lucide-react'
+import { AlertTriangle, Building2, CreditCard, FileText, KeyRound, LayoutDashboard, LogOut, Menu, Package, Settings, UserRound, Users, X, type LucideIcon } from 'lucide-react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { OverflowTooltipText } from '../../../components/OverflowTooltipText'
 import { Pagination } from '../../../components/Pagination'
@@ -17,6 +17,7 @@ import type { AccountTab } from '../types'
 import { OrganizationLicensesPanel } from '../../licensing/pages/OrganizationLicensesPanel'
 import { OrganizationTeamPanel } from '../../licensing/pages/OrganizationTeamPanel'
 import { OrganizationSettingsPanel } from '../../licensing/pages/OrganizationSettingsPanel'
+import { licensingKeys } from '../../licensing/queryKeys'
 
 const ORDER_PAGE_SIZE = 8
 const QUOTE_PAGE_SIZE = 10
@@ -115,6 +116,13 @@ export function AccountPage() {
     queryFn: api.storefrontPaymentStatus,
     enabled: Boolean(auth.user && !isStaff),
   });
+  const organizationSummaryQuery = useQuery({
+    queryKey: licensingKeys.summary(organizationId),
+    queryFn: () => api.organizationSummary(organizationId),
+    enabled: Boolean(auth.user && !isStaff && organizationId),
+    staleTime: 0,
+    refetchOnMount: 'always',
+  });
   if (!auth.ready)
     return <main className={tw("route-loading")}>Loading account...</main>;
   if (!auth.user)
@@ -197,6 +205,10 @@ export function AccountPage() {
             </nav>
           </aside>
           <div className={tw("account-content")}>
+            {!isStaff && organizationSummaryQuery.data?.summary.overflow_quantity ? <section className="mb-5 flex items-start gap-3 rounded-control border border-danger bg-danger-soft p-4 text-sm text-danger" aria-label="License capacity warning">
+              <AlertTriangle className="mt-0.5 shrink-0" size={20} />
+              <div><strong className="block text-base">License capacity required</strong><p className="mt-1">{organizationSummaryQuery.data.summary.overflow_quantity} licensed radio product(s) are beyond usable license capacity. Add or renew a compatible license to restore full coverage.</p></div>
+            </section> : null}
             {!isStaff && pendingInvoiceQuote ? <section className="mb-5 flex flex-wrap items-center justify-between gap-4 rounded-control border border-warning bg-warning-soft p-4 text-sm text-warning" aria-label="Invoice awaiting payment">
               <div className="flex min-w-0 items-start gap-3"><CreditCard className="mt-0.5 shrink-0" size={20} /><div><strong className="block text-base text-ink">Invoice ready for payment</strong><p className="mt-1">Quote {pendingInvoiceQuote.quote_number} created order {pendingInvoiceQuote.order_number}. Review the invoice and complete payment to continue.</p></div></div>
               <button className={tw('action-button action-button-primary action-button-compact')} type="button" onClick={() => selectQuote({ kind: 'quote', value: pendingInvoiceQuote })}>Review invoice</button>
@@ -207,6 +219,7 @@ export function AccountPage() {
                 quotes={quotes}
                 orderCount={orderCount}
                 quoteCount={quoteCount}
+                licenseSummary={organizationSummaryQuery.data?.summary}
                 onTab={selectTab}
                 onQuoteSelect={(quote) => selectQuote({ kind: 'quote', value: quote })}
               />
