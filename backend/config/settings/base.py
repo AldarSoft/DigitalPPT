@@ -82,8 +82,8 @@ if DB_ENGINE == "postgresql":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": env("POSTGRES_DB", default="rack_and_bracket"),
-            "USER": env("POSTGRES_USER", default="rack_and_bracket"),
+            "NAME": env("POSTGRES_DB", default="digital_ptt"),
+            "USER": env("POSTGRES_USER", default="digital_ptt"),
             "PASSWORD": env("POSTGRES_PASSWORD", default=""),
             "HOST": env("POSTGRES_HOST", default="127.0.0.1"),
             "PORT": env("POSTGRES_PORT", default="5432"),
