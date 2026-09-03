@@ -3,6 +3,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from common.models import TimeStampedModel
@@ -29,6 +30,18 @@ class PaymentProvider(TimeStampedModel):
 
     def __str__(self):
         return self.display_name
+
+    def save(self, *args, **kwargs):
+        if (
+            self.code != self.Code.BANK_TRANSFER
+            and self.test_mode
+            and self.is_customer_available
+            and not (settings.DEBUG and settings.PAYMENTS_DEVELOPMENT_SIMULATOR)
+        ):
+            raise ValidationError(
+                "Test payment providers cannot be offered to production customers."
+            )
+        return super().save(*args, **kwargs)
 
 
 class PaymentAttempt(TimeStampedModel):
@@ -157,3 +170,66 @@ class PaymentProviderEvent(TimeStampedModel):
 
     def __str__(self):
         return f"{self.provider.code}: {self.event_id}"
+
+
+class ImmutablePaymentStatusEventQuerySet(models.QuerySet):
+    def update(self, **kwargs):
+        raise ValidationError("Payment status events are immutable.")
+
+    def delete(self):
+        raise ValidationError("Payment status events are immutable.")
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        raise ValidationError("Payment status events are immutable.")
+
+
+class PaymentStatusEvent(models.Model):
+    class EventType(models.TextChoices):
+        ATTEMPT_CREATED = "attempt_created", "Attempt created"
+        MANUAL_CONFIRMATION = "manual_confirmation", "Manual confirmation"
+        MANUAL_REJECTION = "manual_rejection", "Manual rejection"
+        REFUND = "refund", "Refund"
+        STATUS_CHANGE = "status_change", "Status change"
+
+    payment_attempt = models.ForeignKey(
+        PaymentAttempt,
+        on_delete=models.PROTECT,
+        related_name="status_events",
+    )
+    event_type = models.CharField(max_length=32, choices=EventType.choices)
+    previous_status = models.CharField(max_length=20, choices=PaymentAttempt.Status.choices)
+    new_status = models.CharField(max_length=20, choices=PaymentAttempt.Status.choices)
+    invoice_reference = models.CharField(max_length=40, blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    currency = models.CharField(max_length=10)
+    external_reference = models.CharField(max_length=255, blank=True)
+    reason = models.TextField(blank=True)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="payment_status_events",
+    )
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    objects = ImmutablePaymentStatusEventQuerySet.as_manager()
+
+    class Meta:
+        ordering = ("created_at", "id")
+        default_permissions = ("add", "view")
+        indexes = [
+            models.Index(fields=["payment_attempt", "created_at"]),
+            models.Index(fields=["event_type", "created_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("Payment status events are immutable.")
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Payment status events are immutable.")
+
+    def __str__(self):
+        return f"{self.payment_attempt.reference}: {self.event_type}"

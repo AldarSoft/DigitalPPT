@@ -13,30 +13,33 @@ export function AdminLayout() {
     const navigate = useNavigate();
     const [open, setOpen] = useState(false);
     const adminName = `${auth.user?.first_name ?? ''} ${auth.user?.last_name ?? ''}`.trim() || 'Administrator';
+    const permissions = auth.user?.staff_permissions ?? [];
+    const isSuperAdministrator = (auth.user?.staff_roles ?? []).includes('Super Administrator');
+    const can = (...required: string[]) => required.some((permission) => permissions.includes(permission));
     const quoteCountQuery = useQuery({
         queryKey: ['admin-quotes', 'sidebar-count'],
         queryFn: () => api.quotes('status=new&page=1&page_size=1'),
-        enabled: Boolean(auth.user?.is_staff),
+        enabled: can('manage_quotes', 'confirm_bank_payments'),
     });
     const orderCountQuery = useQuery({
         queryKey: ['admin-orders', 'sidebar-count'],
         queryFn: () => api.orders('status=pending&page=1&page_size=1'),
-        enabled: Boolean(auth.user?.is_staff),
+        enabled: can('manage_orders'),
     });
     const badgeCounts = {
         quotes: resultCount(quoteCountQuery.data),
         orders: resultCount(orderCountQuery.data),
     };
     const links = [
-        ['/admin', LayoutDashboard, 'Overview', true, null],
-        ['/admin/products', Box, 'Products', false, null],
-        ['/admin/quotes', FileText, 'Quotes', false, 'quotes'],
-        ['/admin/orders', ShoppingCart, 'Orders', false, 'orders'],
-        ['/admin/payments', CreditCard, 'Payments', false, null],
-        ['/admin/customers', Users, 'Customers', false, null],
-        ['/admin/licenses', KeyRound, 'License Management', false, null],
-        ['/admin/inventory', Warehouse, 'Inventory', false, null],
-    ] as const;
+        ['/admin', LayoutDashboard, 'Overview', true, null, isSuperAdministrator],
+        ['/admin/products', Box, 'Products', false, null, can('manage_inventory')],
+        ['/admin/quotes', FileText, 'Quotes', false, 'quotes', can('manage_quotes', 'confirm_bank_payments')],
+        ['/admin/orders', ShoppingCart, 'Orders', false, 'orders', can('manage_orders')],
+        ['/admin/payments', CreditCard, 'Payments', false, null, can('manage_payment_settings', 'confirm_bank_payments')],
+        ['/admin/customers', Users, 'Customers', false, null, can('manage_users')],
+        ['/admin/licenses', KeyRound, 'License Management', false, null, can('manage_licenses')],
+        ['/admin/inventory', Warehouse, 'Inventory', false, null, can('manage_inventory')],
+    ].filter((item) => item[5]) as Array<[string, typeof LayoutDashboard, string, boolean, 'quotes' | 'orders' | null, boolean]>;
     return (<div className={tw("admin-shell")}>
       <aside className={tw(`admin-sidebar ${open ? 'open' : ''}`)}>
         <NavLink className={tw("admin-brand")} to="/" aria-label="Digital PTT home"><img src="/digital-ptt-logo.svg" alt="Digital PTT" /></NavLink>
@@ -48,8 +51,8 @@ export function AdminLayout() {
             return <NavLink end={end} to={to} key={to} onClick={() => setOpen(false)}><Icon size={20}/>{label}{count > 0 ? <strong className="ml-auto inline-flex min-w-5 items-center justify-center rounded-full bg-danger px-1.5 text-[10px] font-extrabold leading-5 text-white" aria-label={`${count} ${label.toLowerCase()} waiting`}>{count > 99 ? '99+' : count}</strong> : null}</NavLink>;
           })}
           <span>INSIGHTS</span>
-          <NavLink to="/admin/analytics" onClick={() => setOpen(false)}><BarChart3 size={20}/>Analytics</NavLink>
-          <NavLink to="/admin/site-settings" onClick={() => setOpen(false)}><PanelsTopLeft size={20}/>Site settings</NavLink>
+          {isSuperAdministrator ? <NavLink to="/admin/analytics" onClick={() => setOpen(false)}><BarChart3 size={20}/>Analytics</NavLink> : null}
+          {can('manage_site_settings') ? <NavLink to="/admin/site-settings" onClick={() => setOpen(false)}><PanelsTopLeft size={20}/>Site settings</NavLink> : null}
           <NavLink to="/account"><Settings size={20}/>Account settings</NavLink>
         </nav>
         <div className={tw("admin-user")}>
@@ -61,10 +64,10 @@ export function AdminLayout() {
       <div className={tw("admin-main")}>
         <header className={tw("admin-topbar")}>
           <button className={tw("admin-menu")} type="button" aria-label="Open menu" onClick={() => setOpen(true)}><Menu size={21}/></button>
-          <div><Search size={19}/><input placeholder="Search quotes, orders, products" onKeyDown={(event) => {
+          {can('manage_inventory') ? <div><Search size={19}/><input placeholder="Search products" onKeyDown={(event) => {
             if (event.key === 'Enter')
                 navigate(`/admin/products?search=${encodeURIComponent(event.currentTarget.value)}`);
-        }}/></div>
+        }}/></div> : <span />}
           {auth.user ? <NotificationMenu userId={auth.user.id} variant="admin" /> : null}
         </header>
         <Outlet />

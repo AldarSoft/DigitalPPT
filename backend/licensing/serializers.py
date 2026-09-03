@@ -35,6 +35,7 @@ class CartCapacityRequirementSerializer(serializers.Serializer):
 
 class LicenseSummarySerializer(serializers.ModelSerializer):
     remaining_days = serializers.IntegerField(read_only=True, allow_null=True)
+    has_pending_renewal = serializers.SerializerMethodField()
 
     class Meta:
         model = License
@@ -46,6 +47,7 @@ class LicenseSummarySerializer(serializers.ModelSerializer):
             "capacity",
             "used_capacity",
             "remaining_days",
+            "has_pending_renewal",
             "starts_on",
             "expires_on",
             "renews_on",
@@ -53,6 +55,11 @@ class LicenseSummarySerializer(serializers.ModelSerializer):
             "license_product",
         )
         read_only_fields = fields
+
+    def get_has_pending_renewal(self, obj) -> bool:
+        from licensing.services import LicenseLifecycleService
+
+        return LicenseLifecycleService.has_pending_renewal(obj)
 
 
 class LicenseAdjustmentSerializer(serializers.Serializer):
@@ -75,6 +82,14 @@ class LicenseCancellationSerializer(serializers.Serializer):
         write_only=True,
     )
     reason = serializers.CharField(max_length=500, trim_whitespace=True)
+    confirmed_cancellation = serializers.BooleanField()
+
+    def validate_confirmed_cancellation(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "Confirm that you understand the cancellation cannot be undone."
+            )
+        return value
 
 
 class OrganizationIdentitySerializer(serializers.Serializer):
@@ -142,6 +157,7 @@ class ClientLicenseListItemSerializer(serializers.Serializer):
     expires_on = serializers.DateField(allow_null=True)
     renews_on = serializers.DateField(allow_null=True)
     remaining_days = serializers.IntegerField(allow_null=True)
+    has_pending_renewal = serializers.BooleanField()
 
 
 class ClientRenewalRequestSerializer(serializers.Serializer):
@@ -196,6 +212,7 @@ class ClientLicenseDetailSerializer(serializers.Serializer):
     expires_on = serializers.DateField(allow_null=True)
     renews_on = serializers.DateField(allow_null=True)
     remaining_days = serializers.IntegerField(allow_null=True)
+    has_pending_renewal = serializers.BooleanField()
     subscription = ClientLicenseSubscriptionSerializer()
     allocations = ClientLicenseAllocationSerializer(many=True)
 

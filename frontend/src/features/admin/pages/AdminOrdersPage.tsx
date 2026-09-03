@@ -44,10 +44,29 @@ function orderUpdateError(error: Error) {
     return typeof data.status === 'string' ? data.status : error.message
 }
 
+function shipUpdateError(error: Error) {
+    if (!(error instanceof ApiError) || typeof error.data !== 'object' || !error.data) return 'Could not create the shipment'
+    const data = error.data as Record<string, unknown>
+    if (data.items && typeof data.items === 'object') {
+        const message = Object.values(data.items as Record<string, string>)[0]
+        return typeof message === 'string' && message ? message : 'One of the selected items cannot be shipped'
+    }
+    if (data.inventory && typeof data.inventory === 'object') {
+        const message = Object.values(data.inventory as Record<string, string>)[0]
+        return typeof message === 'string' && message ? `Awaiting stock. ${message}` : 'Not enough stock on hand'
+    }
+    return typeof data.status === 'string' ? data.status : error.message
+}
+
 function availableTransitions(order: Order) {
     const shortage = order.items.some((item) => item.backordered_quantity > 0)
+    const requiresShipment = order.is_paid && order.items.some((item) => (
+        item.fulfillment_status !== 'not_required'
+        && (item.reserved_quantity > 0 || item.backordered_quantity > 0)
+    ))
     return ORDER_TRANSITIONS[order.status].filter((status) => (
         (!shortage || !['processing', 'completed'].includes(status))
+        && (!requiresShipment || !['processing', 'completed'].includes(status))
         && (!order.is_paid || status !== 'cancelled')
         && orderStatusKey(status) !== orderStatusKey(order.status)
     ))
@@ -62,6 +81,12 @@ export function AdminOrdersPage() {
     const [selected, setSelected] = useState<Order | null>(null);
     const [confirmingCancel, setConfirmingCancel] = useState(false);
     const [creating, setCreating] = useState(false);
+    const [shipFormOpen, setShipFormOpen] = useState(false);
+    const [shipQuantities, setShipQuantities] = useState<Record<number, number>>({});
+    const [shipCarrier, setShipCarrier] = useState('');
+    const [shipTracking, setShipTracking] = useState('');
+    const [shipNotes, setShipNotes] = useState('');
+    const [shipIdempotencyKey, setShipIdempotencyKey] = useState('');
     const ordersQuery = useQuery({
       queryKey: ['admin-orders', search, status, page],
       queryFn: () => {
@@ -101,6 +126,33 @@ export function AdminOrdersPage() {
         },
         onError: (error) => toast.error(orderUpdateError(error)),
     });
+    const ship = useMutation({
+        mutationFn: () => {
+            if (!selected) throw new Error('No order selected');
+            const items = selected.items
+                .filter((item) => item.fulfillment_status !== 'not_required' && shipQuantities[item.id])
+                .map((item) => ({ order_item_id: item.id, quantity: shipQuantities[item.id] }));
+            return api.shipOrder(selected.order_number, {
+                idempotency_key: shipIdempotencyKey,
+                items,
+                carrier: shipCarrier.trim(),
+                tracking_number: shipTracking.trim(),
+                notes: shipNotes.trim() || undefined,
+            });
+        },
+        onSuccess: (order) => {
+            queryClient.invalidateQueries({ queryKey: ['admin-orders'] });
+            setSelected(order);
+            setShipFormOpen(false);
+            setShipQuantities({});
+            setShipCarrier('');
+            setShipTracking('');
+            setShipNotes('');
+            setShipIdempotencyKey('');
+            toast.success('Shipment created');
+        },
+        onError: (error) => toast.error(shipUpdateError(error)),
+    });
     if (ordersQuery.isError)
         return <AdminErrorState resource="orders" />;
     return (<main className={tw("admin-page")}>
@@ -124,13 +176,44 @@ export function AdminOrdersPage() {
         onPageChange={setPage}
       />
       {creating ? <AdminManualOrderDialog onClose={() => setCreating(false)} onCreated={(order) => { setCreating(false); queryClient.invalidateQueries({ queryKey: ['admin-orders'] }); setSelected(order) }} /> : null}
-      {selected ? (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={() => { setConfirmingCancel(false); setSelected(null); }}>
+      {selected ? (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={() => { setConfirmingCancel(false); setShipFormOpen(false); setSelected(null); }}>
           <aside className={tw("order-editor")} role="dialog" aria-modal="true" aria-labelledby="admin-order-details-title" onMouseDown={(event) => event.stopPropagation()}>
-            <div className={tw("panel-heading")}><div><p className={tw("eyebrow")}>ORDER DETAILS</p><h2 id="admin-order-details-title">{selected.order_number}</h2></div><button type="button" aria-label="Close order details" onClick={() => { setConfirmingCancel(false); setSelected(null); }}><X /></button></div>
+            <div className={tw("panel-heading")}><div><p className={tw("eyebrow")}>ORDER DETAILS</p><h2 id="admin-order-details-title">{selected.order_number}</h2></div><button type="button" aria-label="Close order details" onClick={() => { setConfirmingCancel(false); setShipFormOpen(false); setSelected(null); }}><X /></button></div>
             <p>{selected.customer_first_name} {selected.customer_last_name}<br />{selected.customer_email}<br />{selected.shipping_address}, {selected.shipping_city}</p>
             {selected.quote_number ? <p className="mt-3 text-sm text-text-soft">Linked quote: <Link className={tw('view-order')} to={`/admin/quotes?quote=${encodeURIComponent(selected.quote_number)}`}>{selected.quote_number}</Link></p> : null}
             <div className={tw("order-editor-items")}>{selected.items.map((item) => <div key={item.id}><div className={tw('record-item-main')}><ProductThumbnail imageUrl={item.image_url} name={item.product_name} /><span>{item.product_name}<small>{item.sku || 'Product'} · Qty {item.quantity}</small>{item.fulfillment_status !== 'not_required' ? <small className={item.backordered_quantity ? 'text-warning' : 'text-success'}>{item.backordered_quantity ? `${item.reserved_quantity} reserved · ${item.backordered_quantity} awaiting stock` : `${item.reserved_quantity} ready to ship`}</small> : null}</span></div><strong>${Number(item.line_total).toFixed(2)}</strong></div>)}</div>
             <div className={tw("order-editor-total")}><span>Total</span><strong>${Number(selected.total).toFixed(2)}</strong></div>
+            <section className="mt-4">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-bold">Shipments</h3>
+                {selected.is_paid && ['backordered', 'scheduled', 'processing'].includes(selected.status) && selected.items.some((item) => item.reserved_quantity > 0) ? <button className={tw("admin-link-button")} type="button" onClick={() => { const next: Record<number, number> = {}; selected.items.forEach((item) => { if (item.reserved_quantity > 0) next[item.id] = 1; }); setShipQuantities(next); setShipIdempotencyKey(window.crypto.randomUUID()); setShipFormOpen(true); }}>New shipment</button> : null}
+              </div>
+              {selected.shipments && selected.shipments.length ? <div className="mt-2 grid gap-2">{selected.shipments.map((shipment) => (
+                <div key={shipment.id} className="rounded-control border border-border p-3 text-xs">
+                  <div className="flex items-center justify-between gap-2"><strong>{shipment.shipment_number}</strong><span className="text-text-soft">{new Date(shipment.shipped_at).toLocaleDateString()}</span></div>
+                  <p className="mt-1 text-text-soft">{shipment.carrier || 'Courier'}{shipment.tracking_number ? <span> · Tracking: {shipment.tracking_number}</span> : null}</p>
+                  <ul className="mt-1">{shipment.items.map((line) => <li key={line.id}>{line.product_name} × {line.quantity}</li>)}</ul>
+                </div>
+              ))}</div> : <p className="mt-1 text-xs text-text-soft">No shipments yet.</p>}
+              {shipFormOpen ? <div className="mt-3 rounded-control border border-border bg-surface-muted p-3">
+                <p className="mb-2 text-xs font-bold">Ship reserved units</p>
+                <div className="grid gap-2">{selected.items.filter((item) => item.reserved_quantity > 0).map((item) => (
+                  <label key={item.id} className="flex items-center justify-between gap-2 text-xs">
+                    <span>{item.product_name} <small className="text-text-soft">({item.reserved_quantity} ready)</small></span>
+                    <input aria-label={`Ship quantity for ${item.product_name}`} type="number" min={0} max={item.reserved_quantity} value={shipQuantities[item.id] ?? 0} onChange={(event) => setShipQuantities((current) => ({ ...current, [item.id]: Math.max(0, Math.min(item.reserved_quantity, Number(event.target.value) || 0)) }))} className="w-20 rounded-control border border-border-input p-1" />
+                  </label>
+                ))}</div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  <label className="grid gap-1 text-xs font-bold">Carrier<input className="rounded-control border border-border-input p-1 font-normal" value={shipCarrier} onChange={(event) => setShipCarrier(event.target.value)} /></label>
+                  <label className="grid gap-1 text-xs font-bold">Tracking number<input className="rounded-control border border-border-input p-1 font-normal" value={shipTracking} onChange={(event) => setShipTracking(event.target.value)} /></label>
+                </div>
+                <label className="mt-2 grid gap-1 text-xs font-bold">Note<input className="rounded-control border border-border-input p-1 font-normal" value={shipNotes} onChange={(event) => setShipNotes(event.target.value)} /></label>
+                <div className="mt-3 flex justify-end gap-2">
+                  <button type="button" onClick={() => { setShipFormOpen(false); setShipIdempotencyKey(''); }}>Cancel</button>
+                  <button className={tw("admin-primary")} type="button" disabled={ship.isPending || !selected.items.some((item) => (shipQuantities[item.id] ?? 0) > 0)} onClick={() => ship.mutate()}>{ship.isPending ? 'Shipping...' : 'Create shipment'}</button>
+                </div>
+              </div> : null}
+            </section>
             {selected.status === 'backordered' ? <div className="mt-4 rounded-control border border-warning bg-warning-soft p-3 text-sm text-warning"><strong>Awaiting inventory</strong><p className="mt-1 text-xs">Payment is confirmed. Available units are reserved, and the remaining units will be allocated automatically when inventory increases.</p></div> : null}
             {selected.status === 'draft' ? <div className="mt-4 rounded-control border border-border bg-surface-muted p-3 text-sm text-muted"><strong className="block text-ink">Admin Draft</strong><p className="mt-1">This order is hidden from the client and has no payment or provisioning activity.</p></div> : <StatusTimeline noun="Order" currentStatus={orderStatusKey(selected.status)} initialStatus="pending" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={ORDER_STEPS} />}
             {availableTransitions(selected).length ? <label>Order status<AdminSelect value={selected.status} onChange={(event) => { const value = event.target.value as Order['status']; if (value === 'cancelled') setConfirmingCancel(true); else update.mutate({ orderNumber: selected.order_number, value }); }}><option value={selected.status}>{orderStatusLabel(selected.status)}</option>{availableTransitions(selected).map((value) => <option value={value} key={value}>{orderStatusLabel(value)}</option>)}</AdminSelect></label> : <p className="mt-4 text-sm text-text-soft">This order is {orderStatusLabel(selected.status)} and cannot be changed.</p>}

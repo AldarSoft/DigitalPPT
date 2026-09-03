@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
-import { AlertTriangle, ArrowLeft, Building2, Check, Clock3, CreditCard, ExternalLink, KeyRound, Landmark, LockKeyhole, QrCode, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Building2, Check, Clock3, CreditCard, ExternalLink, FileText, KeyRound, Landmark, LockKeyhole, QrCode, RefreshCw, ShieldCheck, WalletCards, X } from 'lucide-react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useAuth } from '../../../contexts/AuthContext'
@@ -124,7 +124,9 @@ export function PaymentPage() {
     : requestedOrganizationId && availableOrganizationIds.has(requestedOrganizationId)
     ? requestedOrganizationId
     : workspacesQuery.data?.default_organization_id ?? null
-  const enabledProviders = statusQuery.data?.providers ?? []
+  const enabledProviders = (statusQuery.data?.providers ?? []).filter(
+    (item) => !isRenewalPayment || item.code !== 'bank_transfer',
+  )
   const activeProvider = enabledProviders.some((item) => item.code === provider) ? provider : enabledProviders[0]?.code ?? provider
   const selectedProvider = providerContent[activeProvider]
   const SelectedProviderIcon = selectedProvider.icon
@@ -229,6 +231,7 @@ export function PaymentPage() {
   if (statusQuery.isLoading || returnedSessionQuery.isLoading || orderQuery.isLoading || renewalSummaryQuery.isLoading) return <main className={tw('route-loading')}>Preparing secure payment...</main>
   if (statusQuery.isError || returnedSessionQuery.isError || orderQuery.isError || renewalSummaryQuery.isError) return <main className={tw('route-message')}><AlertTriangle size={34} /><h1>Payment is unavailable</h1><p>Confirm the backend is running and your account session is active.</p></main>
   if (!statusQuery.data?.storefront_enabled) return <main className={tw('route-message')}><CreditCard size={34} /><h1>Online payment is coming soon</h1><p>Your quote and order history remain available in your account.</p><Link className={tw('primary-action')} to="/account">Return to account</Link></main>
+  if (isRenewalPayment && enabledProviders.length === 0) return <main className={tw('route-message')}><FileText size={34} /><h1>Online renewal payment is unavailable</h1><p>Request a renewal quote from your license details. Bank transfer instructions will be included when the invoice is issued.</p><Link className={tw('primary-action')} to={`/account?tab=licenses&license=${encodeURIComponent(requestedRenewalLicense)}${requestedOrganizationId ? `&org=${requestedOrganizationId}` : ''}`}>Return to license</Link></main>
   if (!order && !renewal && cart.isCatalogRefreshing) return <main className={tw('route-loading')}>Checking saved cart products...</main>
   if (!order && !renewal && cart.catalogRefreshError) return <main className={tw('route-message')}><AlertTriangle size={34}/><h1>Cart needs to be refreshed</h1><p>We could not verify the current products, prices, or availability in your saved cart.</p><button className={tw('action-button action-button-secondary')} type="button" onClick={cart.retryCatalogRefresh}>Try again</button><Link className={tw('text-link')} to="/cart">Back to cart</Link></main>
 

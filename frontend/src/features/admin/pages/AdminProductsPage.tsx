@@ -67,7 +67,7 @@ export function AdminProductsPage() {
               <td><div className={tw("product-cell")}><img src={mediaUrl(primaryProductImage(product)?.image_url)} alt=""/><span><strong>{product.name}</strong><small>{product.sku}</small></span></div></td>
               <td>{product.category.name}</td><td>${Number(product.current_price).toFixed(2)}</td><td>{product.inventory_quantity}</td>
               <td><span className={tw(`status status-${product.status === 'published' ? 'completed' : 'pending'}`)}>{product.status}</span></td>
-              <td>{new Date(product.updated_at).toLocaleDateString()}</td>
+              <td>{product.updated_at ? new Date(product.updated_at).toLocaleDateString() : '—'}</td>
               <td><div className={tw("table-actions")}><button type="button" aria-label={`Edit ${product.name}`} onClick={() => setEditing(product)}><ChevronRight size={18}/></button><button type="button" aria-label={`Delete ${product.name}`} onClick={() => { if (confirm(`Delete ${product.name}?`))
             remove.mutate(product); }}><Trash2 size={17}/></button></div></td>
             </tr>))}</tbody>

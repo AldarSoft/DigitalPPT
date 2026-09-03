@@ -41,10 +41,11 @@ export function AdminLicensesPage() {
       {accessDenied ? <AdminState icon={<ShieldCheck className="text-warning" size={22} />} title="License Management access is required" text="Only Digital PTT administrators can review organization licenses." /> : null}
       {organizationsQuery.isError && !accessDenied ? <AdminState icon={<AlertTriangle className="text-danger" size={22} />} title="Organizations could not be loaded" text={errorMessage(organizationsQuery.error)} action={<button className="min-h-9 rounded-control border border-border-input bg-white px-3 text-xs font-bold text-brand" type="button" onClick={() => void organizationsQuery.refetch()}>Try again</button>} /> : null}
       {summary ? (
-        <section className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="License summary">
+        <section className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5" aria-label="License summary">
           <Summary icon={KeyRound} label="Organizations with licenses" value={summary.organizations_with_licenses} />
           <Summary icon={CheckCircle2} label="Active organization licenses" value={summary.active_licenses} tone="success" />
           <Summary icon={Clock3} label="Licenses expiring in 60 days" value={summary.licenses_expiring_in_60_days} tone="warning" />
+          <Summary icon={AlertTriangle} label="Needs capacity" value={summary.organizations_needing_capacity} tone="danger" />
           <Summary icon={CreditCard} label="Payment review" value={summary.payments_in_review} tone="danger" />
         </section>
       ) : null}

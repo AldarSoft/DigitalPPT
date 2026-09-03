@@ -63,14 +63,15 @@ export interface Product {
   license_capacity: number | null
   license_term_days: number | null
   is_stock_tracked: boolean
-  status: 'draft' | 'published' | 'archived'
+  // Inventory-administrator fields; omitted from public catalog responses.
+  status?: 'draft' | 'published' | 'archived'
   is_featured: boolean
-  is_active: boolean
+  is_active?: boolean
   category: Category
   images: ProductImage[]
   specifications: ProductSpecification[]
-  created_at: string
-  updated_at: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface UserProfile {
@@ -102,6 +103,8 @@ export interface User {
   is_customer: boolean
   is_staff: boolean
   is_active: boolean
+  staff_roles: string[]
+  staff_permissions: string[]
   date_joined: string
   profile: UserProfile
   account_setup_email_queued?: boolean
@@ -201,6 +204,30 @@ export interface SiteSettings {
     homepage_contact_cta_url: string
   }
 
+export interface ShipmentItem {
+  id: number
+  order_item_id: number
+  quantity: number
+  product_name: string
+  sku: string
+}
+
+export interface Shipment {
+  id: number
+  shipment_number: string
+  carrier: string
+  tracking_number: string
+  notes: string
+  shipped_at: string
+  shipping_address: string
+  shipping_city: string
+  shipping_state: string
+  shipping_postal_code: string
+  shipping_country: string
+  items: ShipmentItem[]
+  created_at: string
+}
+
 export interface OrderItem {
   id: number
   product: number | null
@@ -254,6 +281,7 @@ export interface Order {
   stock_deducted: boolean
   notes: string
   items: OrderItem[]
+  shipments: Shipment[]
   created_at: string
   updated_at: string
 }
@@ -284,9 +312,10 @@ export interface QuoteMessage {
 export interface QuoteRequest {
   id: number
   quote_number: string
-  status: 'new' | 'reviewing' | 'quoted' | 'approved' | 'cancelled'
+  status: 'new' | 'reviewing' | 'quote_approved' | 'invoice_sent' | 'awaiting_payment' | 'payment_confirmed' | 'payment_rejected' | 'cancelled'
   order_number: string
-  order_status: '' | 'pending' | 'scheduled' | 'processing' | 'completed' | 'cancelled'
+  order_status: '' | Order['status']
+  renewal_license_number: string | null
   requester_company_name: string
   requester_contact_person: string
   requester_email: string
@@ -300,6 +329,7 @@ export interface QuoteRequest {
   invoice_number: string | null
   invoice_pdf_url: string
   invoiced_at: string | null
+  payment_rejection_reason: string
   messages: QuoteMessage[]
   items: QuoteRequestItem[]
   created_at: string
@@ -376,6 +406,21 @@ export interface PaymentAttempt {
   created_by_email: string
   expires_at: string | null
   paid_at: string | null
+  created_at: string
+  status_events: PaymentStatusEvent[]
+}
+
+export interface PaymentStatusEvent {
+  id: number
+  event_type: 'attempt_created' | 'manual_confirmation' | 'manual_rejection' | 'refund' | 'status_change'
+  previous_status: PaymentAttempt['status']
+  new_status: PaymentAttempt['status']
+  invoice_reference: string
+  amount: number | string
+  currency: string
+  external_reference: string
+  reason: string
+  actor_email: string | null
   created_at: string
 }
 

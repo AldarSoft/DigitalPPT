@@ -1,6 +1,7 @@
 from .base import *  # noqa: F403,F401
 
 DEBUG = True
+DJANGO_ADMIN_ENABLED = True
 
 # Keep browser-to-API traffic visible while developing locally.
 MIDDLEWARE += ["common.request_logging.DevelopmentRequestLoggingMiddleware"]  # noqa: F405

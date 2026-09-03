@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, BadgeCheck, ChevronDown, ChevronUp, Clock3, CreditCard, Download, FilePenLine, FileText, MessageSquare, Search, Send, X } from 'lucide-react'
+import { AlertTriangle, BadgeCheck, Ban, ChevronDown, ChevronUp, Clock3, CreditCard, Download, FilePenLine, FileText, MessageSquare, Search, Send, X } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { useAuth } from '../../../contexts/AuthContext'
 import { api, ApiError, unwrap } from '../../../lib/api'
 import { StatusTimeline } from '../../../components/StatusTimeline'
 import { ProductThumbnail } from '../../../components/ProductThumbnail'
@@ -18,13 +19,16 @@ import { exportAdminReport } from '../utils/exportAdminReport'
 const PAGE_SIZE = 10
 
 const QUOTE_STEPS = [
-  { value: 'new', label: 'Pending' },
-  { value: 'reviewing', label: 'Processing' },
-  { value: 'quoted', label: 'Invoice ready' },
-  { value: 'approved', label: 'Completed' },
+  { value: 'new', label: 'Pending review' },
+  { value: 'reviewing', label: 'In review' },
+  { value: 'quote_approved', label: 'Quote approved' },
+  { value: 'invoice_sent', label: 'Invoice sent' },
+  { value: 'awaiting_payment', label: 'Awaiting payment' },
+  { value: 'payment_confirmed', label: 'Payment confirmed' },
 ] as const
 
 export function AdminQuotesPage() {
+  const { user } = useAuth()
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [search, setSearch] = useState('')
@@ -38,8 +42,15 @@ export function AdminQuotesPage() {
   const [requestAdditionalInformation, setRequestAdditionalInformation] = useState(false)
   const [revisingInvoice, setRevisingInvoice] = useState(false)
   const [confirmingBankTransfer, setConfirmingBankTransfer] = useState(false)
+  const [confirmedInvoiceMatch, setConfirmedInvoiceMatch] = useState(false)
   const [bankTransactionReference, setBankTransactionReference] = useState('')
   const [bankTransferNote, setBankTransferNote] = useState('')
+  const [bankTransferPassword, setBankTransferPassword] = useState('')
+  const [rejectingBankTransfer, setRejectingBankTransfer] = useState(false)
+  const [rejectedTransactionReference, setRejectedTransactionReference] = useState('')
+  const [bankRejectionReason, setBankRejectionReason] = useState('')
+  const [bankRejectionPassword, setBankRejectionPassword] = useState('')
+  const [confirmedRejection, setConfirmedRejection] = useState(false)
   const [message, setMessage] = useState('')
   const messagesRef = useRef<HTMLDivElement>(null)
   const messageInputRef = useRef<HTMLTextAreaElement>(null)
@@ -94,8 +105,15 @@ export function AdminQuotesPage() {
     setRequestAdditionalInformation(false)
     setRevisingInvoice(false)
     setConfirmingBankTransfer(false)
+    setConfirmedInvoiceMatch(false)
     setBankTransactionReference('')
     setBankTransferNote('')
+    setBankTransferPassword('')
+    setRejectingBankTransfer(false)
+    setRejectedTransactionReference('')
+    setBankRejectionReason('')
+    setBankRejectionPassword('')
+    setConfirmedRejection(false)
     setMessage('')
     setConfirmingClose(false)
     queryClient.invalidateQueries({ queryKey: ['admin-quotes'] })
@@ -130,18 +148,43 @@ export function AdminQuotesPage() {
     mutationFn: () => api.confirmBankTransfer(selected!.order_number!, {
       bank_transaction_reference: bankTransactionReference,
       internal_note: bankTransferNote,
+      current_password: bankTransferPassword,
+      confirmed_invoice_match: confirmedInvoiceMatch,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-quotes'] })
       queryClient.invalidateQueries({ queryKey: ['admin-orders'] })
       queryClient.invalidateQueries({ queryKey: ['payment-attempts'] })
       setConfirmingBankTransfer(false)
+      setConfirmedInvoiceMatch(false)
       setBankTransactionReference('')
       setBankTransferNote('')
+      setBankTransferPassword('')
       void linkedQuoteQuery.refetch()
       toast.success('Bank transfer confirmed. The order is now moving through fulfillment.')
     },
     onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not confirm the bank transfer'),
+  })
+  const rejectBankTransfer = useMutation({
+    mutationFn: () => api.rejectBankTransfer(selected!.order_number!, {
+      bank_transaction_reference: rejectedTransactionReference,
+      reason: bankRejectionReason,
+      current_password: bankRejectionPassword,
+      confirmed_rejection: confirmedRejection,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-quotes'] })
+      queryClient.invalidateQueries({ queryKey: ['admin-orders'] })
+      queryClient.invalidateQueries({ queryKey: ['payment-attempts'] })
+      setRejectingBankTransfer(false)
+      setRejectedTransactionReference('')
+      setBankRejectionReason('')
+      setBankRejectionPassword('')
+      setConfirmedRejection(false)
+      void linkedQuoteQuery.refetch()
+      toast.success('Bank transfer rejected. The invoice remains unpaid.')
+    },
+    onError: (error) => toast.error(error instanceof ApiError ? error.message : 'Could not reject the bank transfer'),
   })
   const downloadInvoice = useMutation({
     mutationFn: ({ quoteNumber, invoiceNumber }: { quoteNumber: string; invoiceNumber: string }) =>
@@ -158,8 +201,15 @@ export function AdminQuotesPage() {
     setRequestAdditionalInformation(false)
     setRevisingInvoice(false)
     setConfirmingBankTransfer(false)
+    setConfirmedInvoiceMatch(false)
     setBankTransactionReference('')
     setBankTransferNote('')
+    setBankTransferPassword('')
+    setRejectingBankTransfer(false)
+    setRejectedTransactionReference('')
+    setBankRejectionReason('')
+    setBankRejectionPassword('')
+    setConfirmedRejection(false)
     setMessage('')
     setSelectedQuote(quote)
     setSearchParams((current) => {
@@ -197,21 +247,27 @@ export function AdminQuotesPage() {
     invoice.mutate()
   }
 
+  const staffPermissions = user?.staff_permissions ?? []
+  const canManageQuotes = staffPermissions.includes('manage_quotes')
+  const canConfirmBankPayments = staffPermissions.includes('confirm_bank_payments')
   const invoiceSent = Boolean(selected?.invoiced_at && selected.quoted_total)
-  const canEditInvoice = selected?.status === 'reviewing' || (selected?.status === 'quoted' && selected.order_status === 'pending')
+  const invoiceEditableStatuses: QuoteRequest['status'][] = ['quote_approved', 'invoice_sent', 'awaiting_payment', 'payment_rejected']
+  const canEditInvoice = Boolean(canManageQuotes && selected && invoiceEditableStatuses.includes(selected.status) && (!selected.order_status || selected.order_status === 'pending'))
   const canSendInvoice = Boolean(canEditInvoice)
   const invoiceFormOpen = Boolean(canEditInvoice && (!invoiceSent || revisingInvoice))
+  const awaitingBankReview = Boolean(selected?.order_number && selected.order_status === 'pending' && ['invoice_sent', 'awaiting_payment', 'payment_rejected'].includes(selected.status))
+  const canDiscussQuote = Boolean(selected && ['reviewing', 'quote_approved', 'invoice_sent', 'awaiting_payment', 'payment_rejected'].includes(selected.status))
 
   return (
     <main className={tw('admin-page')}>
       <div className={tw('admin-title-row')}>
         <div><p className={tw('admin-breadcrumb')}>Workspace / Quotes</p><h1>Quote requests</h1><p>Negotiate requirements, agree pricing and issue customer invoices.</p></div>
-        <button type="button" onClick={() => void exportAdminReport({ kind: 'quotes', rows: quotes })}><Download size={18} />Export</button>
+        {canManageQuotes ? <button type="button" onClick={() => void exportAdminReport({ kind: 'quotes', rows: quotes })}><Download size={18} />Export</button> : null}
       </div>
       <section className={tw('admin-stats order-stats')}>
         <Metric label="Total requests" value={String(allQuotes.length)} icon={FileText} />
         <Metric label="Needs review" value={String(allQuotes.filter((quote) => quote.status === 'new' || quote.status === 'reviewing').length)} icon={Clock3} />
-        <Metric label="Awaiting payment" value={String(allQuotes.filter((quote) => quote.status === 'quoted' && quote.order_status === 'pending').length)} icon={CreditCard} />
+        <Metric label="Awaiting payment" value={String(allQuotes.filter((quote) => quote.status === 'awaiting_payment' || quote.status === 'invoice_sent').length)} icon={CreditCard} />
         <Metric label="Completed" value={String(allQuotes.filter((quote) => quoteStatusKey(quote.status) === 'completed').length)} icon={BadgeCheck} />
       </section>
       <section className={tw('admin-panel admin-section-gap')}>
@@ -226,7 +282,7 @@ export function AdminQuotesPage() {
           <table className={tw('admin-table')}>
             <thead><tr><th>Quote ID</th><th>Requester</th><th>Date</th><th>Items</th><th>Linked order</th><th>Status</th><th>Action</th></tr></thead>
             <tbody>{quotes.length ? quotes.map((quote) => (
-              <tr className={tw(`record-row ${quote.status === 'new' || (quote.status === 'quoted' && quote.order_status === 'pending') ? 'bg-warning-soft hover:bg-warning-soft' : ''}`)} key={quote.id} onDoubleClick={() => openQuote(quote)}>
+              <tr className={tw(`record-row ${quote.status === 'new' || quote.status === 'invoice_sent' || quote.status === 'awaiting_payment' || quote.status === 'payment_rejected' ? 'bg-warning-soft hover:bg-warning-soft' : ''}`)} key={quote.id} onDoubleClick={() => openQuote(quote)}>
                 <td><button className={tw('record-link')} type="button" onClick={() => openQuote(quote)}>{quote.quote_number}</button></td>
                 <td><div className={tw('quote-requester')}><strong>{quote.requester_contact_person}</strong><small>{quote.requester_company_name || quote.requester_email}</small></div></td>
                 <td>{new Date(quote.created_at).toLocaleDateString()}</td>
@@ -252,37 +308,54 @@ export function AdminQuotesPage() {
           <aside className={tw('order-editor')} role="dialog" aria-modal="true" aria-labelledby="quote-details-title" onMouseDown={(event) => event.stopPropagation()}>
             <div className={tw('panel-heading')}><div><p className={tw('eyebrow')}>QUOTE REQUEST</p><h2 id="quote-details-title">{selected.quote_number}</h2></div><button type="button" aria-label="Close quote details" onClick={closeQuote}><X /></button></div>
             <p>{selected.requester_contact_person}<br />{selected.requester_company_name ? <>{selected.requester_company_name}<br /></> : null}{selected.requester_email}<br />{selected.requester_phone}</p>
-            {selected.status === 'new' ? <button className={tw('record-payment-link')} type="button" disabled={update.isPending} onClick={() => update.mutate({ quoteNumber: selected.quote_number, data: { status: 'reviewing' } })}>Start review</button> : null}
+            {canManageQuotes && selected.status === 'new' ? <button className={tw('record-payment-link')} type="button" disabled={update.isPending} onClick={() => update.mutate({ quoteNumber: selected.quote_number, data: { status: 'reviewing' } })}>Start review</button> : null}
+            {canManageQuotes && selected.status === 'reviewing' ? <button className={tw('record-payment-link')} type="button" disabled={update.isPending} onClick={() => update.mutate({ quoteNumber: selected.quote_number, data: { status: 'quote_approved' } })}><BadgeCheck size={17} />Approve quote for invoicing</button> : null}
             <div className={tw('order-editor-items')}>{selected.items.map((item) => <div key={item.id}><div className={tw('record-item-main')}><ProductThumbnail imageUrl={item.image_url} name={item.product_name} /><span>{item.product_name}<small>{item.sku || 'Product'} · Qty {item.quantity}</small></span></div>{invoiceFormOpen ? <label className={tw('quote-price-input')}>Unit price{item.bulk_price_applied ? <small>Bulk price</small> : null}<input type="number" min="0.01" step="0.01" value={itemPrices[item.id] ?? item.quoted_unit_price ?? item.suggested_unit_price ?? ''} onChange={(event) => setItemPrices((current) => ({ ...current, [item.id]: event.target.value }))} /></label> : <strong>{invoiceSent && item.quoted_line_total ? `$${Number(item.quoted_line_total).toFixed(2)}` : `Qty ${item.quantity}`}</strong>}</div>)}</div>
             {selected.notes ? <p className={tw('quote-notes')}>{selected.notes}</p> : null}
-            {canEditInvoice ? <div className="mt-5 flex w-full flex-row flex-nowrap items-center gap-2.5"><input id="request-additional-information" className="m-0 size-4 shrink-0 accent-brand" type="checkbox" checked={requestAdditionalInformation} onChange={(event) => setRequestAdditionalInformation(event.target.checked)} /><label htmlFor="request-additional-information" className="m-0 inline text-sm font-bold leading-5">Request additional information before sending an invoice</label></div> : null}
-            {requestAdditionalInformation && (selected.status === 'reviewing' || (selected.status === 'quoted' && selected.order_status === 'pending')) ? <section className="mt-5 border-t border-border-soft pt-5"><h3 className="mb-3 flex items-center gap-2 text-sm font-extrabold"><MessageSquare size={17} />Review messages</h3><div ref={messagesRef} className="grid max-h-60 gap-2 overflow-y-auto rounded-control bg-surface-raised p-3" aria-live="polite">{selected.messages.length ? selected.messages.map((item) => <div className={item.sender_role === 'admin' ? 'ml-8 rounded-control bg-brand-soft p-3 text-sm' : 'mr-8 rounded-control border border-border bg-white p-3 text-sm'} key={item.id}><strong className="block text-xs">{item.author_name}</strong><p className="mt-1 whitespace-pre-wrap break-words text-text-subtle">{item.body}</p><small className="mt-1 block text-[10px] text-text-soft">{new Date(item.created_at).toLocaleString()}</small></div>) : <p className="text-sm text-text-soft">No messages yet. Send a message only if you need more information.</p>}</div><label className="mt-3 grid w-full gap-2 text-xs font-bold">Message<textarea ref={messageInputRef} rows={3} className="min-h-20 w-full resize-y overflow-y-auto rounded-control border border-border-input p-3 text-sm font-normal" value={message} onChange={(event) => setMessage(event.target.value)} /></label><button className={tw('record-payment-link')} type="button" disabled={!message.trim() || sendMessage.isPending} onClick={() => sendMessage.mutate()}><Send size={16} />Send message</button></section> : null}
+            {canDiscussQuote ? <div className="mt-5 flex w-full flex-row flex-nowrap items-center gap-2.5"><input id="request-additional-information" className="m-0 size-4 shrink-0 accent-brand" type="checkbox" checked={requestAdditionalInformation} onChange={(event) => setRequestAdditionalInformation(event.target.checked)} /><label htmlFor="request-additional-information" className="m-0 inline text-sm font-bold leading-5">Open quote messages</label></div> : null}
+            {requestAdditionalInformation && canDiscussQuote ? <section className="mt-5 border-t border-border-soft pt-5"><h3 className="mb-3 flex items-center gap-2 text-sm font-extrabold"><MessageSquare size={17} />Review messages</h3><div ref={messagesRef} className="grid max-h-60 gap-2 overflow-y-auto rounded-control bg-surface-raised p-3" aria-live="polite">{selected.messages.length ? selected.messages.map((item) => <div className={item.sender_role === 'admin' ? 'ml-8 rounded-control bg-brand-soft p-3 text-sm' : 'mr-8 rounded-control border border-border bg-white p-3 text-sm'} key={item.id}><strong className="block text-xs">{item.author_name}</strong><p className="mt-1 whitespace-pre-wrap break-words text-text-subtle">{item.body}</p><small className="mt-1 block text-[10px] text-text-soft">{new Date(item.created_at).toLocaleString()}</small></div>) : <p className="text-sm text-text-soft">No messages yet. Send a message only if you need more information.</p>}</div><label className="mt-3 grid w-full gap-2 text-xs font-bold">Message<textarea ref={messageInputRef} rows={3} className="min-h-20 w-full resize-y overflow-y-auto rounded-control border border-border-input p-3 text-sm font-normal" value={message} onChange={(event) => setMessage(event.target.value)} /></label><button className={tw('record-payment-link')} type="button" disabled={!message.trim() || sendMessage.isPending} onClick={() => sendMessage.mutate()}><Send size={16} />Send message</button></section> : null}
             {canEditInvoice && invoiceSent ? <button className="mt-5 flex min-h-12 w-full items-center justify-between rounded-control border border-border bg-white px-4 py-3 text-left text-sm font-extrabold text-ink transition-colors hover:border-brand hover:text-brand" type="button" aria-expanded={revisingInvoice} onClick={() => setRevisingInvoice((value) => !value)}><span className="flex items-center gap-2.5"><FilePenLine size={18} />Revise invoice</span>{revisingInvoice ? <ChevronUp size={18} /> : <ChevronDown size={18} />}</button> : null}
             {invoiceFormOpen ? <div className={tw('quote-pricing-form')}><h3>{invoiceSent ? 'Revise invoice' : 'Invoice'}</h3><label>Shipping<input type="number" min="0" step="0.01" value={quotedShipping ?? selected.quoted_shipping ?? '0.00'} onChange={(event) => setQuotedShipping(event.target.value)} /></label><label>Invoice terms<textarea rows={3} value={adminMessage ?? selected.admin_message ?? ''} onChange={(event) => setAdminMessage(event.target.value)} placeholder="Validity, delivery timing and terms" /></label><button type="button" disabled={!canSendInvoice || invoice.isPending} onClick={sendInvoice}><FileText size={17} />{invoice.isPending ? 'Sending...' : invoiceSent ? 'Update and resend invoice' : 'Send invoice'}</button></div> : null}
             {invoiceSent ? <dl className={tw('record-totals')}><div><dt>Subtotal</dt><dd>${Number(selected.quoted_subtotal).toFixed(2)}</dd></div><div><dt>Shipping</dt><dd>${Number(selected.quoted_shipping).toFixed(2)}</dd></div><div><dt>Invoice total</dt><dd>${Number(selected.quoted_total).toFixed(2)}</dd></div></dl> : null}
             {selected.invoice_pdf_url ? <button className={`${tw('record-payment-link')} !text-white [&>svg]:text-white`} type="button" disabled={downloadInvoice.isPending} onClick={() => downloadInvoice.mutate({ quoteNumber: selected.quote_number, invoiceNumber: selected.invoice_number || selected.quote_number })}><Download size={17} />{downloadInvoice.isPending ? 'Downloading...' : `Download ${selected.invoice_number}`}</button> : null}
             {selected.order_number ? <p>Invoice order: <strong>{selected.order_number}</strong></p> : <p>No order has been created from this quote.</p>}
-            {selected.status === 'quoted' && selected.order_status === 'pending' && selected.order_number ? confirmingBankTransfer ? (
+            {selected.status === 'payment_rejected' ? <div className="mt-4 rounded-control border border-danger bg-danger-soft p-4 text-sm text-danger"><strong className="block text-ink">Payment rejected</strong><p className="mt-1">{selected.payment_rejection_reason}</p><p className="mt-2 text-text-subtle">The invoice remains unpaid and a corrected transfer can still be confirmed.</p></div> : null}
+            {canConfirmBankPayments && awaitingBankReview ? confirmingBankTransfer ? (
               <section className="mt-3 rounded-control border border-warning bg-warning-soft p-4">
                 <div className="flex items-start gap-3">
                   <CreditCard className="mt-0.5 shrink-0 text-warning" size={19} />
                   <div>
                     <h3 className="text-base font-extrabold text-ink">Confirm bank transfer received</h3>
-                    <p className="mt-1 text-sm text-warning">Match the bank statement to invoice reference <strong>{selected.invoice_number}</strong> and the invoice amount before confirming. This activates fulfillment and cannot be undone here.</p>
+                    <p className="mt-1 text-sm text-warning">This activates fulfillment and cannot be undone here. Corrections must use a refund or reversal event.</p>
                   </div>
                 </div>
                 <div className="mt-4 grid gap-3">
+                  <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-control border border-warning bg-warning"><div className="bg-white p-3"><dt className="text-xs text-muted">Invoice reference</dt><dd className="mt-1 font-mono text-sm font-bold text-ink">{selected.invoice_number}</dd></div><div className="bg-white p-3"><dt className="text-xs text-muted">Exact amount</dt><dd className="mt-1 font-mono text-sm font-bold text-ink">${Number(selected.quoted_total).toFixed(2)}</dd></div></dl>
                   <label className="grid gap-2 text-xs font-bold text-ink">Bank transaction reference<input className="min-h-10 rounded-control border border-border-input bg-white px-3 text-sm font-normal" value={bankTransactionReference} onChange={(event) => setBankTransactionReference(event.target.value)} /></label>
                   <label className="grid gap-2 text-xs font-bold text-ink">Internal note <span className="font-normal text-muted">(optional)</span><textarea rows={2} className="rounded-control border border-border-input bg-white p-3 text-sm font-normal" value={bankTransferNote} onChange={(event) => setBankTransferNote(event.target.value)} /></label>
+                  <label className="grid gap-2 text-xs font-bold text-ink">Your password<input className="min-h-10 rounded-control border border-border-input bg-white px-3 text-sm font-normal" type="password" autoComplete="current-password" value={bankTransferPassword} onChange={(event) => setBankTransferPassword(event.target.value)} /></label>
+                  <label className="flex items-start gap-2.5 text-sm font-bold text-ink"><input className="mt-0.5 size-4 shrink-0 accent-brand" type="checkbox" checked={confirmedInvoiceMatch} onChange={(event) => setConfirmedInvoiceMatch(event.target.checked)} /><span>I matched the invoice reference and exact amount to the bank statement.</span></label>
                   <div className="flex flex-wrap items-center gap-2.5">
                     <button className={tw('table-action')} type="button" onClick={() => setConfirmingBankTransfer(false)}>Cancel</button>
-                    <button className={tw('record-payment-link !mt-0')} type="button" disabled={!bankTransactionReference.trim() || confirmBankTransfer.isPending} onClick={() => confirmBankTransfer.mutate()}>{confirmBankTransfer.isPending ? 'Confirming...' : 'Confirm payment received'}</button>
+                    <button className={tw('record-payment-link !mt-0')} type="button" disabled={!bankTransactionReference.trim() || !bankTransferPassword || !confirmedInvoiceMatch || confirmBankTransfer.isPending} onClick={() => confirmBankTransfer.mutate()}>{confirmBankTransfer.isPending ? 'Confirming...' : 'Confirm payment received'}</button>
                   </div>
                 </div>
               </section>
-            ) : <button className="mt-5 flex min-h-12 w-full items-center justify-between rounded-control border border-border bg-white px-4 py-3 text-left text-sm font-extrabold text-ink transition-colors hover:border-brand hover:text-brand" type="button" aria-expanded="false" onClick={() => setConfirmingBankTransfer(true)}><span className="flex items-center gap-2.5"><CreditCard size={18} />Confirm bank transfer received</span><ChevronDown size={18} /></button> : null}
+            ) : <button className="mt-5 flex min-h-12 w-full items-center justify-between rounded-control border border-border bg-white px-4 py-3 text-left text-sm font-extrabold text-ink transition-colors hover:border-brand hover:text-brand" type="button" aria-expanded="false" onClick={() => { setRejectingBankTransfer(false); setConfirmingBankTransfer(true) }}><span className="flex items-center gap-2.5"><CreditCard size={18} />Confirm bank transfer received</span><ChevronDown size={18} /></button> : null}
+            {canConfirmBankPayments && awaitingBankReview ? rejectingBankTransfer ? (
+              <section className="mt-3 rounded-control border border-danger bg-danger-soft p-4">
+                <div className="flex items-start gap-3"><Ban className="mt-0.5 shrink-0 text-danger" size={19} /><div><h3 className="text-base font-extrabold text-ink">Reject bank transfer</h3><p className="mt-1 text-sm text-danger">Use this only when the transfer cannot be matched or the amount is incorrect. The order remains unpaid.</p></div></div>
+                <div className="mt-4 grid gap-3">
+                  <label className="grid gap-2 text-xs font-bold text-ink">Bank transaction reference <span className="font-normal text-muted">(optional)</span><input className="min-h-10 rounded-control border border-border-input bg-white px-3 text-sm font-normal" value={rejectedTransactionReference} onChange={(event) => setRejectedTransactionReference(event.target.value)} /></label>
+                  <label className="grid gap-2 text-xs font-bold text-ink">Reason shown to customer<textarea rows={3} className="rounded-control border border-border-input bg-white p-3 text-sm font-normal" value={bankRejectionReason} onChange={(event) => setBankRejectionReason(event.target.value)} /></label>
+                  <label className="grid gap-2 text-xs font-bold text-ink">Your password<input className="min-h-10 rounded-control border border-border-input bg-white px-3 text-sm font-normal" type="password" autoComplete="current-password" value={bankRejectionPassword} onChange={(event) => setBankRejectionPassword(event.target.value)} /></label>
+                  <label className="flex items-start gap-2.5 text-sm font-bold text-ink"><input className="mt-0.5 size-4 shrink-0 accent-brand" type="checkbox" checked={confirmedRejection} onChange={(event) => setConfirmedRejection(event.target.checked)} /><span>I confirm this transfer must remain unpaid.</span></label>
+                  <div className="flex flex-wrap items-center gap-2.5"><button className={tw('table-action')} type="button" onClick={() => setRejectingBankTransfer(false)}>Cancel</button><button className="inline-flex min-h-10 items-center gap-2 rounded-control border border-danger bg-danger px-4 text-sm font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50" type="button" disabled={!bankRejectionReason.trim() || !bankRejectionPassword || !confirmedRejection || rejectBankTransfer.isPending} onClick={() => rejectBankTransfer.mutate()}>{rejectBankTransfer.isPending ? 'Rejecting...' : 'Reject payment'}</button></div>
+                </div>
+              </section>
+            ) : <button className="mt-3 flex min-h-12 w-full items-center justify-between rounded-control border border-border bg-white px-4 py-3 text-left text-sm font-extrabold text-ink transition-colors hover:border-danger hover:text-danger" type="button" aria-expanded="false" onClick={() => { setConfirmingBankTransfer(false); setRejectingBankTransfer(true) }}><span className="flex items-center gap-2.5"><Ban size={18} />Reject bank transfer</span><ChevronDown size={18} /></button> : null}
             <StatusTimeline noun="Quote request" currentStatus={selected.status} initialStatus="new" createdAt={selected.created_at} updatedAt={selected.updated_at} steps={QUOTE_STEPS} />
-            {selected.status !== 'approved' && selected.status !== 'quoted' && selected.status !== 'cancelled' ? (
+            {canManageQuotes && ['new', 'reviewing', 'quote_approved'].includes(selected.status) ? (
               <div className={tw('quote-close-section')}>
                 {!confirmingClose ? (
                   <button className={tw('quote-close-button')} type="button" onClick={() => setConfirmingClose(true)}><AlertTriangle size={17} />Cancel quote</button>

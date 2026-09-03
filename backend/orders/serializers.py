@@ -7,7 +7,7 @@ from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from quotes.models import QuoteRequest
 
-from orders.models import Order, OrderItem
+from orders.models import Order, OrderItem, Shipment, ShipmentItem
 from orders.services import OrderService
 from common.validators import validate_phone
 from products.models import Product
@@ -68,8 +68,79 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return obj.product.license_term_days if obj.product else None
 
 
+class ShipmentItemSerializer(serializers.ModelSerializer):
+    order_item_id = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = ShipmentItem
+        fields = (
+            "id",
+            "order_item_id",
+            "quantity",
+            "product_name",
+            "sku",
+        )
+
+
+class ShipmentSerializer(serializers.ModelSerializer):
+    items = ShipmentItemSerializer(many=True, read_only=True)
+    carrier = serializers.CharField(read_only=True, allow_blank=True)
+    tracking_number = serializers.CharField(read_only=True, allow_blank=True)
+
+    class Meta:
+        model = Shipment
+        fields = (
+            "id",
+            "shipment_number",
+            "carrier",
+            "tracking_number",
+            "notes",
+            "shipped_at",
+            "shipping_address",
+            "shipping_city",
+            "shipping_state",
+            "shipping_postal_code",
+            "shipping_country",
+            "items",
+            "created_at",
+        )
+
+
+class ShipmentItemCreateSerializer(serializers.Serializer):
+    order_item_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1, max_value=9999)
+
+
+class ShipmentCreateSerializer(serializers.Serializer):
+    idempotency_key = serializers.UUIDField()
+    items = ShipmentItemCreateSerializer(many=True, allow_empty=False)
+    carrier = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    tracking_number = serializers.CharField(required=False, allow_blank=True, max_length=120)
+    notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_items(self, value):
+        item_ids = [item["order_item_id"] for item in value]
+        if len(item_ids) != len(set(item_ids)):
+            raise serializers.ValidationError("Each order item can appear only once.")
+        return value
+
+    def create(self, validated_data):
+        from orders.services import ShipmentService
+
+        return ShipmentService.create_shipment(
+            order_number=self.context["order_number"],
+            idempotency_key=validated_data["idempotency_key"],
+            items=validated_data["items"],
+            carrier=validated_data.get("carrier", ""),
+            tracking_number=validated_data.get("tracking_number", ""),
+            notes=validated_data.get("notes", ""),
+            actor=self.context["request"].user,
+        )
+
+
 class OrderSerializer(serializers.ModelSerializer):
     items = OrderItemSerializer(many=True, read_only=True)
+    shipments = ShipmentSerializer(many=True, read_only=True)
     user_id = serializers.IntegerField(read_only=True)
     organization_id = serializers.IntegerField(read_only=True)
     renewal_license_number = serializers.CharField(
@@ -111,6 +182,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "stock_deducted",
             "notes",
             "items",
+            "shipments",
             "created_at",
             "updated_at",
         )

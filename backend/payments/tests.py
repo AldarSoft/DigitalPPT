@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
@@ -13,11 +14,17 @@ from orders.models import InventoryReservation, Order, OrderItem
 from orders.services import OrderService
 from licensing.services import OrganizationService
 from licensing.models import OrganizationMembership
-from payments.models import PaymentAttempt, PaymentProvider, PaymentProviderEvent
+from payments.models import (
+    PaymentAttempt,
+    PaymentProvider,
+    PaymentProviderEvent,
+    PaymentStatusEvent,
+)
 from payments.providers import VerifiedProviderCallback
 from payments.services import PaymentProviderCallbackService
 from products.models import Category, Product
 from quotes.models import QuoteRequest
+from users.roles import StaffRole, assign_staff_roles
 
 
 class PaymentFoundationTests(APITestCase):
@@ -28,6 +35,7 @@ class PaymentFoundationTests(APITestCase):
             email="payment-admin@example.com",
             password="StrongPass123!",
             is_staff=True,
+            is_superuser=True,
         )
         self.customer = User.objects.create_user(
             username="payment-customer@example.com",
@@ -155,6 +163,7 @@ class PaymentFoundationTests(APITestCase):
         self.assertEqual(event.status, PaymentProviderEvent.Status.PROCESSED)
         self.assertEqual(attempt.status, PaymentAttempt.Status.CANCELLED)
 
+    @override_settings(DEBUG=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
     def test_admin_successful_payment_schedules_order_and_reserves_inventory(self):
         category = Category.objects.create(name="Payment products")
         product = Product.objects.create(
@@ -197,7 +206,7 @@ class PaymentFoundationTests(APITestCase):
     def test_admin_can_confirm_a_quote_invoice_bank_transfer_once(self):
         quote = QuoteRequest.objects.create(
             user=self.customer,
-            status=QuoteRequest.Status.QUOTED,
+            status=QuoteRequest.Status.AWAITING_PAYMENT,
             requester_contact_person="Payment Tester",
             requester_email=self.customer.email,
             invoice_number="INV-2026-000999",
@@ -213,6 +222,8 @@ class PaymentFoundationTests(APITestCase):
             {
                 "bank_transaction_reference": "BANK-STATEMENT-2026-0001",
                 "internal_note": "Matched against the daily statement.",
+                "current_password": "StrongPass123!",
+                "confirmed_invoice_match": True,
             },
             format="json",
         )
@@ -224,16 +235,228 @@ class PaymentFoundationTests(APITestCase):
         quote.refresh_from_db()
         attempt = PaymentAttempt.objects.get(order=self.order, provider__code=PaymentProvider.Code.BANK_TRANSFER)
         self.assertEqual(self.order.status, Order.Status.SCHEDULED)
-        self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
+        self.assertEqual(quote.status, QuoteRequest.Status.PAYMENT_CONFIRMED)
         self.assertEqual(attempt.external_reference, "BANK-STATEMENT-2026-0001")
         self.assertEqual(attempt.metadata["internal_note"], "Matched against the daily statement.")
+        self.assertEqual(
+            list(attempt.status_events.values_list("event_type", flat=True)),
+            [
+                PaymentStatusEvent.EventType.ATTEMPT_CREATED,
+                PaymentStatusEvent.EventType.MANUAL_CONFIRMATION,
+            ],
+        )
 
         repeated = self.client.post(
             f"/api/v1/payments/orders/{self.order.order_number}/confirm-bank-transfer/",
-            {"bank_transaction_reference": "BANK-STATEMENT-2026-0001"},
+            {
+                "bank_transaction_reference": "BANK-STATEMENT-2026-0001",
+                "current_password": "StrongPass123!",
+                "confirmed_invoice_match": True,
+            },
             format="json",
         )
         self.assertEqual(repeated.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bank_confirmation_requires_finance_permission_and_current_password(self):
+        User = get_user_model()
+        quote = QuoteRequest.objects.create(
+            user=self.customer,
+            status=QuoteRequest.Status.AWAITING_PAYMENT,
+            requester_contact_person="Payment Tester",
+            requester_email=self.customer.email,
+            invoice_number="INV-2026-000998",
+            quoted_total=self.order.total,
+        )
+        self.order.quote_request = quote
+        self.order.source = Order.Source.QUOTE
+        self.order.save(update_fields=["quote_request", "source", "updated_at"])
+        support = User.objects.create_user(
+            username="payment-support@example.com",
+            email="payment-support@example.com",
+            password="StrongPass123!",
+            is_staff=True,
+        )
+        assign_staff_roles(support, [StaffRole.SUPPORT])
+        self.client.force_authenticate(support)
+        denied = self.client.post(
+            f"/api/v1/payments/orders/{self.order.order_number}/confirm-bank-transfer/",
+            {
+                "bank_transaction_reference": "ROLE-DENIED",
+                "current_password": "StrongPass123!",
+                "confirmed_invoice_match": True,
+            },
+            format="json",
+        )
+        self.assertEqual(denied.status_code, status.HTTP_403_FORBIDDEN)
+
+        finance = User.objects.create_user(
+            username="payment-finance@example.com",
+            email="payment-finance@example.com",
+            password="StrongPass123!",
+            is_staff=True,
+        )
+        assign_staff_roles(finance, [StaffRole.FINANCE])
+        self.client.force_authenticate(finance)
+        quote_response = self.client.get(
+            f"/api/v1/quotes/{quote.quote_number}/"
+        )
+        self.assertEqual(quote_response.status_code, status.HTTP_200_OK)
+        quote_update = self.client.patch(
+            f"/api/v1/quotes/{quote.quote_number}/",
+            {"status": "reviewing"},
+            format="json",
+        )
+        self.assertEqual(quote_update.status_code, status.HTTP_403_FORBIDDEN)
+        wrong_password = self.client.post(
+            f"/api/v1/payments/orders/{self.order.order_number}/confirm-bank-transfer/",
+            {
+                "bank_transaction_reference": "ROLE-WRONG-PASSWORD",
+                "current_password": "WrongPassword123!",
+                "confirmed_invoice_match": True,
+            },
+            format="json",
+        )
+        self.assertEqual(wrong_password.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_bank_confirmation_requires_explicit_invoice_match(self):
+        quote = QuoteRequest.objects.create(
+            user=self.customer,
+            status=QuoteRequest.Status.AWAITING_PAYMENT,
+            requester_contact_person="Payment Tester",
+            requester_email=self.customer.email,
+            invoice_number="INV-2026-000997",
+            quoted_total=self.order.total,
+        )
+        self.order.quote_request = quote
+        self.order.source = Order.Source.QUOTE
+        self.order.save(update_fields=["quote_request", "source", "updated_at"])
+        self.client.force_authenticate(self.admin)
+
+        response = self.client.post(
+            f"/api/v1/payments/orders/{self.order.order_number}/confirm-bank-transfer/",
+            {
+                "bank_transaction_reference": "UNCONFIRMED-MATCH",
+                "current_password": "StrongPass123!",
+                "confirmed_invoice_match": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(PaymentAttempt.objects.filter(order=self.order).exists())
+
+    def test_fulfillment_status_alone_does_not_confirm_quote_payment(self):
+        quote = QuoteRequest.objects.create(
+            user=self.customer,
+            status=QuoteRequest.Status.AWAITING_PAYMENT,
+            requester_contact_person="Payment Tester",
+            requester_email=self.customer.email,
+            invoice_number="INV-2026-000995",
+            quoted_total=self.order.total,
+        )
+        self.order.quote_request = quote
+        self.order.source = Order.Source.QUOTE
+        self.order.save(update_fields=["quote_request", "source", "updated_at"])
+
+        OrderService.update_status(order=self.order, new_status=Order.Status.SCHEDULED)
+
+        quote.refresh_from_db()
+        self.assertEqual(quote.status, QuoteRequest.Status.AWAITING_PAYMENT)
+        self.assertFalse(PaymentAttempt.objects.filter(
+            order=self.order,
+            status=PaymentAttempt.Status.SUCCEEDED,
+        ).exists())
+
+    def test_finance_can_reject_then_confirm_a_corrected_bank_transfer(self):
+        quote = QuoteRequest.objects.create(
+            user=self.customer,
+            status=QuoteRequest.Status.AWAITING_PAYMENT,
+            requester_contact_person="Payment Tester",
+            requester_email=self.customer.email,
+            invoice_number="INV-2026-000996",
+            quoted_total=self.order.total,
+        )
+        self.order.quote_request = quote
+        self.order.source = Order.Source.QUOTE
+        self.order.save(update_fields=["quote_request", "source", "updated_at"])
+        self.client.force_authenticate(self.admin)
+
+        rejected = self.client.post(
+            f"/api/v1/payments/orders/{self.order.order_number}/reject-bank-transfer/",
+            {
+                "bank_transaction_reference": "BANK-WRONG-AMOUNT",
+                "reason": "The received amount does not match the invoice total.",
+                "current_password": "StrongPass123!",
+                "confirmed_rejection": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(rejected.status_code, status.HTTP_200_OK)
+        self.assertEqual(rejected.data["status"], PaymentAttempt.Status.FAILED)
+        self.order.refresh_from_db()
+        quote.refresh_from_db()
+        self.assertEqual(self.order.status, Order.Status.PENDING)
+        self.assertEqual(quote.status, QuoteRequest.Status.PAYMENT_REJECTED)
+        self.assertEqual(
+            quote.payment_rejection_reason,
+            "The received amount does not match the invoice total.",
+        )
+        rejected_attempt = PaymentAttempt.objects.get(
+            order=self.order,
+            external_reference="BANK-WRONG-AMOUNT",
+        )
+        events = list(rejected_attempt.status_events.all())
+        self.assertEqual(
+            [event.event_type for event in events],
+            [
+                PaymentStatusEvent.EventType.ATTEMPT_CREATED,
+                PaymentStatusEvent.EventType.MANUAL_REJECTION,
+            ],
+        )
+        self.assertEqual(events[-1].invoice_reference, quote.invoice_number)
+        self.assertEqual(events[-1].actor, self.admin)
+        events[-1].reason = "Changed after reconciliation."
+        with self.assertRaisesMessage(DjangoValidationError, "immutable"):
+            events[-1].save()
+        with self.assertRaisesMessage(DjangoValidationError, "immutable"):
+            PaymentStatusEvent.objects.filter(pk=events[-1].pk).update(reason="Changed")
+
+        confirmed = self.client.post(
+            f"/api/v1/payments/orders/{self.order.order_number}/confirm-bank-transfer/",
+            {
+                "bank_transaction_reference": "BANK-CORRECTED-AMOUNT",
+                "current_password": "StrongPass123!",
+                "confirmed_invoice_match": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(confirmed.status_code, status.HTTP_200_OK)
+        quote.refresh_from_db()
+        self.assertEqual(quote.status, QuoteRequest.Status.PAYMENT_CONFIRMED)
+        self.assertEqual(quote.payment_rejection_reason, "")
+        self.assertTrue(PaymentStatusEvent.objects.filter(
+            payment_attempt=rejected_attempt,
+            event_type=PaymentStatusEvent.EventType.MANUAL_REJECTION,
+        ).exists())
+
+    @override_settings(DEBUG=False, PAYMENTS_DEVELOPMENT_SIMULATOR=False)
+    def test_admin_payment_simulation_is_hidden_in_production(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.post(
+            "/api/v1/payments/attempts/",
+            {"order_number": self.order.order_number, "provider": "stripe", "outcome": "succeeded"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    @override_settings(DEBUG=False, PAYMENTS_DEVELOPMENT_SIMULATOR=False)
+    def test_test_provider_cannot_be_exposed_to_production_customers(self):
+        provider = PaymentProvider.objects.get(code=PaymentProvider.Code.STRIPE)
+        provider.is_customer_available = True
+        with self.assertRaisesMessage(DjangoValidationError, "Test payment providers cannot be offered"):
+            provider.save()
 
     def test_bank_transaction_reference_cannot_confirm_two_orders(self):
         self.client.force_authenticate(self.admin)
@@ -241,7 +464,7 @@ class PaymentFoundationTests(APITestCase):
         for suffix in ("101", "102"):
             quote = QuoteRequest.objects.create(
                 user=self.customer,
-                status=QuoteRequest.Status.QUOTED,
+                status=QuoteRequest.Status.AWAITING_PAYMENT,
                 requester_contact_person="Payment Tester",
                 requester_email=self.customer.email,
                 invoice_number=f"INV-2026-00{suffix}",
@@ -263,12 +486,20 @@ class PaymentFoundationTests(APITestCase):
 
         first = self.client.post(
             f"/api/v1/payments/orders/{orders[0].order_number}/confirm-bank-transfer/",
-            {"bank_transaction_reference": "duplicate-bank-reference"},
+            {
+                "bank_transaction_reference": "duplicate-bank-reference",
+                "current_password": "StrongPass123!",
+                "confirmed_invoice_match": True,
+            },
             format="json",
         )
         second = self.client.post(
             f"/api/v1/payments/orders/{orders[1].order_number}/confirm-bank-transfer/",
-            {"bank_transaction_reference": "duplicate-bank-reference"},
+            {
+                "bank_transaction_reference": "duplicate-bank-reference",
+                "current_password": "StrongPass123!",
+                "confirmed_invoice_match": True,
+            },
             format="json",
         )
         self.assertEqual(first.status_code, 200)
@@ -286,6 +517,7 @@ class PaymentFoundationTests(APITestCase):
         self.assertEqual(list_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(create_response.status_code, status.HTTP_403_FORBIDDEN)
 
+    @override_settings(DEBUG=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
     def test_disabled_provider_cannot_be_simulated(self):
         PaymentProvider.objects.filter(code="stripe").update(is_enabled=False)
         self.client.force_authenticate(self.admin)
@@ -316,7 +548,7 @@ class PaymentFoundationTests(APITestCase):
         }
 
     @override_settings(DEBUG=True, PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
-    def test_license_manager_can_list_and_pay_an_organization_order(self):
+    def test_license_manager_cannot_list_or_pay_an_organization_order(self):
         User = get_user_model()
         manager = User.objects.create_user(
             username="license-manager-payment@example.com",
@@ -340,20 +572,12 @@ class PaymentFoundationTests(APITestCase):
         listed = self.client.get(f"/api/v1/orders/?organization={organization.pk}")
         self.assertEqual(listed.status_code, status.HTTP_200_OK)
         rows = listed.data["results"] if "results" in listed.data else listed.data
-        self.assertEqual([row["order_number"] for row in rows], [self.order.order_number])
+        self.assertEqual(rows, [])
 
         payload = self.checkout_payload()
         payload["billing"]["email"] = manager.email
-        created = self.client.post("/api/v1/payments/checkout-sessions/", payload, format="json")
-        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
-
-        completed = self.client.post(
-            f"/api/v1/payments/checkout-sessions/{created.data['session_id']}/simulate/",
-            {"outcome": "succeeded"},
-            format="json",
-        )
-        self.assertEqual(completed.status_code, status.HTTP_200_OK)
-        self.assertEqual(completed.data["status"], PaymentAttempt.Status.SUCCEEDED)
+        denied = self.client.post("/api/v1/payments/checkout-sessions/", payload, format="json")
+        self.assertEqual(denied.status_code, status.HTTP_404_NOT_FOUND)
 
     @override_settings(PAYMENTS_STOREFRONT_ENABLED=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
     def test_license_manager_cannot_access_another_organizations_order(self):
@@ -530,7 +754,7 @@ class PaymentFoundationTests(APITestCase):
             user=self.customer,
             requester_contact_person="Payment Tester",
             requester_email=self.customer.email,
-            status=QuoteRequest.Status.QUOTED,
+            status=QuoteRequest.Status.AWAITING_PAYMENT,
         )
         self.order.quote_request = quote
         self.order.source = Order.Source.QUOTE
@@ -553,11 +777,11 @@ class PaymentFoundationTests(APITestCase):
         self.order.refresh_from_db()
         quote.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.SCHEDULED)
-        self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
+        self.assertEqual(quote.status, QuoteRequest.Status.PAYMENT_CONFIRMED)
 
         OrderService.update_status(order=self.order, new_status=Order.Status.COMPLETED)
         quote.refresh_from_db()
-        self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
+        self.assertEqual(quote.status, QuoteRequest.Status.PAYMENT_CONFIRMED)
 
     def test_terminal_order_closes_pending_payment_attempts(self):
         attempt = PaymentAttempt.objects.create(

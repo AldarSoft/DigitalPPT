@@ -129,7 +129,10 @@ export function AccountPage() {
     return <Navigate to="/login" state={{ from: "/account" }} replace />;
   const orders = ordersQuery.data ? unwrap(ordersQuery.data) : [];
   const quotes = quotesQuery.data ? unwrap(quotesQuery.data) : [];
-  const pendingInvoiceQuote = quotes.find((quote) => quote.status === 'quoted' && quote.order_status === 'pending');
+  const pendingInvoiceQuote = quotes.find((quote) => (
+    ['invoice_sent', 'awaiting_payment', 'payment_rejected'].includes(quote.status)
+    && quote.order_status === 'pending'
+  ));
   const selectedRecord = selectedRecordState ?? (linkedQuoteQuery.data ? { kind: 'quote' as const, value: linkedQuoteQuery.data } : null);
   const orderCount = ordersQuery.data && !Array.isArray(ordersQuery.data) ? ordersQuery.data.count : orders.length;
   const quoteCount = quotesQuery.data && !Array.isArray(quotesQuery.data) ? quotesQuery.data.count : quotes.length;

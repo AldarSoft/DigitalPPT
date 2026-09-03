@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { AlertTriangle, Building2, CalendarDays, CreditCard, Info, KeyRound, LoaderCircle, Plus, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Building2, CalendarDays, CreditCard, FileText, Info, KeyRound, LoaderCircle, Plus, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { ApiError, api } from '../../../lib/api'
@@ -17,6 +17,7 @@ export function OrganizationLicensesPanel({ organizationId, workspaceLoading, wo
   const [organizationName, setOrganizationName] = useState('')
   const [cancellingLicense, setCancellingLicense] = useState<ClientLicenseDetail | null>(null)
   const licensesQuery = useQuery({ queryKey: licensingKeys.licenses(organizationId), queryFn: () => api.organizationLicenses(organizationId), enabled: organizationId !== null })
+  const paymentStatusQuery = useQuery({ queryKey: ['storefront-payment-status'], queryFn: api.storefrontPaymentStatus })
   const licenses = licensesQuery.data?.licenses ?? []
   const hasCurrentRenewalNeed = licenses.some(
     (license) => license.status === 'expiring_soon' || license.status === 'expired',
@@ -30,8 +31,21 @@ export function OrganizationLicensesPanel({ organizationId, workspaceLoading, wo
     onSuccess: (renewal) => navigate(`/payment?renewal_license=${encodeURIComponent(renewal.license_number)}&org=${renewal.organization_id}`),
     onError: (error) => toast.error(errorMessage(error)),
   })
+  const renewalQuoteMutation = useMutation({
+    mutationFn: (licenseNumber: string) => api.requestLicenseRenewalQuote(licenseNumber, organizationId),
+    onSuccess: (quote) => {
+      void queryClient.invalidateQueries({ queryKey: licensingKeys.licenses(organizationId) })
+      navigate(`/account?tab=quotes&quote=${encodeURIComponent(quote.quote_number)}&org=${organizationId}`)
+      toast.success('Renewal quote request created')
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  })
+  const instantPaymentAvailable = Boolean(
+    paymentStatusQuery.data?.storefront_enabled
+    && paymentStatusQuery.data.providers.some((provider) => provider.code !== 'bank_transfer'),
+  )
   const cancellationMutation = useMutation({
-    mutationFn: ({ password, reason }: { password: string; reason: string }) => api.cancelOrganizationLicense(cancellingLicense!.license_number, organizationId, { password, reason }),
+    mutationFn: ({ password, reason }: { password: string; reason: string }) => api.cancelOrganizationLicense(cancellingLicense!.license_number, organizationId, { password, reason, confirmed_cancellation: true }),
     onSuccess: () => {
       setCancellingLicense(null)
       closeDetails()
@@ -130,20 +144,20 @@ export function OrganizationLicensesPanel({ organizationId, workspaceLoading, wo
             return <article aria-current={selected ? 'true' : undefined} className={`grid min-w-0 gap-4 border-b border-border px-3 py-5 last:border-b-0 min-[460px]:grid-cols-2 min-[680px]:grid-cols-[minmax(0,1.2fr)_minmax(120px,.8fr)_minmax(112px,.6fr)_92px] min-[680px]:items-center min-[680px]:gap-3 ${selected ? 'rounded-control bg-info-soft ring-1 ring-[#bdd4f5]' : ''}`} key={license.id}>
               <div className="min-w-0 min-[460px]:col-span-2 min-[680px]:col-span-1"><strong className="block truncate">{license.name}</strong><span className="block truncate text-xs text-muted">{license.license_number}</span></div>
               <div className="min-w-0"><span className="mb-1 block text-xs font-bold text-muted min-[680px]:hidden">Product capacity</span><strong>{license.used_capacity} / {license.capacity}</strong><div className="mt-2 h-2 overflow-hidden rounded-full bg-border" role="progressbar" aria-label={`${license.name} capacity`} aria-valuemin={0} aria-valuemax={license.capacity} aria-valuenow={license.used_capacity}><span className="block h-full rounded-full bg-brand" style={{ width: `${license.capacity_percentage}%` }} /></div></div>
-              <div className="grid min-w-0 justify-items-start gap-2"><span className="block text-xs font-bold text-muted min-[680px]:hidden">Expires</span><strong className="block whitespace-nowrap text-sm">{formatDate(license.expires_on)}</strong><LicenseStatusBadge status={license.status} /></div>
+              <div className="grid min-w-0 justify-items-start gap-2"><span className="block text-xs font-bold text-muted min-[680px]:hidden">Expires</span><strong className="block whitespace-nowrap text-sm">{formatDate(license.expires_on)}</strong><LicenseStatusBadge status={license.status} />{license.has_pending_renewal ? <span className="rounded-control bg-brand-soft px-2 py-0.5 text-[10px] font-bold text-brand">Renewal pending</span> : null}</div>
               <button className={tw(`table-action ${selected ? '!border-brand !bg-brand !text-white' : ''} max-[459px]:w-full`)} type="button" onClick={() => selectLicense(license.license_number)}>View details</button>
             </article>
           })}
         </section>
       </div>
-      {selectedNumber ? <LicenseDetailsDialog detail={detail} error={detailQuery.error} loading={detailQuery.isLoading} renewalPending={renewalMutation.isPending} canCancel={licensesQuery.data?.organization.role === 'owner'} onRenew={() => renewalMutation.mutate(selectedNumber)} onCancel={(license) => { cancellationMutation.reset(); setCancellingLicense(license) }} onClose={closeDetails} onRetry={() => void detailQuery.refetch()} /> : null}
+      {selectedNumber ? <LicenseDetailsDialog detail={detail} error={detailQuery.error} loading={detailQuery.isLoading} renewalPending={renewalMutation.isPending || renewalQuoteMutation.isPending} instantPaymentAvailable={instantPaymentAvailable} canCancel={licensesQuery.data?.organization.role === 'owner'} onRenew={() => renewalMutation.mutate(selectedNumber)} onRequestQuote={() => renewalQuoteMutation.mutate(selectedNumber)} onCancel={(license) => { cancellationMutation.reset(); setCancellingLicense(license) }} onClose={closeDetails} onRetry={() => void detailQuery.refetch()} /> : null}
       </> : null}
       {cancellingLicense ? <LicenseCancellationDialog license={cancellingLicense} pending={cancellationMutation.isPending} error={cancellationMutation.error} onClose={() => { cancellationMutation.reset(); setCancellingLicense(null) }} onConfirm={(password, reason) => cancellationMutation.mutate({ password, reason })} /> : null}
     </div>
   )
 }
 
-function LicenseDetailsDialog({ detail, error, loading, renewalPending, canCancel, onRenew, onCancel, onClose, onRetry }: { detail: ClientLicenseDetail | undefined; error: unknown; loading: boolean; renewalPending: boolean; canCancel: boolean; onRenew: () => void; onCancel: (license: ClientLicenseDetail) => void; onClose: () => void; onRetry: () => void }) {
+function LicenseDetailsDialog({ detail, error, loading, renewalPending, instantPaymentAvailable, canCancel, onRenew, onRequestQuote, onCancel, onClose, onRetry }: { detail: ClientLicenseDetail | undefined; error: unknown; loading: boolean; renewalPending: boolean; instantPaymentAvailable: boolean; canCancel: boolean; onRenew: () => void; onRequestQuote: () => void; onCancel: (license: ClientLicenseDetail) => void; onClose: () => void; onRetry: () => void }) {
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -154,13 +168,13 @@ function LicenseDetailsDialog({ detail, error, loading, renewalPending, canCance
 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#09172d]/45 p-4" role="presentation" onMouseDown={onClose}>
     <section aria-labelledby="license-details-title" aria-modal="true" className="max-h-[calc(100vh-32px)] w-full max-w-4xl overflow-y-auto rounded-panel border border-border bg-white shadow-xl" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
-      <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-white px-5 py-4 max-[560px]:px-4"><div className="min-w-0"><p className="text-xs font-bold tracking-[.12em] text-brand">LICENSE DETAILS</p><h3 className="mt-1 truncate text-xl" id="license-details-title">{detail?.name ?? 'Loading license details'}</h3>{detail ? <p className="mt-1 text-xs text-muted">{detail.license_number}</p> : null}</div><button aria-label="Close license details" className={tw('action-button action-button-secondary action-button-icon')} type="button" onClick={onClose}><X size={21} /></button></header>
+      <header className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-border bg-white px-5 py-4 max-[560px]:px-4"><div className="min-w-0"><p className="text-xs font-bold tracking-[.12em] text-brand">LICENSE DETAILS</p><h3 className="mt-1 truncate text-xl" id="license-details-title">{detail?.name ?? 'Loading license details'}</h3>{detail ? <p className="mt-1 text-xs text-muted">{detail.license_number}</p> : null}{detail?.has_pending_renewal ? <span className="mt-1 inline-block rounded-control bg-brand-soft px-2 py-0.5 text-[10px] font-bold text-brand">Renewal payment in progress</span> : null}</div><button aria-label="Close license details" className={tw('action-button action-button-secondary action-button-icon')} type="button" onClick={onClose}><X size={21} /></button></header>
       {loading ? <div className="flex min-h-72 items-center justify-center text-sm text-muted"><LoaderCircle className="mr-2 animate-spin text-brand" size={19} />Loading license details...</div> : null}
       {error ? <div className="grid min-h-72 place-items-center px-5 text-center"><div><strong className="block">License details could not be loaded</strong><p className="mt-1 text-sm text-muted">{errorMessage(error)}</p><div className="mt-3"><RetryButton onClick={onRetry} /></div></div></div> : null}
       {detail ? <div className="grid gap-5 p-5 max-[560px]:p-4">
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(260px,.72fr)]">
           <div className="rounded-panel bg-surface-raised p-4"><div className="flex items-end justify-between gap-3"><strong>Products assigned</strong><b className="text-2xl">{detail.used_capacity} / {detail.capacity}</b></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-border"><span className="block h-full rounded-full bg-success" style={{ width: `${Math.min(100, detail.capacity ? detail.used_capacity / detail.capacity * 100 : 0)}%` }} /></div><p className="mt-3 text-sm font-semibold text-success">{detail.available_capacity === 0 ? 'This license is at full capacity.' : `${detail.available_capacity} product capacity available.`}</p></div>
-          <div className="rounded-panel border border-border p-4"><div className="flex items-start gap-3"><CalendarDays className="mt-0.5 shrink-0 text-warning" size={20} /><div><strong>Annual subscription</strong><p className="mt-1 text-xs text-muted">{formatDate(detail.subscription.starts_on)} – {formatDate(detail.subscription.expires_on)}</p></div></div><dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm max-[420px]:grid-cols-1"><div><dt className="text-xs text-muted">Plan</dt><dd className="mt-1 font-semibold">{detail.plan_name}</dd></div><div><dt className="text-xs text-muted">Renewal due</dt><dd className="mt-1 font-semibold">{formatDate(detail.subscription.renews_on)}</dd></div><div><dt className="text-xs text-muted">Term</dt><dd className="mt-1 font-semibold">{detail.subscription.term_days ? `${detail.subscription.term_days} days` : 'Not set'}</dd></div><div><dt className="text-xs text-muted">Source order</dt><dd className="mt-1 font-semibold text-brand">{detail.subscription.source_order?.order_number ?? 'Not available'}</dd></div></dl>{canExtendLicense(detail) ? <button className={tw('action-button action-button-primary mt-4 w-full')} type="button" disabled={renewalPending} onClick={onRenew}><CreditCard size={17} />{renewalPending ? 'Preparing extension...' : 'Extend license'}</button> : null}{canCancel ? <button className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-danger bg-white px-4 text-sm font-bold text-danger hover:bg-danger-soft" type="button" onClick={() => onCancel(detail)}><Trash2 size={17} />Cancel license</button> : null}</div>
+          <div className="rounded-panel border border-border p-4"><div className="flex items-start gap-3"><CalendarDays className="mt-0.5 shrink-0 text-warning" size={20} /><div><strong>Annual subscription</strong><p className="mt-1 text-xs text-muted">{formatDate(detail.subscription.starts_on)} – {formatDate(detail.subscription.expires_on)}</p></div></div><dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm max-[420px]:grid-cols-1"><div><dt className="text-xs text-muted">Plan</dt><dd className="mt-1 font-semibold">{detail.plan_name}</dd></div><div><dt className="text-xs text-muted">Renewal due</dt><dd className="mt-1 font-semibold">{formatDate(detail.subscription.renews_on)}</dd></div><div><dt className="text-xs text-muted">Term</dt><dd className="mt-1 font-semibold">{detail.subscription.term_days ? `${detail.subscription.term_days} days` : 'Not set'}</dd></div><div><dt className="text-xs text-muted">Source order</dt><dd className="mt-1 font-semibold text-brand">{detail.subscription.source_order?.order_number ?? 'Not available'}</dd></div></dl>{canExtendLicense(detail) && !detail.has_pending_renewal ? <div className="mt-4 grid gap-2"><button className={tw('action-button action-button-primary w-full')} type="button" disabled={renewalPending} onClick={onRequestQuote}><FileText size={17} />{renewalPending ? 'Preparing renewal...' : 'Request renewal quote'}</button>{instantPaymentAvailable ? <button className={tw('action-button action-button-secondary w-full')} type="button" disabled={renewalPending} onClick={onRenew}><CreditCard size={17} />Pay online</button> : null}</div> : null}{canCancel ? <button className="mt-3 inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-control border border-danger bg-white px-4 text-sm font-bold text-danger hover:bg-danger-soft" type="button" onClick={() => onCancel(detail)}><Trash2 size={17} />Cancel license</button> : null}</div>
         </div>
         <StatusFeedback status={detail.status} remainingDays={detail.remaining_days} />
         <section className="min-w-0 overflow-hidden rounded-panel border border-border"><div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4 max-[560px]:px-4"><div><h4 className="text-lg">Assigned radio products</h4><p className="mt-1 text-sm text-muted">Products assigned through completed purchase orders.</p></div><strong className="text-sm text-brand">{detail.used_capacity} products assigned</strong></div>{detail.allocations.length ? <div className="overflow-x-auto"><table className="w-full min-w-[680px] border-collapse text-left"><thead className="bg-surface-raised text-xs text-muted"><tr><th className="px-5 py-3">Product</th><th className="px-5 py-3">Source order</th><th className="px-5 py-3">Assigned</th><th className="px-5 py-3">Order date</th></tr></thead><tbody>{detail.allocations.map((allocation) => <tr className="border-t border-border" key={allocation.id}><td className="px-5 py-4"><strong className="block text-sm">{allocation.product.name}</strong><span className="text-xs text-muted">{allocation.product.sku}</span></td><td className="px-5 py-4 text-sm font-bold text-brand">{allocation.source_order.order_number}</td><td className="px-5 py-4 text-sm font-semibold">{allocation.quantity}</td><td className="px-5 py-4 text-sm text-muted">{formatDate(allocation.source_order.ordered_at)}</td></tr>)}</tbody></table></div> : <p className="border-t border-border px-5 py-8 text-center text-sm text-muted">No products are assigned to this license yet.</p>}</section>
@@ -172,6 +186,7 @@ function LicenseDetailsDialog({ detail, error, loading, renewalPending, canCance
 function LicenseCancellationDialog({ license, pending, error, onClose, onConfirm }: { license: ClientLicenseDetail; pending: boolean; error: unknown; onClose: () => void; onConfirm: (password: string, reason: string) => void }) {
   const [password, setPassword] = useState('')
   const [reason, setReason] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
   return <div className="fixed inset-0 z-[60] grid place-items-center bg-[#09172d]/45 p-4" role="presentation" onMouseDown={() => { if (!pending) onClose() }}>
     <section aria-labelledby="cancel-license-title" aria-modal="true" className="w-full max-w-lg rounded-panel border border-border bg-white p-5 shadow-xl" role="dialog" onMouseDown={(event) => event.stopPropagation()}>
       <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold tracking-[.12em] text-danger">OWNER ACTION</p><h3 className="mt-1 text-xl" id="cancel-license-title">Cancel {license.name}</h3></div><button aria-label="Close cancellation" className={tw('action-button action-button-secondary action-button-icon')} type="button" disabled={pending} onClick={onClose}><X size={20} /></button></div>
@@ -179,8 +194,9 @@ function LicenseCancellationDialog({ license, pending, error, onClose, onConfirm
       <form className="mt-4 grid gap-4" onSubmit={(event) => { event.preventDefault(); onConfirm(password, reason) }}>
         <label className="grid gap-1.5 text-sm font-bold">Reason<textarea className="min-h-24 rounded-control border border-border-input p-3 font-normal outline-none focus:border-brand" maxLength={500} required value={reason} onChange={(event) => setReason(event.target.value)} /></label>
         <label className="grid gap-1.5 text-sm font-bold">Confirm with your password<input autoComplete="current-password" className="min-h-11 rounded-control border border-border-input px-3 font-normal outline-none focus:border-brand" type="password" required value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+        <label className="flex items-start gap-2.5 text-sm text-muted"><input className="mt-0.5 size-4 shrink-0 accent-danger" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>I understand the license capacity is removed immediately and this action cannot be undone.</span></label>
         {error ? <p className="rounded-control bg-danger-soft px-3 py-2 text-sm text-danger">{errorMessage(error)}</p> : null}
-        <div className="flex flex-wrap justify-end gap-3 border-t border-border pt-4"><button className={tw('action-button action-button-secondary')} type="button" disabled={pending} onClick={onClose}>Keep license</button><button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border-0 bg-danger px-4 text-sm font-bold text-white disabled:opacity-55" type="submit" disabled={pending || !password || !reason.trim()}><Trash2 size={17} />{pending ? 'Cancelling...' : 'Confirm cancellation'}</button></div>
+        <div className="flex flex-wrap justify-end gap-3 border-t border-border pt-4"><button className={tw('action-button action-button-secondary')} type="button" disabled={pending} onClick={onClose}>Keep license</button><button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border-0 bg-danger px-4 text-sm font-bold text-white disabled:opacity-55" type="submit" disabled={pending || !password || !reason.trim() || !confirmed}><Trash2 size={17} />{pending ? 'Cancelling...' : 'Confirm cancellation'}</button></div>
       </form>
     </section>
   </div>
@@ -221,5 +237,5 @@ function formatDate(value: string | null) {
 }
 
 function canExtendLicense(detail: ClientLicenseDetail) {
-  return detail.status === 'expiring_soon' || detail.status === 'expired' || (detail.remaining_days !== null && detail.remaining_days <= 60)
+  return !detail.has_pending_renewal && (detail.status === 'expiring_soon' || detail.status === 'expired' || (detail.remaining_days !== null && detail.remaining_days <= 60))
 }

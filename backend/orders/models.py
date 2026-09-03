@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db import models, transaction
+from django.utils import timezone
 
 from common.models import TimeStampedModel
 
@@ -115,15 +116,34 @@ class Order(TimeStampedModel):
 
         if self.status == self.Status.CANCELLED:
             target_status = QuoteRequest.Status.CANCELLED
+        elif self.payment_attempts.filter(status="succeeded").exists():
+            target_status = QuoteRequest.Status.PAYMENT_CONFIRMED
         elif self.status == self.Status.PENDING:
-            target_status = QuoteRequest.Status.QUOTED
+            invoice_states = {
+                QuoteRequest.Status.INVOICE_SENT,
+                QuoteRequest.Status.AWAITING_PAYMENT,
+                QuoteRequest.Status.PAYMENT_REJECTED,
+            }
+            target_status = (
+                self.quote_request.status
+                if self.quote_request.status in invoice_states
+                else QuoteRequest.Status.AWAITING_PAYMENT
+            )
         else:
-            target_status = QuoteRequest.Status.APPROVED
+            target_status = self.quote_request.status
 
-        if self.quote_request.status != target_status:
+        clear_rejection = bool(
+            target_status == QuoteRequest.Status.PAYMENT_CONFIRMED
+            and self.quote_request.payment_rejection_reason
+        )
+        if self.quote_request.status != target_status or clear_rejection:
             previous_status = self.quote_request.status
             self.quote_request.status = target_status
-            self.quote_request.save(update_fields=["status", "updated_at"])
+            update_fields = ["status", "updated_at"]
+            if clear_rejection:
+                self.quote_request.payment_rejection_reason = ""
+                update_fields.append("payment_rejection_reason")
+            self.quote_request.save(update_fields=update_fields)
             from core.notifications import publish_quote_status_changed
 
             transaction.on_commit(
@@ -223,10 +243,94 @@ class InventoryReservation(TimeStampedModel):
         ]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(quantity__gt=0),
+                condition=models.Q(quantity__gte=0),
                 name="orders_inventory_reservation_positive_quantity",
             ),
         ]
 
     def __str__(self):
         return f"{self.product} x {self.quantity} for {self.order_item.order}"
+
+
+class Shipment(TimeStampedModel):
+    """A dispatched delivery of reserved units for one order.
+
+    Created only when stock is actually shipped: on-hand and reserved
+    quantities are reduced together and the shipment rows form the
+    fulfillment audit trail.
+    """
+
+    order = models.ForeignKey(
+        Order,
+        on_delete=models.PROTECT,
+        related_name="shipments",
+    )
+    idempotency_key = models.UUIDField(unique=True, editable=False)
+    shipment_number = models.CharField(max_length=40, unique=True, blank=True)
+    carrier = models.CharField(max_length=120, blank=True)
+    tracking_number = models.CharField(max_length=120, blank=True)
+    notes = models.TextField(blank=True)
+    shipped_at = models.DateTimeField(default=timezone.now, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_shipments",
+    )
+    shipping_address = models.CharField(max_length=255)
+    shipping_city = models.CharField(max_length=120)
+    shipping_state = models.CharField(max_length=120, blank=True)
+    shipping_postal_code = models.CharField(max_length=20, blank=True)
+    shipping_country = models.CharField(max_length=120)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(fields=["order", "shipped_at"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        if not self.shipment_number:
+            self.shipment_number = f"SHP-{self.created_at.year}-{self.pk:06d}"
+            super().save(update_fields=["shipment_number"])
+
+    def __str__(self):
+        return self.shipment_number or f"Shipment {self.pk}"
+
+
+class ShipmentItem(TimeStampedModel):
+    shipment = models.ForeignKey(
+        Shipment,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    order_item = models.ForeignKey(
+        OrderItem,
+        on_delete=models.PROTECT,
+        related_name="shipment_items",
+    )
+    quantity = models.PositiveIntegerField()
+    product_name = models.CharField(max_length=255)
+    sku = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        ordering = ("id",)
+        indexes = [
+            models.Index(fields=["shipment", "order_item"]),
+            models.Index(fields=["order_item", "shipment"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gt=0),
+                name="orders_shipment_item_positive_quantity",
+            ),
+            models.UniqueConstraint(
+                fields=["shipment", "order_item"],
+                name="orders_shipment_item_unique_shipment_order_item",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.shipment} - {self.product_name} x {self.quantity}"

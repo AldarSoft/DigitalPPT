@@ -1,10 +1,12 @@
-import { lazy, Suspense, useEffect } from 'react'
-import { Route, Routes, useLocation } from 'react-router-dom'
+import { lazy, Suspense, useEffect, type ReactNode } from 'react'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { RequireAuth } from './guards/RequireAuth'
-import { RequireStaff } from './guards/RequireStaff'
+import { RequireStaff, RequireStaffPermission } from './guards/RequireStaff'
 import { AdminLayout } from '../layouts/AdminLayout'
 import { PublicLayout } from '../layouts/PublicLayout'
 import { HomePage } from '../pages/HomePage'
+import { useAuth } from '../contexts/AuthContext'
+import { tw } from '../lib/tailwind-styles'
 
 const AccountPage = lazy(() => import('../features/account/pages/AccountPage').then((module) => ({ default: module.AccountPage })))
 const AdminAnalyticsPage = lazy(() => import('../features/admin/pages/AdminAnalyticsPage').then((module) => ({ default: module.AdminAnalyticsPage })))
@@ -70,21 +72,57 @@ export function AppRouter() {
         </Route>
         <Route element={<RequireStaff />}>
           <Route path="admin" element={<AdminLayout />}>
-            <Route index element={<AdminDashboardPage />} />
-            <Route path="products" element={<AdminProductsPage />} />
-            <Route path="orders" element={<AdminOrdersPage />} />
-            <Route path="payments" element={<AdminPaymentsPage />} />
-            <Route path="quotes" element={<AdminQuotesPage />} />
-            <Route path="customers" element={<AdminCustomersPage />} />
-            <Route path="licenses" element={<AdminLicensesPage />} />
-            <Route path="licenses/:organizationId" element={<AdminLicenseDetailPage />} />
-            <Route path="inventory" element={<AdminInventoryPage />} />
-            <Route path="analytics" element={<AdminAnalyticsPage />} />
-            <Route path="site-settings" element={<AdminSiteSettingsPage />} />
+            <Route index element={<AdminRoleHome dashboard={<AdminDashboardPage />} />} />
+            <Route element={<RequireStaffPermission anyOf={['manage_inventory']} />}>
+              <Route path="products" element={<AdminProductsPage />} />
+              <Route path="inventory" element={<AdminInventoryPage />} />
+            </Route>
+            <Route element={<RequireStaffPermission anyOf={['manage_orders']} />}>
+              <Route path="orders" element={<AdminOrdersPage />} />
+            </Route>
+            <Route element={<RequireStaffPermission anyOf={['manage_payment_settings', 'confirm_bank_payments']} />}>
+              <Route path="payments" element={<AdminPaymentsPage />} />
+            </Route>
+            <Route element={<RequireStaffPermission anyOf={['manage_quotes', 'confirm_bank_payments']} />}>
+              <Route path="quotes" element={<AdminQuotesPage />} />
+            </Route>
+            <Route element={<RequireStaffPermission anyOf={['manage_users']} />}>
+              <Route path="customers" element={<AdminCustomersPage />} />
+            </Route>
+            <Route element={<RequireStaffPermission anyOf={['manage_licenses']} />}>
+              <Route path="licenses" element={<AdminLicensesPage />} />
+              <Route path="licenses/:organizationId" element={<AdminLicenseDetailPage />} />
+            </Route>
+            <Route element={<RequireStaffPermission role="Super Administrator" />}>
+              <Route path="analytics" element={<AdminAnalyticsPage />} />
+            </Route>
+            <Route element={<RequireStaffPermission anyOf={['manage_site_settings']} />}>
+              <Route path="site-settings" element={<AdminSiteSettingsPage />} />
+            </Route>
           </Route>
         </Route>
       </Routes>
       </Suspense>
     </>
   )
+}
+
+function AdminRoleHome({ dashboard }: { dashboard: ReactNode }) {
+  const { user } = useAuth()
+  if ((user?.staff_roles ?? []).includes('Super Administrator')) return dashboard
+
+  const destinations: Array<[string, string[]]> = [
+    ['/admin/quotes', ['manage_quotes', 'confirm_bank_payments']],
+    ['/admin/orders', ['manage_orders']],
+    ['/admin/payments', ['manage_payment_settings', 'confirm_bank_payments']],
+    ['/admin/products', ['manage_inventory']],
+    ['/admin/licenses', ['manage_licenses']],
+    ['/admin/customers', ['manage_users']],
+    ['/admin/site-settings', ['manage_site_settings']],
+  ]
+  const destination = destinations.find(([, permissions]) =>
+    permissions.some((permission) => (user?.staff_permissions ?? []).includes(permission)),
+  )
+  if (destination) return <Navigate to={destination[0]} replace />
+  return <main className={tw('admin-page')}><h1>No workspace assigned</h1><p>Ask a super administrator to assign a staff role to this account.</p></main>
 }

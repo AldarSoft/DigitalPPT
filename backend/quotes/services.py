@@ -17,15 +17,21 @@ logger = logging.getLogger(__name__)
 class QuoteService:
     ALLOWED_STATUS_TRANSITIONS = {
         QuoteRequest.Status.NEW: {QuoteRequest.Status.REVIEWING, QuoteRequest.Status.CANCELLED},
-        QuoteRequest.Status.REVIEWING: {QuoteRequest.Status.CANCELLED},
-        QuoteRequest.Status.QUOTED: set(),
-        QuoteRequest.Status.APPROVED: set(),
+        QuoteRequest.Status.REVIEWING: {
+            QuoteRequest.Status.QUOTE_APPROVED,
+            QuoteRequest.Status.CANCELLED,
+        },
+        QuoteRequest.Status.QUOTE_APPROVED: {QuoteRequest.Status.CANCELLED},
+        QuoteRequest.Status.INVOICE_SENT: set(),
+        QuoteRequest.Status.AWAITING_PAYMENT: set(),
+        QuoteRequest.Status.PAYMENT_CONFIRMED: set(),
+        QuoteRequest.Status.PAYMENT_REJECTED: set(),
         QuoteRequest.Status.CANCELLED: set(),
     }
 
     @staticmethod
     def _queryset():
-        return QuoteRequest.objects.prefetch_related(
+        return QuoteRequest.objects.select_related("renewal_license").prefetch_related(
             "items__product", "orders", "messages__author"
         )
 
@@ -98,13 +104,20 @@ class QuoteService:
         if quote_request.status == new_status:
             return quote_request
 
-        previous_status = quote_request.status
         allowed = QuoteService.ALLOWED_STATUS_TRANSITIONS[quote_request.status]
         if new_status not in allowed:
             raise ValidationError(
                 {"status": f"Cannot change a {quote_request.status} quote to {new_status}."}
             )
 
+        QuoteService._set_status(quote_request=quote_request, new_status=new_status)
+        return quote_request
+
+    @staticmethod
+    def _set_status(*, quote_request, new_status):
+        if quote_request.status == new_status:
+            return quote_request
+        previous_status = quote_request.status
         quote_request.status = new_status
         quote_request.save(update_fields=["status", "updated_at"])
         from core.notifications import publish_quote_status_changed
@@ -114,6 +127,44 @@ class QuoteService:
             publish_quote_status_changed(quote_id, old, new)
         )
         return quote_request
+
+    @staticmethod
+    @transaction.atomic
+    def mark_invoice_awaiting_payment(*, quote_id):
+        quote_request = QuoteRequest.objects.select_for_update().get(pk=quote_id)
+        if quote_request.status != QuoteRequest.Status.INVOICE_SENT:
+            return quote_request
+        return QuoteService._set_status(
+            quote_request=quote_request,
+            new_status=QuoteRequest.Status.AWAITING_PAYMENT,
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def mark_payment_rejected(*, quote_request, reason):
+        locked = QuoteRequest.objects.select_for_update().get(pk=quote_request.pk)
+        if locked.status not in {
+            QuoteRequest.Status.INVOICE_SENT,
+            QuoteRequest.Status.AWAITING_PAYMENT,
+            QuoteRequest.Status.PAYMENT_REJECTED,
+        }:
+            raise ValidationError({"status": "This quote is not awaiting a bank payment."})
+        previous_status = locked.status
+        locked.status = QuoteRequest.Status.PAYMENT_REJECTED
+        locked.payment_rejection_reason = reason.strip()
+        locked.save(update_fields=["status", "payment_rejection_reason", "updated_at"])
+        if previous_status != QuoteRequest.Status.PAYMENT_REJECTED:
+            from core.notifications import publish_quote_status_changed
+
+            transaction.on_commit(
+                lambda quote_id=locked.pk, old=previous_status:
+                publish_quote_status_changed(
+                    quote_id,
+                    old,
+                    QuoteRequest.Status.PAYMENT_REJECTED,
+                )
+            )
+        return locked
 
     @staticmethod
     def _apply_pricing(*, locked, item_prices, shipping, admin_message, updated_at):
@@ -149,7 +200,13 @@ class QuoteService:
     @transaction.atomic
     def add_message(*, quote_request, user, body):
         locked = QuoteRequest.objects.select_for_update().get(pk=quote_request.pk)
-        if locked.status not in {QuoteRequest.Status.REVIEWING, QuoteRequest.Status.QUOTED}:
+        if locked.status not in {
+            QuoteRequest.Status.REVIEWING,
+            QuoteRequest.Status.QUOTE_APPROVED,
+            QuoteRequest.Status.INVOICE_SENT,
+            QuoteRequest.Status.AWAITING_PAYMENT,
+            QuoteRequest.Status.PAYMENT_REJECTED,
+        }:
             raise ValidationError({"status": "Messages are available while a quote is being negotiated or awaiting payment."})
         sender_role = (
             QuoteMessage.SenderRole.ADMIN
@@ -204,11 +261,18 @@ class QuoteService:
     @transaction.atomic
     def issue_invoice(*, quote_request, user, item_prices, shipping, admin_message):
         locked = QuoteService._queryset().select_for_update().get(pk=quote_request.pk)
-        if locked.status not in {QuoteRequest.Status.REVIEWING, QuoteRequest.Status.QUOTED}:
-            raise ValidationError({"status": "Only a negotiated or pending invoice can be sent."})
+        allowed_statuses = {
+            QuoteRequest.Status.QUOTE_APPROVED,
+            QuoteRequest.Status.INVOICE_SENT,
+            QuoteRequest.Status.AWAITING_PAYMENT,
+            QuoteRequest.Status.PAYMENT_REJECTED,
+        }
+        if locked.status not in allowed_statuses:
+            raise ValidationError({"status": "Approve the quote before issuing its invoice."})
         from core.models import SiteSetting
         from orders.models import Order
         from payments.models import PaymentAttempt
+        from payments.services import PaymentService
         from quotes.invoice_pdf import build_invoice_pdf
 
         now = timezone.now()
@@ -217,11 +281,17 @@ class QuoteService:
         if existing_order:
             if existing_order.status != Order.Status.PENDING or existing_order.stock_deducted:
                 raise ValidationError({"status": "This invoice can no longer be changed because its order is already being processed."})
-            PaymentAttempt.objects.filter(
+            expired_attempts = PaymentAttempt.objects.select_for_update().filter(
                 order=existing_order,
                 status=PaymentAttempt.Status.PENDING,
                 expires_at__lte=now,
-            ).update(status=PaymentAttempt.Status.EXPIRED, updated_at=now)
+            )
+            for attempt in expired_attempts:
+                PaymentService.mark_pending_terminal(
+                    attempt=attempt,
+                    terminal_status=PaymentAttempt.Status.EXPIRED,
+                    reason="The checkout session expired before the invoice was revised.",
+                )
             if PaymentAttempt.objects.filter(
                 order=existing_order,
                 status__in={PaymentAttempt.Status.PENDING, PaymentAttempt.Status.SUCCEEDED},
@@ -237,9 +307,11 @@ class QuoteService:
         )
         locked.invoice_number = locked.invoice_number or f"INV-{now.year}-{locked.pk:06d}"
         locked.invoiced_at = now
-        locked.status = QuoteRequest.Status.QUOTED
+        locked.status = QuoteRequest.Status.INVOICE_SENT
+        locked.payment_rejection_reason = ""
         locked.save(update_fields=[
-            "invoice_number", "invoiced_at", "status", "updated_at",
+            "invoice_number", "invoiced_at", "status", "payment_rejection_reason",
+            "updated_at",
         ])
         pdf = build_invoice_pdf(
             quote_request=locked,
@@ -265,7 +337,7 @@ class QuoteService:
 
         transaction.on_commit(
             lambda quote_id=locked.pk, old=previous_status:
-            publish_quote_status_changed(quote_id, old, QuoteRequest.Status.QUOTED)
+            publish_quote_status_changed(quote_id, old, QuoteRequest.Status.INVOICE_SENT)
         )
         return QuoteService._queryset().get(pk=locked.pk)
 
@@ -300,8 +372,11 @@ class QuoteService:
             existing_order.tax_amount = Decimal("0.00")
             existing_order.total = quote_request.quoted_total
             existing_order.notes = quote_request.notes
+            existing_order.renewal_license = quote_request.renewal_license
+            if quote_request.renewal_license_id:
+                existing_order.organization = quote_request.renewal_license.organization
             existing_order.save(update_fields=[
-                "subtotal", "shipping_fee", "tax_amount", "total", "notes", "updated_at",
+                "subtotal", "shipping_fee", "tax_amount", "total", "notes", "renewal_license", "organization", "updated_at",
             ])
             return existing_order
 
@@ -311,6 +386,12 @@ class QuoteService:
         return OrderService.create_order(
             validated_data={
                 "quote_request": quote_request,
+                "renewal_license": quote_request.renewal_license,
+                "organization": (
+                    quote_request.renewal_license.organization
+                    if quote_request.renewal_license_id
+                    else None
+                ),
                 "customer_first_name": first_name,
                 "customer_last_name": last_name,
                 "customer_email": quote_request.requester_email,

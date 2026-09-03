@@ -42,7 +42,7 @@ export function StatusTimeline({
         {isTerminalException ? (
           <div className={tw('reached current exception')}>
             <span><Check size={13} /></span>
-            <small>{currentStatus}</small>
+            <small>{labelFor(steps, currentStatus)}</small>
           </div>
         ) : null}
       </div>
@@ -63,7 +63,8 @@ export function StatusTimeline({
 }
 
 function labelFor(steps: readonly TimelineStep[], status: string) {
-  return steps.find((step) => step.value === status)?.label ?? status
+  return steps.find((step) => step.value === status)?.label
+    ?? status.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase())
 }
 
 function formatDateTime(value: string) {

@@ -10,8 +10,66 @@ from rest_framework.test import APIClient
 
 from orders.models import InventoryReservation, Order, OrderItem
 from products.models import Category, InventoryAdjustment, Product
-from products.serializers import ProductSerializer, ProductWriteSerializer
+from products.serializers import AdminProductSerializer, ProductSerializer, ProductWriteSerializer
 from PIL import Image
+
+
+class ProductInventoryPrivacyTests(TestCase):
+    def setUp(self):
+        self.category = Category.objects.create(name="Privacy Catalog")
+        self.product = Product.objects.create(
+            category=self.category,
+            name="Privacy Radio",
+            sku="PRIV-RADIO",
+            price="250.00",
+            inventory_quantity=5,
+            status=Product.Status.PUBLISHED,
+        )
+        self.staff = get_user_model().objects.create_user(
+            username="privacy-staff",
+            email="privacy-staff@example.com",
+            password="StrongPass123!",
+            is_staff=True,
+            is_superuser=True,
+        )
+
+    def test_public_product_responses_omit_operational_inventory_fields(self):
+        response = APIClient().get("/api/v1/products/catalog/privacy-radio/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["inventory_quantity"], 5)
+        for field in (
+            "on_hand_inventory_quantity",
+            "reserved_inventory_quantity",
+            "backordered_inventory_quantity",
+            "status",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ):
+            self.assertNotIn(field, response.data)
+
+    def test_admin_product_responses_include_exact_inventory_fields(self):
+        api = APIClient()
+        api.force_authenticate(self.staff)
+        response = api.get("/api/v1/products/catalog/privacy-radio/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["on_hand_inventory_quantity"], 5)
+        self.assertEqual(response.data["reserved_inventory_quantity"], 0)
+        self.assertEqual(response.data["backordered_inventory_quantity"], 0)
+        self.assertEqual(response.data["status"], Product.Status.PUBLISHED)
+
+    def test_serializer_shapes_split_public_and_admin_fields(self):
+        public_data = ProductSerializer(self.product).data
+        admin_data = AdminProductSerializer(self.product).data
+
+        self.assertNotIn("on_hand_inventory_quantity", public_data)
+        self.assertNotIn("cost_price", public_data)
+        self.assertIn("on_hand_inventory_quantity", admin_data)
+        self.assertIn("reserved_inventory_quantity", admin_data)
+        self.assertIn("status", admin_data)
+        self.assertIn("inventory_quantity", public_data)
 
 
 class ProductImageSecurityTests(TestCase):
@@ -21,6 +79,7 @@ class ProductImageSecurityTests(TestCase):
             email="image-admin@example.com",
             password="StrongPass123!",
             is_staff=True,
+            is_superuser=True,
         )
         self.api = APIClient()
         self.api.force_authenticate(self.staff)
@@ -158,6 +217,7 @@ class InventoryAdjustmentTests(TestCase):
             email="inventory-admin@example.com",
             password="StrongPass123!",
             is_staff=True,
+            is_superuser=True,
         )
         category = Category.objects.create(name="Inventory")
         self.product = Product.objects.create(

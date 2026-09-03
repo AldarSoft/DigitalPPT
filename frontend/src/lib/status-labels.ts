@@ -15,8 +15,11 @@ const ORDER_STATUS: Record<Order['status'], SimpleStatus> = {
 const QUOTE_STATUS: Record<QuoteRequest['status'], SimpleStatus> = {
   new: 'pending',
   reviewing: 'processing',
-  quoted: 'processing',
-  approved: 'completed',
+  quote_approved: 'processing',
+  invoice_sent: 'processing',
+  awaiting_payment: 'pending',
+  payment_confirmed: 'completed',
+  payment_rejected: 'cancelled',
   cancelled: 'cancelled',
 }
 
@@ -42,7 +45,7 @@ export function orderStatusKey(status: Order['status']) {
 }
 
 export function quoteStatusKey(status: QuoteRequest['status'], orderStatus?: QuoteRequest['order_status']) {
-  if (status === 'quoted' && orderStatus === 'pending') return 'pending'
+  void orderStatus
   return QUOTE_STATUS[status]
 }
 
@@ -63,8 +66,11 @@ export function orderStatusLabel(status: Order['status'], source?: Order['source
 export function quoteStatusLabel(status: QuoteRequest['status'], orderStatus?: QuoteRequest['order_status']) {
   if (status === 'new') return 'Pending review'
   if (status === 'reviewing') return 'In review'
-  if (status === 'quoted' && orderStatus === 'pending') return 'Invoice ready'
-  if (status === 'quoted') return 'Invoice sent'
+  if (status === 'quote_approved') return 'Quote approved'
+  if (status === 'invoice_sent') return 'Invoice sent'
+  if (status === 'awaiting_payment') return 'Awaiting payment'
+  if (status === 'payment_confirmed') return 'Payment confirmed'
+  if (status === 'payment_rejected') return 'Payment rejected'
   return simpleStatusLabel(quoteStatusKey(status, orderStatus))
 }
 

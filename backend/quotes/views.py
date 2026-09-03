@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 
+from common.permissions import CanManageQuotes
 from quotes.models import QuoteRequest
 from quotes.serializers import (
     QuoteClaimSerializer,
@@ -37,11 +38,15 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         if self.action in {"create", "claim_access"}:
             return [AllowAny()]
         if self.action in {"partial_update", "update", "destroy"}:
-            return [IsAdminUser()]
-        if self.action in {"messages", "cancel", "claim"}:
+            return [CanManageQuotes()]
+        if self.action in {"messages", "cancel"}:
+            if self.request.user and self.request.user.is_staff:
+                return [CanManageQuotes()]
+            return [IsAuthenticated()]
+        if self.action == "claim":
             return [IsAuthenticated()]
         if self.action == "invoice":
-            return [IsAdminUser()]
+            return [CanManageQuotes()]
         return [IsAuthenticated()]
 
     def get_throttles(self):
@@ -54,8 +59,14 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
         display_status = self.request.query_params.get("display_status")
         display_statuses = {
             "pending": [QuoteRequest.Status.NEW],
-            "processing": [QuoteRequest.Status.REVIEWING, QuoteRequest.Status.QUOTED],
-            "completed": [QuoteRequest.Status.APPROVED],
+            "processing": [
+                QuoteRequest.Status.REVIEWING,
+                QuoteRequest.Status.QUOTE_APPROVED,
+                QuoteRequest.Status.INVOICE_SENT,
+                QuoteRequest.Status.AWAITING_PAYMENT,
+                QuoteRequest.Status.PAYMENT_REJECTED,
+            ],
+            "completed": [QuoteRequest.Status.PAYMENT_CONFIRMED],
             "cancelled": [QuoteRequest.Status.CANCELLED],
         }
         if display_status in display_statuses:
@@ -65,7 +76,11 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
 
         user = self.request.user
         if user and user.is_staff:
-            return queryset
+            if user.is_superuser or user.has_perm("users.manage_quotes") or user.has_perm(
+                "users.confirm_bank_payments"
+            ):
+                return queryset
+            return queryset.none()
         if not user or not user.is_authenticated:
             return queryset.none()
 
@@ -159,7 +174,9 @@ class QuoteRequestViewSet(viewsets.ModelViewSet):
             context={**self.get_serializer_context(), "quote_request": quote_request},
         )
         serializer.is_valid(raise_exception=True)
-        return self._serialize(serializer.save())
+        quote_request = serializer.save()
+        quote_request.refresh_from_db()
+        return self._serialize(quote_request)
 
     @action(detail=True, methods=["get"], url_path="invoice-pdf")
     def invoice_pdf(self, request, quote_number=None):

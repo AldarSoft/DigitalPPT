@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
 from django.db import models
+from django.db.models.functions import Lower
 from django.utils import timezone
 
 from common.models import TimeStampedModel
@@ -18,7 +19,7 @@ class UserManager(DjangoUserManager):
         if not username:
             raise ValueError("The username must be set.")
 
-        email = self.normalize_email(email)
+        email = self.normalize_email(email).strip().casefold()
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
         # Internal account creation is trusted. Public registration explicitly
@@ -59,9 +60,24 @@ class User(TimeStampedModel, AbstractUser):
     class Meta:
         verbose_name = "User"
         verbose_name_plural = "Users"
+        permissions = [
+            ("access_staff_workspace", "Can access the staff workspace"),
+            ("manage_inventory", "Can manage products and inventory"),
+            ("manage_quotes", "Can review quotes and issue invoices"),
+            ("manage_orders", "Can manage orders and fulfillment"),
+            ("confirm_bank_payments", "Can confirm reconciled bank payments"),
+            ("manage_payment_settings", "Can manage payment availability"),
+            ("manage_users", "Can manage customer accounts"),
+            ("manage_site_settings", "Can manage site settings"),
+            ("manage_licenses", "Can manage organization licenses"),
+            ("run_payment_simulations", "Can run development payment simulations"),
+        ]
         indexes = [
             models.Index(fields=["email", "is_active"]),
             models.Index(fields=["is_customer", "is_active"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(Lower("email"), name="users_user_email_ci_unique"),
         ]
 
     def __str__(self):
@@ -109,3 +125,28 @@ class UserProfile(TimeStampedModel):
 
     def __str__(self):
         return f"Profile for {self.user.email}"
+
+
+class StaffMfaChallenge(TimeStampedModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="staff_mfa_challenges",
+    )
+    challenge_digest = models.CharField(max_length=64, unique=True)
+    code_digest = models.CharField(max_length=64)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    expires_at = models.DateTimeField(db_index=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(
+                fields=["user", "consumed_at", "expires_at"],
+                name="users_mfa_user_state_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Staff MFA challenge for user {self.user_id}"

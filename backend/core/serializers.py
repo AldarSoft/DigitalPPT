@@ -1,12 +1,26 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from core.models import Banner, ContactMessage, Promotion, SiteSetting, UserNotification
-from common.validators import validate_phone
+from common.validators import validate_phone, validate_store_url
 
 
 class BannerSerializer(serializers.ModelSerializer):
+    cta_url = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=500,
+        validators=[validate_store_url],
+    )
+    image_url = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=500,
+        validators=[validate_store_url],
+    )
+
     class Meta:
         model = Banner
         fields = (
@@ -71,6 +85,19 @@ class PublicSiteSettingSerializer(serializers.ModelSerializer):
 
 
 class AdminSiteSettingSerializer(serializers.ModelSerializer):
+    homepage_hero_secondary_cta_url = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=500,
+        validators=[validate_store_url],
+    )
+    homepage_contact_cta_url = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=500,
+        validators=[validate_store_url],
+    )
+
     class Meta:
         model = SiteSetting
         fields = (
@@ -124,6 +151,20 @@ class AdminSiteSettingSerializer(serializers.ModelSerializer):
             "homepage_contact_cta_label",
             "homepage_contact_cta_url",
         )
+
+    def validate_homepage_resources(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Resources must be a list.")
+        for entry in value:
+            if not isinstance(entry, dict):
+                raise serializers.ValidationError("Each resource must be an object.")
+            try:
+                validate_store_url(entry.get("url", ""))
+            except DjangoValidationError as exc:
+                raise serializers.ValidationError(
+                    {"homepage_resources": str(exc)}
+                ) from exc
+        return value
 
 
 class ContactMessageSerializer(serializers.ModelSerializer):

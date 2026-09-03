@@ -25,6 +25,7 @@ from products.models import Category, Product
 from quotes.models import QuoteRequest
 
 
+@override_settings(DEBUG=True, PAYMENTS_DEVELOPMENT_SIMULATOR=True)
 class PaymentSuccessProvisioningTests(TestCase):
     def setUp(self):
         User = get_user_model()
@@ -480,6 +481,63 @@ class PaymentSuccessProvisioningTests(TestCase):
             [],
         )
 
+    def test_refund_cancels_license_created_by_payment(self):
+        _, license_item, attempt = self.create_license_only_order()
+        result = PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+        created_license = License.objects.get(source_order_item=license_item)
+
+        PaymentService.mark_refunded(attempt=result, reason="Customer refund.")
+
+        result.refresh_from_db()
+        created_license.refresh_from_db()
+        self.assertEqual(result.status, PaymentAttempt.Status.REFUNDED)
+        self.assertEqual(created_license.status, License.Status.CANCELLED)
+        self.assertEqual(
+            result.metadata["license_provisioning"]["status"],
+            "reversed",
+        )
+
+    def test_refund_restores_the_previous_renewal_expiry(self):
+        organization = OrganizationService.create(
+            name="Refund Renewal Organization",
+            owner=self.customer,
+            billing_email=self.customer.email,
+        )
+        license = LicenseLifecycleService.provision(
+            organization=organization,
+            license_product=self.license_product,
+            actor=self.customer,
+        )
+        previous_expiry = timezone.localdate() + timedelta(days=30)
+        License.objects.filter(pk=license.pk).update(
+            status=License.Status.EXPIRING_SOON,
+            expires_on=previous_expiry,
+            renews_on=previous_expiry + timedelta(days=1),
+        )
+        attempt, _ = PaymentService.start_license_renewal_checkout(
+            user=self.customer,
+            license_number=license.license_number,
+            organization_id=organization.pk,
+            provider=self.provider,
+            idempotency_key=uuid4(),
+            billing={"email": self.customer.email},
+        )
+        result = PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+
+        PaymentService.mark_refunded(attempt=result, reason="Renewal refund.")
+
+        license.refresh_from_db()
+        self.assertEqual(license.expires_on, previous_expiry)
+        self.assertEqual(license.status, License.Status.EXPIRING_SOON)
+
     def test_repeated_success_completes_a_legacy_paid_license_only_order(self):
         order, _, attempt = self.create_license_only_order()
 
@@ -506,7 +564,7 @@ class PaymentSuccessProvisioningTests(TestCase):
             user=self.customer,
             requester_contact_person="License Customer",
             requester_email=self.customer.email,
-            status=QuoteRequest.Status.QUOTED,
+            status=QuoteRequest.Status.AWAITING_PAYMENT,
         )
         order.quote_request = quote
         order.source = Order.Source.QUOTE
@@ -521,7 +579,7 @@ class PaymentSuccessProvisioningTests(TestCase):
         order.refresh_from_db()
         quote.refresh_from_db()
         self.assertEqual(order.status, Order.Status.COMPLETED)
-        self.assertEqual(quote.status, QuoteRequest.Status.APPROVED)
+        self.assertEqual(quote.status, QuoteRequest.Status.PAYMENT_CONFIRMED)
 
     def test_provisioning_failure_rolls_back_payment_order_and_inventory(self):
         order, _, _, attempt = self.create_order(include_license=False)

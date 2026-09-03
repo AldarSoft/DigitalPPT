@@ -4,8 +4,9 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
+
+from common.permissions import CanManageLicenses
 from rest_framework.views import APIView
 
 from common.pagination import DefaultPagination
@@ -54,7 +55,7 @@ def _paginated_payload(paginator, rows):
 
 
 class AdminOrganizationLicenseListView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         operation_id="admin_licensing_organization_list",
@@ -164,7 +165,7 @@ class AdminOrganizationLicenseListView(APIView):
 
 
 class AdminOrganizationLicenseDetailView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         operation_id="admin_licensing_organization_detail",
@@ -178,7 +179,7 @@ class AdminOrganizationLicenseDetailView(APIView):
 
 
 class AdminOrganizationLicenseHistoryView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         operation_id="admin_licensing_organization_history",
@@ -201,7 +202,7 @@ class AdminOrganizationLicenseHistoryView(APIView):
 
 
 class AdminOrganizationLicenseNotificationView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         operation_id="admin_licensing_organization_notifications",
@@ -256,7 +257,7 @@ class AdminOrganizationLicenseNotificationView(APIView):
 
 
 class AdminOrganizationRenewalInvoiceView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         operation_id="admin_licensing_organization_renewal_invoice",
@@ -280,7 +281,7 @@ class AdminOrganizationRenewalInvoiceView(APIView):
 
 
 class AdminOrganizationLicenseAdjustmentView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         operation_id="admin_licensing_organization_license_adjust",
@@ -311,7 +312,7 @@ class AdminOrganizationLicenseAdjustmentView(APIView):
 
 
 class AdminOrganizationUsersView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         summary="List organization users and invitations for staff support",
@@ -325,7 +326,7 @@ class AdminOrganizationUsersView(APIView):
 
 
 class AdminOrganizationInvitationCreateView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         summary="Invite a License Manager to an organization as staff",
@@ -355,7 +356,7 @@ class AdminOrganizationInvitationCreateView(APIView):
 
 
 class AdminOrganizationOwnershipTransferView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         summary="Transfer organization ownership to an active License Manager as staff",
@@ -381,7 +382,7 @@ class AdminOrganizationOwnershipTransferView(APIView):
 
 
 class AdminOrganizationInvitationActionView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
     action = None
 
     def post(self, request, organization_id, invitation_id):

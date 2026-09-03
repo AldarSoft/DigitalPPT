@@ -66,15 +66,20 @@ class QuoteRequestSerializer(serializers.ModelSerializer):
     order_number = serializers.SerializerMethodField()
     order_status = serializers.SerializerMethodField()
     invoice_pdf_url = serializers.SerializerMethodField()
+    renewal_license_number = serializers.CharField(
+        source="renewal_license.license_number",
+        read_only=True,
+        allow_null=True,
+    )
 
     class Meta:
         model = QuoteRequest
         fields = (
-            "id", "quote_number", "status", "order_number", "order_status",
+            "id", "quote_number", "status", "order_number", "order_status", "renewal_license_number",
             "requester_company_name", "requester_contact_person", "requester_email",
             "requester_phone", "notes", "admin_message", "quoted_subtotal",
             "quoted_shipping", "quoted_total", "quoted_at", "invoice_number",
-            "invoice_pdf_url", "invoiced_at",
+            "invoice_pdf_url", "invoiced_at", "payment_rejection_reason",
             "messages", "items", "created_at", "updated_at",
         )
 
@@ -109,6 +114,8 @@ class QuoteRequestSerializer(serializers.ModelSerializer):
             for item in data["items"]:
                 item["quoted_unit_price"] = None
                 item["quoted_line_total"] = None
+        if instance.status != QuoteRequest.Status.PAYMENT_REJECTED:
+            data["payment_rejection_reason"] = ""
         return data
 
 class QuoteRequestCreateItemSerializer(serializers.ModelSerializer):
@@ -187,7 +194,12 @@ class QuoteRequestStatusSerializer(serializers.ModelSerializer):
         fields = ("status",)
 
     def validate_status(self, value):
-        if value in {QuoteRequest.Status.QUOTED, QuoteRequest.Status.APPROVED}:
+        if value in {
+            QuoteRequest.Status.INVOICE_SENT,
+            QuoteRequest.Status.AWAITING_PAYMENT,
+            QuoteRequest.Status.PAYMENT_CONFIRMED,
+            QuoteRequest.Status.PAYMENT_REJECTED,
+        }:
             raise serializers.ValidationError("Use the invoice workflow for this status.")
         return value
 

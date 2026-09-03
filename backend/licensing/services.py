@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import date, timedelta
 from html import escape
 from urllib.parse import quote
 
@@ -408,6 +408,52 @@ class OrganizationService:
             created_by=created_by,
         )
 
+    @staticmethod
+    @transaction.atomic
+    def delete_organization(*, organization, actor):
+        """Delete an empty organization as its Owner.
+
+        Immutable license, allocation, order, and audit history protects real
+        organizations: deletion is only possible while the organization has no
+        business records and no members other than the acting Owner.
+        """
+        from orders.models import Order
+
+        locked = (
+            Organization.objects.select_for_update()
+            .prefetch_related("memberships", "invitations")
+            .get(pk=organization.pk)
+        )
+        if not OrganizationAccessPolicy.can_manage_team(
+            user=actor,
+            organization=locked,
+        ):
+            raise PermissionDenied("Only the Organization Owner can delete the organization.")
+
+        if locked.licenses.exists():
+            raise ValidationError({
+                "organization": "Organizations with licenses cannot be deleted. Cancel licenses instead."
+            })
+        if Order.objects.filter(organization=locked).exists():
+            raise ValidationError({
+                "organization": "Organizations with orders cannot be deleted."
+            })
+        if LicenseEvent.objects.filter(organization=locked).exists():
+            raise ValidationError({
+                "organization": "Organizations with license history cannot be deleted."
+            })
+        other_memberships = locked.memberships.exclude(user=actor).exists()
+        if other_memberships:
+            raise ValidationError({
+                "organization": "Remove other members before deleting the organization."
+            })
+        if locked.invitations.exists():
+            raise ValidationError({
+                "organization": "Organizations with invitation history cannot be deleted."
+            })
+        locked.delete()
+        return None
+
 
 class OrganizationSummaryService:
     ACTIVE_LICENSE_STATUSES = (
@@ -527,7 +573,12 @@ class OrganizationSummaryService:
                 "id": organization.pk,
                 "public_id": str(organization.public_id),
                 "name": organization.name,
-                "billing_email": organization.billing_email,
+                # Billing contact details are Owner-visible only.
+                "billing_email": (
+                    organization.billing_email
+                    if membership.role == OrganizationMembership.Role.OWNER
+                    else ""
+                ),
                 "current_user_role": membership.role,
             },
             "summary": {
@@ -773,6 +824,7 @@ class OrganizationLicenseListService:
                     "expires_on": license.expires_on,
                     "renews_on": license.renews_on,
                     "remaining_days": license.remaining_days,
+                    "has_pending_renewal": LicenseLifecycleService.has_pending_renewal(license),
                 }
             )
 
@@ -852,6 +904,7 @@ class ClientLicenseDetailService:
             "expires_on": license.expires_on,
             "renews_on": license.renews_on,
             "remaining_days": license.remaining_days,
+            "has_pending_renewal": LicenseLifecycleService.has_pending_renewal(license),
             "subscription": {
                 "term_days": license.license_product.license_term_days,
                 "starts_on": license.starts_on,
@@ -1292,6 +1345,35 @@ class LicenseLifecycleService:
             metadata=metadata or {},
         )
 
+    @staticmethod
+    def has_pending_renewal(license):
+        """True while a renewal payment or a quote-based renewal order is unresolved."""
+        from orders.models import Order
+        from payments.models import PaymentAttempt
+        from quotes.models import QuoteRequest
+
+        if PaymentAttempt.objects.filter(
+            renewal_license=license,
+            status=PaymentAttempt.Status.PENDING,
+        ).exists():
+            return True
+        if QuoteRequest.objects.filter(
+            renewal_license=license,
+            status__in=(
+                QuoteRequest.Status.NEW,
+                QuoteRequest.Status.REVIEWING,
+                QuoteRequest.Status.QUOTE_APPROVED,
+                QuoteRequest.Status.INVOICE_SENT,
+                QuoteRequest.Status.AWAITING_PAYMENT,
+                QuoteRequest.Status.PAYMENT_REJECTED,
+            ),
+        ).exists():
+            return True
+        return Order.objects.filter(
+            renewal_license=license,
+            status=Order.Status.PENDING,
+        ).exists()
+
     @classmethod
     @transaction.atomic
     def provision(
@@ -1453,7 +1535,9 @@ class LicenseLifecycleService:
     @classmethod
     @transaction.atomic
     def adjust(cls, *, license, actor, reason, capacity=None, status=None):
-        if not actor or not actor.is_authenticated or not actor.is_staff:
+        if not actor or not actor.is_authenticated or not actor.is_staff or not (
+            actor.is_superuser or actor.has_perm("users.manage_licenses")
+        ):
             raise PermissionDenied("Only staff can manually adjust licenses.")
         reason = (reason or "").strip()
         if not reason:
@@ -1534,15 +1618,16 @@ class LicenseLifecycleService:
         cls.record_event(
             organization=locked.organization,
             license=locked,
-            event_type=LicenseEvent.Type.ADJUSTED,
+            event_type=LicenseEvent.Type.CANCELLED,
             actor=actor,
             metadata={
-                "action": "owner_cancelled",
                 "reason": reason,
                 "previous": {"status": previous_status},
                 "current": {"status": License.Status.CANCELLED},
                 "cancelled_capacity": locked.capacity,
                 "cancelled_used_capacity": locked.used_capacity,
+                "cancelled_on": timezone.localdate().isoformat(),
+                "expires_on": locked.expires_on.isoformat() if locked.expires_on else None,
             },
         )
         OrganizationCoverageService.reconcile(organization=locked.organization)
@@ -1550,7 +1635,11 @@ class LicenseLifecycleService:
 
 
 class LicenseExpiryService:
-    WARNING_DAYS = (60, 30, 7)
+    @classmethod
+    def _warning_days(cls):
+        """Reminder thresholds from settings, ascending (LICENSE_REMINDER_DAYS)."""
+        days = getattr(settings, "LICENSE_REMINDER_DAYS", (60, 30, 7))
+        return tuple(sorted(int(day) for day in days))
 
     @classmethod
     def effective_status(cls, license, *, on_date=None):
@@ -1566,7 +1655,7 @@ class LicenseExpiryService:
             return license.status
         if remaining_days < 0:
             return License.Status.EXPIRED
-        if remaining_days <= max(cls.WARNING_DAYS):
+        if remaining_days <= max(cls._warning_days()):
             return License.Status.EXPIRING_SOON
         return License.Status.ACTIVE
 
@@ -1576,7 +1665,7 @@ class LicenseExpiryService:
             return "expired"
         if remaining_days == 0:
             return "expires_today"
-        for threshold in reversed(cls.WARNING_DAYS):
+        for threshold in reversed(cls._warning_days()):
             if remaining_days <= threshold:
                 return f"expires_in_{threshold}_days"
         return None
@@ -1621,7 +1710,7 @@ class LicenseExpiryService:
             if remaining_days < 0
             else (
                 License.Status.EXPIRING_SOON
-                if remaining_days <= max(cls.WARNING_DAYS)
+                if remaining_days <= max(cls._warning_days())
                 else License.Status.ACTIVE
             )
         )
@@ -1805,6 +1894,68 @@ class LicenseRenewalOrderService:
             "amount": product.price_for_quantity(1),
         }
 
+    @classmethod
+    @transaction.atomic
+    def request_quote(cls, *, user, license_number, organization_id=None):
+        from payments.services import PaymentService
+        from quotes.models import QuoteRequest, QuoteRequestItem
+
+        license, product = cls.resolve(
+            user=user,
+            license_number=license_number,
+            organization_id=organization_id,
+            lock=True,
+        )
+        unresolved_statuses = (
+            QuoteRequest.Status.NEW,
+            QuoteRequest.Status.REVIEWING,
+            QuoteRequest.Status.QUOTE_APPROVED,
+            QuoteRequest.Status.INVOICE_SENT,
+            QuoteRequest.Status.AWAITING_PAYMENT,
+            QuoteRequest.Status.PAYMENT_REJECTED,
+        )
+        existing = (
+            QuoteRequest.objects.select_for_update()
+            .filter(renewal_license=license, status__in=unresolved_statuses)
+            .order_by("-created_at", "-pk")
+            .first()
+        )
+        if existing:
+            return existing, False
+
+        PaymentService.close_pending_renewal_attempts(
+            renewal_license=license,
+            reason="Replaced by a quote-based renewal request.",
+        )
+        contact_name = user.get_full_name().strip() or user.email
+        quote_request = QuoteRequest.objects.create(
+            user=user,
+            renewal_license=license,
+            requester_company_name=license.organization.name,
+            requester_contact_person=contact_name,
+            requester_email=user.email,
+            requester_phone=getattr(user, "phone_number", "") or "",
+            notes=f"Renewal request for license {license.license_number}.",
+        )
+        QuoteRequestItem.objects.create(
+            quote_request=quote_request,
+            product=product,
+            product_name=product.name,
+            sku=product.sku,
+            quantity=1,
+            specifications={
+                "renewal": True,
+                "license_number": license.license_number,
+            },
+        )
+
+        from core.notifications import publish_quote_created
+
+        transaction.on_commit(
+            lambda quote_id=quote_request.pk: publish_quote_created(quote_id)
+        )
+        return quote_request, True
+
 
 @dataclass(frozen=True)
 class PaymentProvisioningResult:
@@ -1848,6 +1999,128 @@ class PaymentSuccessProvisioningService:
             created_allocation_ids=tuple(marker.get("allocation_ids", ())),
             already_completed=True,
         )
+
+    @classmethod
+    @transaction.atomic
+    def reverse(cls, *, payment_attempt, actor=None, reason="Payment refunded."):
+        from payments.models import PaymentAttempt
+
+        payment = PaymentAttempt.objects.select_for_update().select_related("order").get(
+            pk=payment_attempt.pk
+        )
+        marker = (payment.metadata or {}).get(cls.METADATA_KEY, {})
+        if marker.get("status") == "reversed" or not marker:
+            return
+        if marker.get("status") != "completed":
+            raise ValidationError({"payment": "License provisioning is not complete."})
+
+        for allocation in ProductLicenseAllocation.objects.select_for_update().filter(
+            pk__in=marker.get("allocation_ids", ()),
+            status=ProductLicenseAllocation.Status.ACTIVE,
+        ):
+            LicenseLifecycleService.release_allocation(
+                allocation=allocation,
+                actor=actor,
+                reason=reason,
+            )
+
+        created_licenses = list(
+            License.objects.select_for_update().filter(
+                pk__in=marker.get("license_ids", ())
+            )
+        )
+        for license in created_licenses:
+            if license.allocations.filter(
+                status=ProductLicenseAllocation.Status.ACTIVE
+            ).exists():
+                raise ValidationError({
+                    "payment": (
+                        f"License {license.license_number} has later active allocations. "
+                        "Release or move them before refunding this payment."
+                    )
+                })
+            if license.status != License.Status.CANCELLED:
+                previous_status = license.status
+                license.status = License.Status.CANCELLED
+                license.save(update_fields=["status", "updated_at"])
+                LicenseLifecycleService.record_event(
+                    organization=license.organization,
+                    license=license,
+                    event_type=LicenseEvent.Type.CANCELLED,
+                    actor=actor,
+                    metadata={
+                        "reason": reason,
+                        "payment_id": payment.pk,
+                        "previous_status": previous_status,
+                    },
+                )
+
+        order_item_ids = list(payment.order.items.values_list("pk", flat=True)) if payment.order_id else []
+        for license in License.objects.select_for_update().filter(
+            pk__in=marker.get("renewed_license_ids", ())
+        ):
+            renewal_event = next(
+                (
+                    event
+                    for event in license.events.filter(
+                        event_type=LicenseEvent.Type.RENEWED
+                    ).order_by("-occurred_at", "-pk")
+                    if event.metadata.get("source_order_item_id") in order_item_ids
+                ),
+                None,
+            )
+            if renewal_event is None:
+                raise ValidationError({"payment": "The renewal event could not be reconciled."})
+            expected_expiry = renewal_event.metadata.get("new_expiry")
+            if not expected_expiry or license.expires_on != date.fromisoformat(expected_expiry):
+                raise ValidationError({
+                    "payment": (
+                        f"License {license.license_number} changed after this payment. "
+                        "Review the refund manually."
+                    )
+                })
+            previous_expiry_value = renewal_event.metadata.get("previous_expiry")
+            previous_expiry = (
+                date.fromisoformat(previous_expiry_value)
+                if previous_expiry_value
+                else None
+            )
+            remaining_days = (
+                (previous_expiry - timezone.localdate()).days
+                if previous_expiry
+                else None
+            )
+            license.expires_on = previous_expiry
+            license.renews_on = previous_expiry + timedelta(days=1) if previous_expiry else None
+            if remaining_days is None or remaining_days < 0:
+                license.status = License.Status.EXPIRED
+            elif remaining_days <= LicenseRenewalOrderService.RENEWAL_WINDOW_DAYS:
+                license.status = License.Status.EXPIRING_SOON
+            else:
+                license.status = License.Status.ACTIVE
+            license.save(update_fields=["expires_on", "renews_on", "status", "updated_at"])
+            LicenseLifecycleService.record_event(
+                organization=license.organization,
+                license=license,
+                event_type=LicenseEvent.Type.ADJUSTED,
+                actor=actor,
+                metadata={
+                    "reason": reason,
+                    "payment_id": payment.pk,
+                    "reversed_renewal_event_id": renewal_event.pk,
+                    "restored_expiry": previous_expiry_value,
+                },
+            )
+
+        metadata = dict(payment.metadata or {})
+        metadata[cls.METADATA_KEY] = {
+            **marker,
+            "status": "reversed",
+            "reversed_at": timezone.now().isoformat(),
+            "reversal_reason": reason,
+        }
+        payment.metadata = metadata
+        payment.save(update_fields=["metadata", "updated_at"])
 
     @classmethod
     @transaction.atomic

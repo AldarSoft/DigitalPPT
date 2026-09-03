@@ -10,7 +10,7 @@ from django.db.models import Sum
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from orders.models import InventoryReservation, Order, OrderItem
+from orders.models import InventoryReservation, Order, OrderItem, Shipment, ShipmentItem
 from products.models import Product
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,11 @@ class InventoryReservationService:
             .filter(
                 product=product,
                 backordered_quantity__gt=0,
-                order__status=Order.Status.BACKORDERED,
+                order__status__in=(
+                    Order.Status.BACKORDERED,
+                    Order.Status.SCHEDULED,
+                    Order.Status.PROCESSING,
+                ),
             )
             .order_by("order__created_at", "id")
         )
@@ -154,12 +158,18 @@ class InventoryReservationService:
             allocation = min(item.backordered_quantity, available)
             reservation = InventoryReservation.objects.select_for_update().filter(order_item=item).first()
             if reservation:
-                reservation.quantity += allocation
+                if reservation.status == InventoryReservation.Status.RESERVED:
+                    reservation.quantity += allocation
+                else:
+                    # A consumed or released reservation no longer holds stock;
+                    # the new allocation is the whole reserved amount again.
+                    reservation.quantity = allocation
                 reservation.status = InventoryReservation.Status.RESERVED
+                reservation.consumed_at = None
                 reservation.released_at = None
                 reservation.release_reason = ""
                 reservation.save(update_fields=[
-                    "quantity", "status", "released_at", "release_reason", "updated_at",
+                    "quantity", "status", "consumed_at", "released_at", "release_reason", "updated_at",
                 ])
             else:
                 InventoryReservation.objects.create(order_item=item, product=product, quantity=allocation)
@@ -178,7 +188,9 @@ class InventoryReservationService:
 
         for order_id in changed_orders:
             order = Order.objects.prefetch_related("items__product").get(pk=order_id)
-            if not order.items.filter(backordered_quantity__gt=0).exists():
+            if order.status == Order.Status.BACKORDERED and not order.items.filter(
+                backordered_quantity__gt=0
+            ).exists():
                 OrderService.update_status(order=order, new_status=Order.Status.SCHEDULED)
         return list(changed_orders)
 
@@ -212,22 +224,36 @@ class InventoryReservationService:
             product = products[product_id]
             product.inventory_quantity -= quantity
             product.save(update_fields=["inventory_quantity", "updated_at"])
+        now = timezone.now()
         InventoryReservation.objects.filter(pk__in=[reservation.pk for reservation in reservations]).update(
+            quantity=0,
             status=InventoryReservation.Status.CONSUMED,
-            consumed_at=timezone.now(),
-            updated_at=timezone.now(),
+            consumed_at=now,
+            updated_at=now,
         )
-        OrderItem.objects.filter(
-            pk__in=[reservation.order_item_id for reservation in reservations]
-        ).update(
-            fulfillment_status=OrderItem.FulfillmentStatus.FULFILLED,
-            updated_at=timezone.now(),
-        )
+        items = {
+            item.pk: item
+            for item in OrderItem.objects.filter(
+                pk__in=[reservation.order_item_id for reservation in reservations]
+            )
+        }
+        for reservation in reservations:
+            item = items.get(reservation.order_item_id)
+            if not item:
+                continue
+            # A partially reserved line still awaits stock for its remainder.
+            item.fulfillment_status = (
+                OrderItem.FulfillmentStatus.FULFILLED
+                if not item.backordered_quantity
+                else OrderItem.FulfillmentStatus.BACKORDERED
+            )
+            item.reserved_quantity = 0
+            item.save(update_fields=["reserved_quantity", "fulfillment_status", "updated_at"])
         return True
 
     @staticmethod
     def release_for_order(*, order, reason):
-        return InventoryReservation.objects.filter(
+        released = InventoryReservation.objects.filter(
             order_item__order=order,
             status=InventoryReservation.Status.RESERVED,
         ).update(
@@ -235,6 +261,227 @@ class InventoryReservationService:
             released_at=timezone.now(),
             release_reason=reason[:255],
             updated_at=timezone.now(),
+        )
+        OrderItem.objects.filter(order=order).exclude(
+            reserved_quantity=0,
+            backordered_quantity=0,
+        ).update(
+            reserved_quantity=0,
+            backordered_quantity=0,
+            fulfillment_status=OrderItem.FulfillmentStatus.NOT_REQUIRED,
+            updated_at=timezone.now(),
+        )
+        return released
+
+
+def _item_fulfillment_status(item: OrderItem) -> str:
+    """Derive the fulfillment state from the reserved and backordered counts."""
+    if item.reserved_quantity and item.backordered_quantity:
+        return OrderItem.FulfillmentStatus.PARTIALLY_READY
+    if item.reserved_quantity:
+        return OrderItem.FulfillmentStatus.READY
+    if item.backordered_quantity:
+        return OrderItem.FulfillmentStatus.BACKORDERED
+    return OrderItem.FulfillmentStatus.FULFILLED
+
+
+class ShipmentService:
+    """Dispatch reserved units and record the shipment as fulfillment history."""
+
+    @staticmethod
+    @transaction.atomic
+    def create_shipment(
+        *,
+        order_number: str,
+        items,
+        idempotency_key=None,
+        carrier: str = "",
+        tracking_number: str = "",
+        notes: str = "",
+        actor=None,
+    ):
+        from payments.models import PaymentAttempt
+
+        existing_shipment = (
+            Shipment.objects.select_for_update()
+            .select_related("order")
+            .filter(idempotency_key=idempotency_key)
+            .first()
+        ) if idempotency_key else None
+        if existing_shipment:
+            if existing_shipment.order.order_number != order_number:
+                raise ValidationError({"idempotency_key": "This key is already in use."})
+            return (
+                Order.objects.select_related("user", "organization")
+                .prefetch_related("items__product", "shipments__items")
+                .get(pk=existing_shipment.order_id)
+            )
+
+        order = Order.objects.select_for_update().filter(order_number=order_number).first()
+        if not order:
+            raise ValidationError({"order_number": "Order not found."})
+        if not PaymentAttempt.objects.filter(
+            order=order,
+            status=PaymentAttempt.Status.SUCCEEDED,
+        ).exists():
+            raise ValidationError({"status": "Only paid orders can be shipped."})
+        if order.status not in {
+            Order.Status.BACKORDERED,
+            Order.Status.SCHEDULED,
+            Order.Status.PROCESSING,
+        }:
+            raise ValidationError({"status": f"Orders in “{order.status}” state cannot be shipped."})
+        if not items:
+            raise ValidationError({"items": "Add at least one item to ship."})
+
+        requested = {}
+        for entry in items:
+            item_id = entry.get("order_item_id") or entry.get("id")
+            quantity = entry.get("quantity")
+            if not isinstance(item_id, int) or item_id <= 0:
+                raise ValidationError({"items": "Each shipment line requires a valid order item."})
+            if not isinstance(quantity, int) or quantity <= 0:
+                raise ValidationError({"items": f"Ship at least one unit for item {item_id}."})
+            if item_id in requested:
+                raise ValidationError({"items": f"Item {item_id} is listed more than once."})
+            requested[item_id] = quantity
+
+        order_items = list(
+            OrderItem.objects.select_for_update()
+            .select_related("product")
+            .filter(order=order)
+        )
+        item_map = {item.pk: item for item in order_items}
+        reservations = {
+            reservation.order_item_id: reservation
+            for reservation in InventoryReservation.objects.select_for_update().filter(
+                order_item__order=order,
+                status=InventoryReservation.Status.RESERVED,
+            )
+        }
+
+        shipment_lines = []
+        errors = {}
+        for item_id, quantity in requested.items():
+            item = item_map.get(item_id)
+            if not item:
+                errors[str(item_id)] = "This item does not belong to the order."
+                continue
+            if not item.product_id or not item.product.is_stock_tracked:
+                errors[str(item_id)] = "This product has no physical stock to ship."
+                continue
+            reservation = reservations.get(item_id)
+            if not reservation:
+                errors[str(item_id)] = "No reserved stock is available for this item."
+                continue
+            if quantity > reservation.quantity:
+                errors[str(item_id)] = (
+                    f"Only {reservation.quantity} reserved unit(s) can be shipped; "
+                    f"{quantity} requested."
+                )
+                continue
+            shipment_lines.append((item, reservation, quantity))
+        if errors:
+            raise ValidationError({"items": errors})
+
+        product_totals = {}
+        for item, _reservation, quantity in shipment_lines:
+            product_totals[item.product_id] = product_totals.get(item.product_id, 0) + quantity
+        products = Product.objects.select_for_update().in_bulk(product_totals)
+        stock_errors = {}
+        for product_id, quantity in product_totals.items():
+            product = products.get(product_id)
+            available = product.inventory_quantity if product else 0
+            if available < quantity:
+                stock_errors[str(product_id)] = (
+                    f"Only {available} units remain on hand; {quantity} required."
+                )
+        if stock_errors:
+            raise ValidationError({"inventory": stock_errors})
+
+        shipment = Shipment.objects.create(
+            order=order,
+            idempotency_key=idempotency_key or uuid4(),
+            carrier=carrier.strip(),
+            tracking_number=tracking_number.strip(),
+            notes=notes.strip(),
+            created_by=actor if getattr(actor, "is_authenticated", False) else None,
+            shipping_address=order.shipping_address,
+            shipping_city=order.shipping_city,
+            shipping_state=order.shipping_state,
+            shipping_postal_code=order.shipping_postal_code,
+            shipping_country=order.shipping_country,
+        )
+        ShipmentItem.objects.bulk_create([
+            ShipmentItem(
+                shipment=shipment,
+                order_item=item,
+                quantity=quantity,
+                product_name=item.product_name,
+                sku=item.sku,
+            )
+            for item, _reservation, quantity in shipment_lines
+        ])
+
+        # Shipping reduces on-hand and reserved quantities together.
+        for product_id, quantity in product_totals.items():
+            product = products[product_id]
+            product.inventory_quantity -= quantity
+            product.save(update_fields=["inventory_quantity", "updated_at"])
+        now = timezone.now()
+        for item, reservation, quantity in shipment_lines:
+            remaining = reservation.quantity - quantity
+            if remaining:
+                reservation.quantity = remaining
+                reservation.save(update_fields=["quantity", "updated_at"])
+            else:
+                reservation.quantity = 0
+                reservation.status = InventoryReservation.Status.CONSUMED
+                reservation.consumed_at = now
+                reservation.save(update_fields=["quantity", "status", "consumed_at", "updated_at"])
+            item.reserved_quantity = remaining
+            item.fulfillment_status = _item_fulfillment_status(item)
+            item.save(update_fields=["reserved_quantity", "fulfillment_status", "updated_at"])
+
+        order.stock_deducted = True
+        order.save(update_fields=["stock_deducted", "updated_at"])
+
+        physical_items = [
+            item for item in order_items
+            if item.product_id and item.product.is_stock_tracked
+        ]
+        remaining_backordered = any(item.backordered_quantity for item in physical_items)
+        remaining_reserved = any(item.reserved_quantity for item in physical_items)
+        if remaining_reserved or remaining_backordered:
+            target_status = (
+                Order.Status.BACKORDERED
+                if remaining_backordered
+                else Order.Status.SCHEDULED
+            )
+        else:
+            target_status = Order.Status.COMPLETED
+
+        if target_status != order.status and target_status in OrderService.ALLOWED_STATUS_TRANSITIONS.get(
+            order.status, set()
+        ):
+            OrderService.update_status(order=order, new_status=target_status)
+
+        from core.notifications import publish_order_shipped
+
+        transaction.on_commit(
+            lambda shipment_id=shipment.pk: publish_order_shipped(shipment_id)
+        )
+
+        logger.info(
+            "Shipment %s created for order %s with %s line(s)",
+            shipment.shipment_number,
+            order.order_number,
+            len(shipment_lines),
+        )
+        return (
+            Order.objects.select_related("user", "organization")
+            .prefetch_related("items__product", "shipments__items")
+            .get(pk=order.pk)
         )
 
 
@@ -252,10 +499,12 @@ class OrderService:
             Order.Status.CANCELLED,
         },
         Order.Status.PROCESSING: {
+            Order.Status.BACKORDERED,
             Order.Status.COMPLETED,
             Order.Status.CANCELLED,
         },
         Order.Status.SCHEDULED: {
+            Order.Status.BACKORDERED,
             Order.Status.PROCESSING,
             Order.Status.COMPLETED,
             Order.Status.CANCELLED,
@@ -273,6 +522,7 @@ class OrderService:
     def create_order(*, validated_data, user=None):
         items_data = validated_data.pop("items")
         quote_request = validated_data.pop("quote_request", None)
+        renewal_license = validated_data.pop("renewal_license", None)
         validated_data.pop("quote_number", None)
         tax_amount = validated_data.pop("tax_amount", Decimal("0.00"))
         shipping_fee = validated_data.pop("shipping_fee", Decimal("0.00"))
@@ -297,6 +547,7 @@ class OrderService:
             user=order_user,
             organization=organization,
             quote_request=quote_request,
+            renewal_license=renewal_license,
             source=Order.Source.QUOTE if quote_request else Order.Source.ADMIN,
             **validated_data,
         )
@@ -479,6 +730,36 @@ class OrderService:
                 {"status": f"Cannot change order from {locked_order.status} to {new_status}."}
             )
 
+        if new_status in {Order.Status.PROCESSING, Order.Status.COMPLETED} and locked_order.items.filter(
+            backordered_quantity__gt=0
+        ).exists():
+            raise ValidationError(
+                {"status": "Items on this order await stock. Ship or allocate stock for all items before completing the order."}
+            )
+
+        if new_status in {Order.Status.PROCESSING, Order.Status.COMPLETED}:
+            from payments.models import PaymentAttempt
+
+            has_paid_physical_items = (
+                PaymentAttempt.objects.filter(
+                    order=locked_order,
+                    status=PaymentAttempt.Status.SUCCEEDED,
+                ).exists()
+                and locked_order.items.exclude(
+                    product__licensing_role=Product.LicensingRole.LICENSE_PRODUCT
+                ).filter(product__isnull=False).exists()
+            )
+            has_unshipped_items = locked_order.items.exclude(
+                product__licensing_role=Product.LicensingRole.LICENSE_PRODUCT
+            ).filter(
+                product__isnull=False,
+                reserved_quantity__gt=0,
+            ).exists()
+            if has_paid_physical_items and has_unshipped_items:
+                raise ValidationError({
+                    "status": "Create a shipment for reserved physical products instead of changing the order status directly."
+                })
+
         item_quantities = InventoryReservationService.item_quantities(order=locked_order)
 
         should_deduct = (
@@ -552,8 +833,10 @@ class AdminManualOrderService:
     @staticmethod
     @transaction.atomic
     def create(*, validated_data, actor):
-        if not actor or not actor.is_staff:
-            raise ValidationError({"detail": "Administrator access is required."})
+        if not actor or not actor.is_staff or not (
+            actor.is_superuser or actor.has_perm("users.manage_orders")
+        ):
+            raise ValidationError({"detail": "Order management access is required."})
 
         from licensing.models import Organization, OrganizationMembership
         from licensing.services import CartLicenseService, OrganizationService
@@ -656,6 +939,7 @@ class AdminManualOrderService:
                 metadata={"source": "admin_manual_order", "verified_by": actor.pk},
                 created_by=actor,
             )
+            PaymentService.record_attempt_created(attempt=attempt, actor=actor)
             PaymentService.complete_success(
                 attempt=attempt,
                 actor=actor,

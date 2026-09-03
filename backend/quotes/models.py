@@ -11,8 +11,11 @@ class QuoteRequest(TimeStampedModel):
     class Status(models.TextChoices):
         NEW = "new", "New"
         REVIEWING = "reviewing", "Reviewing"
-        QUOTED = "quoted", "Invoice sent"
-        APPROVED = "approved", "Converted"
+        QUOTE_APPROVED = "quote_approved", "Quote approved"
+        INVOICE_SENT = "invoice_sent", "Invoice sent"
+        AWAITING_PAYMENT = "awaiting_payment", "Awaiting payment"
+        PAYMENT_CONFIRMED = "payment_confirmed", "Payment confirmed"
+        PAYMENT_REJECTED = "payment_rejected", "Payment rejected"
         CANCELLED = "cancelled", "Cancelled"
 
     user = models.ForeignKey(
@@ -21,6 +24,13 @@ class QuoteRequest(TimeStampedModel):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="quote_requests",
+    )
+    renewal_license = models.ForeignKey(
+        "licensing.License",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="renewal_quote_requests",
     )
     quote_number = models.CharField(max_length=40, unique=True, blank=True)
     status = models.CharField(
@@ -42,6 +52,7 @@ class QuoteRequest(TimeStampedModel):
     admin_agreed = models.BooleanField(default=False)
     customer_agreed = models.BooleanField(default=False)
     invoice_number = models.CharField(max_length=40, unique=True, blank=True, null=True)
+    payment_rejection_reason = models.TextField(blank=True)
     invoice_pdf = models.FileField(
         upload_to="quotes/invoices/",
         storage=private_media_storage,

@@ -11,8 +11,8 @@ export const clientLicenseListFixture: ClientLicenseListResponse = {
   summary: { license_count: 2, active_license_count: 2, expiring_soon_count: 0, expired_license_count: 0, total_capacity: 400, used_capacity: 250, available_capacity: 150, next_expiry: '2027-08-17', next_expiry_remaining_days: 363, licensed_product_count: 4, licensed_product_quantity: 250, usable_license_capacity: 400, overflow_quantity: 0 },
   renewal_request: { issued: false, issued_at: null },
   licenses: [
-    { id: 1, license_number: 'LIC-RA-01482', name: 'RadioAdmin License 01', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 200, available_capacity: 0, capacity_percentage: 100, starts_on: '2026-08-18', expires_on: '2027-08-17', renews_on: '2027-08-18', remaining_days: 363 },
-    { id: 2, license_number: 'LIC-RA-01509', name: 'RadioAdmin License 02', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 50, available_capacity: 150, capacity_percentage: 25, starts_on: '2027-03-04', expires_on: '2028-03-03', renews_on: '2028-03-04', remaining_days: 562 },
+    { id: 1, license_number: 'LIC-RA-01482', name: 'RadioAdmin License 01', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 200, available_capacity: 0, capacity_percentage: 100, starts_on: '2026-08-18', expires_on: '2027-08-17', renews_on: '2027-08-18', remaining_days: 363, has_pending_renewal: false },
+    { id: 2, license_number: 'LIC-RA-01509', name: 'RadioAdmin License 02', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 50, available_capacity: 150, capacity_percentage: 25, starts_on: '2027-03-04', expires_on: '2028-03-03', renews_on: '2028-03-04', remaining_days: 562, has_pending_renewal: true },
   ],
 }
 
@@ -29,6 +29,7 @@ export const clientLicenseDetailFixture: ClientLicenseDetail = {
   expires_on: '2027-08-17',
   renews_on: '2027-08-18',
   remaining_days: 363,
+  has_pending_renewal: false,
   subscription: { term_days: 365, starts_on: '2026-08-18', expires_on: '2027-08-17', renews_on: '2027-08-18', remaining_days: 363, source_order: { order_number: 'ORD-2026-000021', ordered_at: '2026-08-18T09:30:00Z' } },
   allocations: [
     { id: 1, product: { id: 1, name: 'IPTT710 Android', sku: 'IPTT710' }, quantity: 120, source_order: { order_number: 'ORD-2026-000021', ordered_at: '2026-01-12T09:30:00Z' } },
@@ -50,7 +51,7 @@ export const organizationTeamFixture: OrganizationTeamResponse = {
 }
 
 export const adminOrganizationListFixture: AdminOrganizationLicenseListResponse = {
-  summary: { organizations_with_licenses: 42, active_licenses: 1268, licenses_expiring_in_60_days: 86, payments_in_review: 4 },
+  summary: { organizations_with_licenses: 42, active_licenses: 1268, licenses_expiring_in_60_days: 86, organizations_needing_capacity: 7, payments_in_review: 4 },
   count: 4,
   next: null,
   previous: null,

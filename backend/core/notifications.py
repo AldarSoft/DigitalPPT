@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 ORDER_STATUS_LABELS = {
     "pending": "Pending",
     "backordered": "Awaiting stock",
-    "scheduled": "Processing",
+    "scheduled": "Ready to ship",
     "processing": "Processing",
     "completed": "Completed",
     "cancelled": "Cancelled",
@@ -28,8 +28,11 @@ ORDER_STATUS_LABELS = {
 QUOTE_STATUS_LABELS = {
     "new": "Pending",
     "reviewing": "Processing",
-    "quoted": "Invoice ready",
-    "approved": "Completed",
+    "quote_approved": "Quote approved",
+    "invoice_sent": "Invoice sent",
+    "awaiting_payment": "Awaiting payment",
+    "payment_confirmed": "Payment confirmed",
+    "payment_rejected": "Payment rejected",
     "cancelled": "Cancelled",
 }
 
@@ -46,9 +49,21 @@ def _customer_recipients(*, user_id: int | None, email: str):
     return User.objects.filter(recipient_filter, is_active=True).distinct()
 
 
-def _staff_recipients():
+def _staff_recipients(*permission_codenames: str):
     User = get_user_model()
-    return User.objects.filter(is_staff=True, is_active=True)
+    queryset = User.objects.filter(is_staff=True, is_active=True)
+    if not permission_codenames:
+        return queryset.filter(is_superuser=True)
+    permission_filter = Q(is_superuser=True)
+    permission_filter |= Q(
+        user_permissions__content_type__app_label="users",
+        user_permissions__codename__in=permission_codenames,
+    )
+    permission_filter |= Q(
+        groups__permissions__content_type__app_label="users",
+        groups__permissions__codename__in=permission_codenames,
+    )
+    return queryset.filter(permission_filter).distinct()
 
 
 def _create_portal_notifications(*, recipients, title: str, message: str, url: str) -> None:
@@ -249,6 +264,9 @@ def _send_quote_ready_email(payload: dict) -> None:
         recipients=[quote_request.requester_email],
         attachments=attachments,
     )
+    from quotes.services import QuoteService
+
+    QuoteService.mark_invoice_awaiting_payment(quote_id=quote_request.pk)
 
 
 def _send_quote_message_email(payload: dict) -> None:
@@ -306,7 +324,7 @@ def _send_order_status_email(payload: dict) -> None:
     from orders.models import Order
 
     order = Order.objects.get(pk=payload["order_id"])
-    status_label = payload["new_status"].replace("_", " ").title()
+    status_label = _status_label(payload["new_status"], ORDER_STATUS_LABELS)
     text_body = (
         f"Hello {order.customer_first_name},\n\n"
         f"Your order {order.order_number} is now {status_label}.\n"
@@ -322,6 +340,41 @@ def _send_order_status_email(payload: dict) -> None:
     )
     send_application_email(
         subject=f"Order update: {order.order_number}",
+        text_body=text_body,
+        html_body=html_body,
+        recipients=[order.customer_email],
+    )
+
+
+def _send_order_shipped_email(payload: dict) -> None:
+    from orders.models import Shipment
+
+    shipment = Shipment.objects.select_related("order").get(pk=payload["shipment_id"])
+    order = shipment.order
+    carrier_name = shipment.carrier or "our warehouse"
+    tracking = shipment.tracking_number or "not provided"
+    addon = (f"\nCarrier: {carrier_name}\nTracking number: {tracking}\n" if carrier_name else "\n")
+    text_body = (
+        f"Hello {order.customer_first_name},\n\n"
+        f"Your order {order.order_number} has shipped.{addon}"
+        f"Order total: {order.total}\n\n"
+        f"{settings.SITE_NAME}"
+    )
+    html_rows = ""
+    if carrier_name:
+        html_rows = (
+            f"<p><strong>Carrier:</strong> {escape(carrier_name)}<br>"
+            f"<strong>Tracking number:</strong> {escape(tracking)}</p>"
+        )
+    html_body = (
+        f"<p>Hello {escape(order.customer_first_name)},</p>"
+        f"<p>Your order <strong>{escape(order.order_number)}</strong> has shipped.</p>"
+        f"{html_rows}"
+        f"<p><strong>Order total:</strong> {order.total}</p>"
+        f"<p>{escape(settings.SITE_NAME)}</p>"
+    )
+    send_application_email(
+        subject=f"Order shipped: {order.order_number}",
         text_body=text_body,
         html_body=html_body,
         recipients=[order.customer_email],
@@ -402,6 +455,7 @@ HANDLERS = {
     NotificationJob.Kind.QUOTE_MESSAGE_EMAIL: _send_quote_message_email,
     NotificationJob.Kind.ORDER_STATUS_EMAIL: _send_order_status_email,
     NotificationJob.Kind.ORDER_STATUS_WEBHOOK: _send_order_status_webhook,
+    NotificationJob.Kind.ORDER_SHIPPED_EMAIL: _send_order_shipped_email,
     NotificationJob.Kind.LICENSE_EXPIRY_EMAIL: _send_license_expiry_email,
 }
 
@@ -470,7 +524,7 @@ def publish_quote_status_changed(
         url=f"/account?tab=quotes&quote={quote_number}",
     )
     _create_portal_notifications(
-        recipients=_staff_recipients(),
+        recipients=_staff_recipients("manage_quotes", "confirm_bank_payments"),
         title=f"Quote {quote_number} is {status_label}",
         message=(
             f"{quote_request.requester_contact_person}'s quote changed from "
@@ -491,20 +545,28 @@ def publish_order_status_changed(
     status_label = _status_label(new_status, ORDER_STATUS_LABELS)
     previous_label = _status_label(previous_status, ORDER_STATUS_LABELS)
     order_number = order.order_number
+    if previous_status == "backordered" and new_status == "scheduled":
+        customer_message = "All items are now in stock and ready to ship."
+        staff_message = (
+            "All backordered items are now in stock and ready to ship."
+        )
+    else:
+        customer_message = f"Your order changed from {previous_label} to {status_label}."
+        staff_message = (
+            f"{order.customer_first_name} {order.customer_last_name}'s order changed "
+            f"from {previous_label} to {status_label}."
+        )
 
     _create_portal_notifications(
         recipients=_customer_recipients(user_id=order.user_id, email=order.customer_email),
         title=f"Order {order_number} is {status_label}",
-        message=f"Your order changed from {previous_label} to {status_label}.",
+        message=customer_message,
         url="/account?tab=orders",
     )
     _create_portal_notifications(
-        recipients=_staff_recipients(),
+        recipients=_staff_recipients("manage_orders"),
         title=f"Order {order_number} is {status_label}",
-        message=(
-            f"{order.customer_first_name} {order.customer_last_name}'s order changed "
-            f"from {previous_label} to {status_label}."
-        ),
+        message=staff_message,
         url=f"/admin/orders?order={order_number}",
     )
 
@@ -516,6 +578,39 @@ def publish_order_status_changed(
     _dispatch(NotificationJob.Kind.ORDER_STATUS_EMAIL, payload)
     if settings.POWER_AUTOMATE_ENABLED:
         _dispatch(NotificationJob.Kind.ORDER_STATUS_WEBHOOK, payload)
+
+
+def publish_order_shipped(shipment_id: int) -> None:
+    from orders.models import Shipment
+
+    shipment = Shipment.objects.select_related("order").get(pk=shipment_id)
+    order = shipment.order
+    order_number = order.order_number
+    tracking_line = (
+        f" Tracking number: {shipment.tracking_number}."
+        if shipment.tracking_number
+        else ""
+    )
+
+    _create_portal_notifications(
+        recipients=_customer_recipients(user_id=order.user_id, email=order.customer_email),
+        title=f"Order {order_number} has shipped",
+        message=(
+            f"Your order shipped via {shipment.carrier or 'courier'}."
+            f"{tracking_line}"
+        ),
+        url="/account?tab=orders",
+    )
+    _create_portal_notifications(
+        recipients=_staff_recipients("manage_orders"),
+        title=f"Shipment {shipment.shipment_number} created",
+        message=(
+            f"{order.customer_first_name} {order.customer_last_name}'s order "
+            f"{order_number} shipped.{tracking_line}"
+        ),
+        url=f"/admin/orders?order={order_number}",
+    )
+    _dispatch(NotificationJob.Kind.ORDER_SHIPPED_EMAIL, {"shipment_id": shipment_id})
 
 
 def mark_job_sent(job: NotificationJob) -> None:

@@ -27,8 +27,12 @@ from licensing.services import (
     OrganizationService,
     ProductLicenseCompatibilityService,
 )
+from licensing.admin_services import AdminOrganizationLicenseService
 from orders.models import Order, OrderItem
+from payments.models import PaymentAttempt, PaymentProvider
+from payments.services import PaymentService
 from products.models import Category, Product
+from quotes.models import QuoteRequest
 
 
 class OrganizationDomainTests(TestCase):
@@ -54,6 +58,7 @@ class OrganizationDomainTests(TestCase):
             email="staff@example.com",
             password="StrongPass123!",
             is_staff=True,
+            is_superuser=True,
         )
         self.organization = OrganizationService.create(
             name="Digital PTT Aldarsoft",
@@ -309,6 +314,7 @@ class LicenseLifecycleTests(TestCase):
             email="license-staff@example.com",
             password="StrongPass123!",
             is_staff=True,
+            is_superuser=True,
         )
         self.organization = OrganizationService.create(
             name="Lifecycle Organization",
@@ -660,6 +666,42 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(summary["product_id"], self.license_product.pk)
         self.assertEqual(Order.objects.filter(renewal_license=license).count(), 0)
 
+    def test_license_manager_can_request_one_open_renewal_quote(self):
+        license = self.provision()
+        expiry = timezone.localdate() + timedelta(days=30)
+        License.objects.filter(pk=license.pk).update(
+            expires_on=expiry,
+            renews_on=expiry + timedelta(days=1),
+        )
+        provider = PaymentProvider.objects.get(code=PaymentProvider.Code.STRIPE)
+        pending_attempt = PaymentAttempt.objects.create(
+            renewal_license=license,
+            provider=provider,
+            amount=self.license_product.price,
+            status=PaymentAttempt.Status.PENDING,
+            created_by=self.manager,
+        )
+
+        first, created = LicenseRenewalOrderService.request_quote(
+            user=self.manager,
+            license_number=license.license_number,
+            organization_id=self.organization.pk,
+        )
+        repeated, repeated_created = LicenseRenewalOrderService.request_quote(
+            user=self.manager,
+            license_number=license.license_number,
+            organization_id=self.organization.pk,
+        )
+
+        pending_attempt.refresh_from_db()
+        self.assertTrue(created)
+        self.assertFalse(repeated_created)
+        self.assertEqual(repeated.pk, first.pk)
+        self.assertEqual(first.renewal_license, license)
+        self.assertEqual(first.items.get().product, self.license_product)
+        self.assertEqual(QuoteRequest.objects.filter(renewal_license=license).count(), 1)
+        self.assertEqual(pending_attempt.status, PaymentAttempt.Status.CANCELLED)
+
     def test_expired_license_notifies_without_disabling_allocated_products(self):
         license = self.provision()
         License.objects.filter(pk=license.pk).update(
@@ -758,18 +800,37 @@ class LicenseLifecycleTests(TestCase):
         api_client.force_authenticate(user=self.manager)
         forbidden = api_client.post(
             url,
-            {"password": "StrongPass123!", "reason": "Manager attempt"},
+            {
+                "password": "StrongPass123!",
+                "reason": "Manager attempt",
+                "confirmed_cancellation": True,
+            },
             format="json",
         )
         api_client.force_authenticate(user=self.owner)
         wrong_password = api_client.post(
             url,
-            {"password": "WrongPass123!", "reason": "Testing confirmation"},
+            {
+                "password": "WrongPass123!",
+                "reason": "Testing confirmation",
+                "confirmed_cancellation": True,
+            },
+            format="json",
+        )
+        unconfirmed = api_client.post(
+            url,
+            {
+                "password": "StrongPass123!",
+                "reason": "Missing confirmation flag",
+                "confirmed_cancellation": False,
+            },
             format="json",
         )
         license.refresh_from_db()
         self.assertEqual(forbidden.status_code, 403)
         self.assertEqual(wrong_password.status_code, 400)
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertIn("confirmed_cancellation", unconfirmed.data)
         self.assertEqual(license.status, License.Status.ACTIVE)
 
         cancelled = api_client.post(
@@ -777,6 +838,7 @@ class LicenseLifecycleTests(TestCase):
             {
                 "password": "StrongPass123!",
                 "reason": "Replacing this annual license",
+                "confirmed_cancellation": True,
             },
             format="json",
         )
@@ -786,10 +848,11 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(license.status, License.Status.CANCELLED)
         event = LicenseEvent.objects.get(
             license=license,
-            event_type=LicenseEvent.Type.ADJUSTED,
-            metadata__action="owner_cancelled",
+            event_type=LicenseEvent.Type.CANCELLED,
         )
         self.assertEqual(event.actor, self.owner)
+        self.assertEqual(event.metadata["reason"], "Replacing this annual license")
+        self.assertEqual(event.metadata["previous"], {"status": License.Status.ACTIVE})
         self.assertEqual(event.metadata["cancelled_used_capacity"], 3)
         summary = OrganizationCoverageService.summary(organization=self.organization)
         self.assertEqual(summary["licensed_product_count"], 1)
@@ -802,6 +865,192 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(listed.status_code, 200)
         self.assertEqual(listed.data["licenses"], [])
         self.assertEqual(listed.data["summary"]["overflow_quantity"], 3)
+
+    def test_cancellation_preserves_license_history_and_blocks_deletion(self):
+        license = self.provision(name="History License")
+        allocation = LicenseLifecycleService.allocate(
+            license=license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=1,
+        )
+        LicenseOrderItemProvisioning.objects.create(
+            organization=self.organization,
+            order_item=self.radio_order_item,
+            operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+            allocation_ids=[allocation.pk],
+        )
+        cancelled = LicenseLifecycleService.cancel_by_owner(
+            license=license,
+            actor=self.owner,
+            password="StrongPass123!",
+            reason="Switching provider",
+        )
+
+        cancelled.refresh_from_db()
+        self.assertEqual(cancelled.status, License.Status.CANCELLED)
+        self.assertEqual(ProductLicenseAllocation.objects.filter(license=license).count(), 1)
+        self.assertEqual(LicenseEvent.objects.filter(license=license).count(), 3)
+
+        with self.assertRaises(ValidationError):
+            cancelled.delete()
+        with self.assertRaises(ValidationError):
+            License.objects.filter(pk=cancelled.pk).delete()
+
+    def test_cancellation_event_is_immutable(self):
+        license = self.provision(name="Immutable Cancellation")
+        LicenseLifecycleService.cancel_by_owner(
+            license=license,
+            actor=self.owner,
+            password="StrongPass123!",
+            reason="Testing immutability",
+        )
+        event = LicenseEvent.objects.get(
+            license=license,
+            event_type=LicenseEvent.Type.CANCELLED,
+        )
+        with self.assertRaises(ValidationError):
+            event.save()
+        with self.assertRaises(ValidationError):
+            event.delete()
+
+    def test_reminder_thresholds_are_configurable(self):
+        today = timezone.localdate()
+        license = self.provision(name="Configurable Reminders")
+        License.objects.filter(pk=license.pk).update(
+            starts_on=today,
+            expires_on=today + timedelta(days=10),
+        )
+        license.refresh_from_db()
+
+        with override_settings(LICENSE_REMINDER_DAYS=(15, 5)):
+            locked, notified = LicenseExpiryService.reconcile(
+                license=license,
+                on_date=today,
+            )
+            self.assertTrue(notified)
+            self.assertEqual(locked.status, License.Status.EXPIRING_SOON)
+            notification_event = LicenseEvent.objects.get(
+                license=license,
+                event_type=LicenseEvent.Type.NOTIFICATION_SENT,
+            )
+            self.assertEqual(notification_event.metadata["stage"], "expires_in_15_days")
+            self.assertEqual(notification_event.metadata["remaining_days"], 10)
+            self.assertTrue(
+                UserNotification.objects.filter(
+                    title=f"License {license.license_number} expires in 10 days"
+                ).exists()
+            )
+
+    def test_pending_renewal_flag_tracks_attempts_and_orders(self):
+        license = self.provision(name="Pending Renewal License")
+        self.assertFalse(LicenseLifecycleService.has_pending_renewal(license))
+
+        provider, _ = PaymentProvider.objects.get_or_create(
+            code=PaymentProvider.Code.STRIPE,
+            defaults={"display_name": "Stripe", "is_enabled": True, "test_mode": True},
+        )
+        attempt = PaymentAttempt.objects.create(
+            renewal_license=license,
+            provider=provider,
+            amount="100.00",
+            status=PaymentAttempt.Status.PENDING,
+        )
+        self.assertTrue(LicenseLifecycleService.has_pending_renewal(license))
+        attempt.status = PaymentAttempt.Status.CANCELLED
+        attempt.save(update_fields=["status", "updated_at"])
+        self.assertFalse(LicenseLifecycleService.has_pending_renewal(license))
+
+        renewal_order = Order.objects.create(
+            user=self.owner,
+            renewal_license=license,
+            status=Order.Status.PENDING,
+            customer_first_name="License",
+            customer_last_name="Owner",
+            customer_email=self.owner.email,
+            shipping_address="1 Main Street",
+            shipping_city="Ulaanbaatar",
+            shipping_country="Mongolia",
+            subtotal="100.00",
+            total="100.00",
+        )
+        self.assertTrue(LicenseLifecycleService.has_pending_renewal(license))
+        renewal_order.status = Order.Status.CANCELLED
+        renewal_order.save(update_fields=["status", "updated_at"])
+        self.assertFalse(LicenseLifecycleService.has_pending_renewal(license))
+
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.owner)
+        detail = api_client.get(f"/api/v1/licensing/licenses/{license.license_number}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertFalse(detail.data["has_pending_renewal"])
+        PaymentAttempt.objects.create(
+            renewal_license=license,
+            provider=provider,
+            amount="100.00",
+            status=PaymentAttempt.Status.PENDING,
+        )
+        detail = api_client.get(f"/api/v1/licensing/licenses/{license.license_number}/")
+        self.assertTrue(detail.data["has_pending_renewal"])
+
+    def test_admin_summary_counts_organizations_needing_capacity(self):
+        summary = AdminOrganizationLicenseService.summary()
+        self.assertEqual(summary["organizations_needing_capacity"], 0)
+
+        license = self.provision(name="Needing Capacity License")
+        LicenseLifecycleService.allocate(
+            license=license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=2,
+        )
+        LicenseLifecycleService.cancel_by_owner(
+            license=license,
+            actor=self.owner,
+            password="StrongPass123!",
+            reason="Testing admin visibility",
+        )
+
+        summary = AdminOrganizationLicenseService.summary()
+        self.assertEqual(summary["organizations_needing_capacity"], 1)
+
+    def test_reconcile_skips_pending_and_cancelled_licenses(self):
+        today = timezone.localdate()
+        pending = License.objects.create(
+            organization=self.organization,
+            license_product=self.license_product,
+            name="Never Activated License",
+            status=License.Status.PENDING_PAYMENT,
+            capacity=3,
+        )
+        pending_locked, pending_notified = LicenseExpiryService.reconcile(
+            license=pending,
+            on_date=today,
+        )
+        self.assertFalse(pending_notified)
+        self.assertEqual(pending_locked.status, License.Status.PENDING_PAYMENT)
+
+        cancelled = License.objects.create(
+            organization=self.organization,
+            license_product=self.license_product,
+            name="Already Cancelled License",
+            status=License.Status.CANCELLED,
+            capacity=3,
+            starts_on=today,
+            expires_on=today + timedelta(days=30),
+        )
+        cancelled_locked, cancelled_notified = LicenseExpiryService.reconcile(
+            license=cancelled,
+            on_date=today,
+        )
+        self.assertFalse(cancelled_notified)
+        self.assertEqual(cancelled_locked.status, License.Status.CANCELLED)
+        self.assertFalse(
+            LicenseEvent.objects.filter(
+                license__in=[pending, cancelled],
+                event_type=LicenseEvent.Type.EXPIRED,
+            ).exists()
+        )
 
     def test_overflow_reminder_is_deduplicated_once_per_day(self):
         license = self.provision()
@@ -1673,6 +1922,272 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(event.actor, self.staff)
         self.assertEqual(event.metadata["reason"], "Approved support increase")
         self.assertEqual(wrong_organization.status_code, 404)
+
+
+class OrganizationPrivacyRoleMatrixTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(
+            username="privacy-owner@example.com",
+            email="privacy-owner@example.com",
+            password="StrongPass123!",
+        )
+        self.manager = User.objects.create_user(
+            username="privacy-manager@example.com",
+            email="privacy-manager@example.com",
+            password="StrongPass123!",
+        )
+        self.organization = OrganizationService.create(
+            name="Privacy Organization",
+            owner=self.owner,
+            billing_email="billing@privacy.example.com",
+        )
+        OrganizationMembership.objects.create(
+            organization=self.organization,
+            user=self.manager,
+            role=OrganizationMembership.Role.LICENSE_MANAGER,
+        )
+        category = Category.objects.create(name="Privacy products")
+        self.license_product = Product.objects.create(
+            category=category,
+            name="Privacy License",
+            sku="PRIV-LIC-3",
+            price="100.00",
+            licensing_role=Product.LicensingRole.LICENSE_PRODUCT,
+            license_capacity=3,
+            license_term_days=365,
+            status=Product.Status.PUBLISHED,
+        )
+        self.provider, _ = PaymentProvider.objects.get_or_create(
+            code=PaymentProvider.Code.STRIPE,
+            defaults={"display_name": "Stripe", "is_enabled": True, "test_mode": True},
+        )
+
+    def make_order(self, *, user, organization):
+        return Order.objects.create(
+            user=user,
+            organization=organization,
+            source=Order.Source.ADMIN,
+            customer_first_name="Privacy",
+            customer_last_name="Customer",
+            customer_email=user.email,
+            shipping_address="1 Private Street",
+            shipping_city="Ulaanbaatar",
+            shipping_country="Mongolia",
+            subtotal="100.00",
+            total="100.00",
+        )
+
+    def test_license_manager_sees_only_own_orders_in_organization_scope(self):
+        owner_order = self.make_order(user=self.owner, organization=self.organization)
+        manager_order = self.make_order(user=self.manager, organization=self.organization)
+        api_client = APIClient()
+        api_client.force_authenticate(self.manager)
+
+        response = api_client.get(
+            f"/api/v1/orders/?organization={self.organization.pk}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        order_numbers = [item["order_number"] for item in response.data["results"]]
+        self.assertIn(manager_order.order_number, order_numbers)
+        self.assertNotIn(owner_order.order_number, order_numbers)
+
+    def test_owner_sees_organization_orders(self):
+        owner_order = self.make_order(user=self.owner, organization=self.organization)
+        manager_order = self.make_order(user=self.manager, organization=self.organization)
+        api_client = APIClient()
+        api_client.force_authenticate(self.owner)
+
+        response = api_client.get(
+            f"/api/v1/orders/?organization={self.organization.pk}"
+        )
+
+        order_numbers = [item["order_number"] for item in response.data["results"]]
+        self.assertIn(owner_order.order_number, order_numbers)
+        self.assertIn(manager_order.order_number, order_numbers)
+
+    def test_license_manager_cannot_pay_organization_orders(self):
+        owner_order = self.make_order(user=self.owner, organization=self.organization)
+        manager_order = self.make_order(user=self.manager, organization=self.organization)
+
+        self.assertTrue(PaymentService.can_pay_order(user=self.owner, order=owner_order))
+        self.assertFalse(PaymentService.can_pay_order(user=self.manager, order=owner_order))
+        self.assertTrue(PaymentService.can_pay_order(user=self.manager, order=manager_order))
+
+    def test_license_manager_can_still_pay_license_renewals(self):
+        license = LicenseLifecycleService.provision(
+            organization=self.organization,
+            license_product=self.license_product,
+            actor=self.owner,
+        )
+        attempt = PaymentAttempt.objects.create(
+            renewal_license=license,
+            provider=self.provider,
+            amount="100.00",
+            status=PaymentAttempt.Status.PENDING,
+        )
+
+        self.assertTrue(PaymentService.can_pay_attempt(user=self.manager, attempt=attempt))
+
+    def test_billing_email_is_hidden_from_license_managers(self):
+        api_client = APIClient()
+        api_client.force_authenticate(self.manager)
+        summary = api_client.get(
+            f"/api/v1/licensing/organization/summary/?organization={self.organization.pk}"
+        )
+        self.assertEqual(summary.status_code, 200)
+        self.assertEqual(summary.data["organization"]["billing_email"], "")
+
+        settings_response = api_client.get(
+            f"/api/v1/licensing/organization/settings/?organization={self.organization.pk}"
+        )
+        self.assertEqual(settings_response.status_code, 200)
+        self.assertEqual(settings_response.data["billing_email"], "")
+
+        api_client.force_authenticate(self.owner)
+        owner_settings = api_client.get(
+            f"/api/v1/licensing/organization/settings/?organization={self.organization.pk}"
+        )
+        self.assertEqual(owner_settings.data["billing_email"], "billing@privacy.example.com")
+
+
+class OrganizationDeletionTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.owner = User.objects.create_user(
+            username="delete-owner@example.com",
+            email="delete-owner@example.com",
+            password="StrongPass123!",
+        )
+        self.manager = User.objects.create_user(
+            username="delete-manager@example.com",
+            email="delete-manager@example.com",
+            password="StrongPass123!",
+        )
+        self.outsider = User.objects.create_user(
+            username="delete-outsider@example.com",
+            email="delete-outsider@example.com",
+            password="StrongPass123!",
+        )
+
+    def create_organization(self):
+        return OrganizationService.create(
+            name="Deletable Organization",
+            owner=self.owner,
+        )
+
+    def test_owner_can_delete_an_empty_organization(self):
+        organization = self.create_organization()
+        api_client = APIClient()
+        api_client.force_authenticate(self.owner)
+
+        response = api_client.delete(f"/api/v1/licensing/organizations/{organization.pk}/")
+
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(Organization.objects.filter(pk=organization.pk).exists())
+
+    def test_manager_cannot_delete_the_organization(self):
+        organization = self.create_organization()
+        OrganizationMembership.objects.create(
+            organization=organization,
+            user=self.manager,
+            role=OrganizationMembership.Role.LICENSE_MANAGER,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(self.manager)
+
+        response = api_client.delete(f"/api/v1/licensing/organizations/{organization.pk}/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Organization.objects.filter(pk=organization.pk).exists())
+
+    def test_outsider_cannot_delete_the_organization(self):
+        organization = self.create_organization()
+        api_client = APIClient()
+        api_client.force_authenticate(self.outsider)
+
+        response = api_client.delete(f"/api/v1/licensing/organizations/{organization.pk}/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Organization.objects.filter(pk=organization.pk).exists())
+
+    def test_deletion_is_blocked_by_licenses_orders_events_members_and_invitations(self):
+        category = Category.objects.create(name="Deletion products")
+        license_product = Product.objects.create(
+            category=category,
+            name="Deletion License",
+            sku="DEL-LIC-3",
+            price="100.00",
+            licensing_role=Product.LicensingRole.LICENSE_PRODUCT,
+            license_capacity=3,
+            license_term_days=365,
+            status=Product.Status.PUBLISHED,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(self.owner)
+        url = None
+
+        # A license blocks deletion.
+        with_license = self.create_organization()
+        LicenseLifecycleService.provision(
+            organization=with_license,
+            license_product=license_product,
+            actor=self.owner,
+        )
+        response = api_client.delete(f"/api/v1/licensing/organizations/{with_license.pk}/")
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(Organization.objects.filter(pk=with_license.pk).exists())
+
+        # An order blocks deletion.
+        with_order = self.create_organization()
+        Order.objects.create(
+            user=self.owner,
+            organization=with_order,
+            source=Order.Source.ADMIN,
+            customer_first_name="Delete",
+            customer_last_name="Owner",
+            customer_email=self.owner.email,
+            shipping_address="1 Delete Street",
+            shipping_city="Ulaanbaatar",
+            shipping_country="Mongolia",
+            subtotal="100.00",
+            total="100.00",
+        )
+        response = api_client.delete(f"/api/v1/licensing/organizations/{with_order.pk}/")
+        self.assertEqual(response.status_code, 400)
+
+        # A license event blocks deletion.
+        with_event = self.create_organization()
+        LicenseLifecycleService.record_event(
+            organization=with_event,
+            event_type=LicenseEvent.Type.PROVISIONED,
+            actor=self.owner,
+        )
+        response = api_client.delete(f"/api/v1/licensing/organizations/{with_event.pk}/")
+        self.assertEqual(response.status_code, 400)
+
+        # Another member blocks deletion.
+        with_member = self.create_organization()
+        OrganizationMembership.objects.create(
+            organization=with_member,
+            user=self.manager,
+            role=OrganizationMembership.Role.LICENSE_MANAGER,
+        )
+        response = api_client.delete(f"/api/v1/licensing/organizations/{with_member.pk}/")
+        self.assertEqual(response.status_code, 400)
+
+        # Invitation history blocks deletion.
+        with_invitation = self.create_organization()
+        OrganizationInvitation.objects.create(
+            organization=with_invitation,
+            email="invitee@example.com",
+            token_hash="b" * 64,
+            expires_at=timezone.now() + timedelta(days=7),
+            invited_by=self.owner,
+        )
+        response = api_client.delete(f"/api/v1/licensing/organizations/{with_invitation.pk}/")
+        self.assertEqual(response.status_code, 400)
 
 
 class LicenseCompatibilityCapacityTests(TestCase):

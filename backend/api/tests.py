@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
-from django.core.cache import cache
 from django.core import mail, signing
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
@@ -36,7 +35,6 @@ from users.services import AccountSetupService
 
 class ActiveApiPermissionTests(APITestCase):
     def setUp(self):
-        cache.clear()
         User = get_user_model()
         self.customer = User.objects.create_user(
             username="customer@example.com",
@@ -48,6 +46,7 @@ class ActiveApiPermissionTests(APITestCase):
             email="admin@example.com",
             password="StrongPass123!",
             is_staff=True,
+            is_superuser=True,
         )
         category = Category.objects.create(name="Server Racks")
         self.product = Product.objects.create(
@@ -516,7 +515,7 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(Order.objects.count(), 0)
 
         self.client.force_authenticate(self.admin)
-        premature = self.client.patch(quote_url, {"status": "approved"}, format="json")
+        premature = self.client.patch(quote_url, {"status": "quote_approved"}, format="json")
         self.assertEqual(premature.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Order.objects.count(), 0)
 
@@ -551,6 +550,13 @@ class ActiveApiPermissionTests(APITestCase):
         self.assertEqual(customer_invoice.status_code, status.HTTP_403_FORBIDDEN)
 
         self.client.force_authenticate(self.admin)
+        approved = self.client.patch(
+            quote_url,
+            {"status": QuoteRequest.Status.QUOTE_APPROVED},
+            format="json",
+        )
+        self.assertEqual(approved.status_code, status.HTTP_200_OK)
+        self.assertEqual(approved.data["status"], QuoteRequest.Status.QUOTE_APPROVED)
         self.product.inventory_quantity = 0
         self.product.save(update_fields=["inventory_quantity", "updated_at"])
         with tempfile.TemporaryDirectory() as media_root, override_settings(PRIVATE_MEDIA_ROOT=media_root):
@@ -559,11 +565,12 @@ class ActiveApiPermissionTests(APITestCase):
                     f"{quote_url}invoice/", invoice_payload, format="json"
                 )
             self.assertEqual(invoiced.status_code, status.HTTP_200_OK)
-            self.assertEqual(invoiced.data["status"], QuoteRequest.Status.QUOTED)
+            self.assertEqual(invoiced.data["status"], QuoteRequest.Status.INVOICE_SENT)
             self.assertTrue(invoiced.data["invoice_number"].startswith("INV-"))
             invoice_download_url = f"{quote_url}invoice-pdf/"
             self.assertTrue(invoiced.data["invoice_pdf_url"].endswith(invoice_download_url))
             quote.refresh_from_db()
+            self.assertEqual(quote.status, QuoteRequest.Status.AWAITING_PAYMENT)
             self.assertTrue(
                 Path(quote.invoice_pdf.path).resolve().is_relative_to(Path(media_root).resolve())
             )

@@ -9,12 +9,14 @@ from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework_simplejwt.exceptions import AuthenticationFailed
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from common.email_delivery import send_application_email
+from common.permissions import CanManageUsers
 from users.models import User
 from users.serializers import (
     AdminUserWriteSerializer,
@@ -31,6 +33,7 @@ from users.serializers import (
 from users.security import EmailVerificationService, StaffMfaService
 
 logger = logging.getLogger(__name__)
+security_logger = logging.getLogger("security.authorization")
 
 def set_refresh_cookie(response, refresh_value):
     response.set_cookie(
@@ -286,10 +289,18 @@ class AuthViewSet(viewsets.GenericViewSet):
 
 
 class UserAdminViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.select_related("profile").all()
-    permission_classes = [IsAdminUser]
+    queryset = User.objects.select_related("profile").prefetch_related(
+        "groups", "groups__permissions", "user_permissions"
+    ).order_by("-created_at", "id")
+    permission_classes = [CanManageUsers]
     search_fields = ("email", "username", "first_name", "last_name")
     ordering_fields = ("created_at", "email", "last_name")
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        if self.request.user.is_superuser:
+            return queryset
+        return queryset.filter(is_staff=False, is_superuser=False)
 
     def get_serializer_class(self):
         if self.action in {"create", "update", "partial_update"}:
@@ -304,5 +315,46 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         response_data["account_setup_email_queued"] = bool(
             getattr(user, "_account_setup_email_queued", False)
         )
+        security_logger.info(
+            "User account created by actor_id=%s target_id=%s staff=%s",
+            request.user.pk,
+            user.pk,
+            user.is_staff,
+        )
         headers = self.get_success_headers(response_data)
         return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+
+    def perform_update(self, serializer):
+        user = serializer.save()
+        security_logger.info(
+            "User account updated by actor_id=%s target_id=%s staff=%s active=%s",
+            self.request.user.pk,
+            user.pk,
+            user.is_staff,
+            user.is_active,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        user = self.get_object()
+        if user.is_staff or user.is_superuser:
+            if not request.user.is_superuser:
+                raise PermissionDenied("Only a super administrator can remove staff accounts.")
+            if user.pk == request.user.pk:
+                raise ValidationError("You cannot delete your own administrator account.")
+            current_password = str(request.data.get("current_password", ""))
+            if not current_password or not request.user.check_password(current_password):
+                raise ValidationError({
+                    "current_password": "Enter your current password to remove a staff account."
+                })
+            if user.is_superuser and User.objects.filter(is_superuser=True, is_active=True).count() <= 1:
+                raise ValidationError("The last active super administrator cannot be deleted.")
+        target_id = user.pk
+        target_was_staff = user.is_staff
+        self.perform_destroy(user)
+        security_logger.warning(
+            "User account deleted by actor_id=%s target_id=%s staff=%s",
+            request.user.pk,
+            target_id,
+            target_was_staff,
+        )
+        return Response(status=status.HTTP_204_NO_CONTENT)

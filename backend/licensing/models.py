@@ -21,7 +21,9 @@ class OrganizationQuerySet(models.QuerySet):
         if not user or not user.is_authenticated:
             return self.none()
         if user.is_staff:
-            return self
+            if user.is_superuser or user.has_perm("users.manage_licenses"):
+                return self
+            return self.none()
         return self.filter(
             memberships__user=user,
             memberships__is_active=True,
@@ -202,7 +204,9 @@ class OrganizationScopedQuerySet(models.QuerySet):
         if not user or not user.is_authenticated:
             return self.none()
         if user.is_staff:
-            return self
+            if user.is_superuser or user.has_perm("users.manage_licenses"):
+                return self
+            return self.none()
         filters = {
             f"{self.organization_path}__memberships__user": user,
             f"{self.organization_path}__memberships__is_active": True,
@@ -211,7 +215,12 @@ class OrganizationScopedQuerySet(models.QuerySet):
 
 
 class LicenseQuerySet(OrganizationScopedQuerySet):
-    pass
+    def delete(self):
+        # Deleting a license would erase provisioning, allocation, and audit
+        # history. Licenses are cancelled, never deleted.
+        raise ValidationError(
+            "Licenses cannot be deleted. Cancel the license through the license service instead."
+        )
 
 
 class License(TimeStampedModel):
@@ -313,6 +322,13 @@ class License(TimeStampedModel):
             errors["renews_on"] = "Renewal must be after the expiry date."
         if errors:
             raise ValidationError(errors)
+
+    def delete(self, *args, **kwargs):
+        # Cancelling a license keeps the row and its history; deletion would
+        # erase provisioning, allocation, and audit evidence.
+        raise ValidationError(
+            "Licenses cannot be deleted. Cancel the license through the license service instead."
+        )
 
     def __str__(self):
         return f"{self.license_number} - {self.organization}"
@@ -500,6 +516,7 @@ class LicenseEvent(TimeStampedModel):
         PROVISIONED = "provisioned", "License provisioned"
         RENEWED = "renewed", "License renewed"
         EXPIRED = "expired", "License expired"
+        CANCELLED = "cancelled", "License cancelled"
         NOTIFICATION_SENT = "notification_sent", "Notification sent"
         INVITATION_SENT = "invitation_sent", "Invitation sent"
         INVITATION_ACCEPTED = "invitation_accepted", "Invitation accepted"

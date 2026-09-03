@@ -30,9 +30,9 @@ const thinBorder = {
   right: { style: 'thin' as const, color: { argb: colors.border } },
 }
 
-const yesNo = (value: boolean) => value ? 'Yes' : 'No'
-const titleCase = (value: string) => value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
-const dateValue = (value: string | null) => value ? new Date(value) : null
+const yesNo = (value: boolean | undefined) => (value ? 'Yes' : 'No')
+const titleCase = (value: string | undefined) => (value ?? '').replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+const dateValue = (value: string | null | undefined) => (value ? new Date(value) : null)
 const moneyValue = (value: string | null | undefined) => value === null || value === undefined ? null : Number(value)
 const address = (user: User) => [user.profile.address_line_1, user.profile.address_line_2, user.profile.city, user.profile.state, user.profile.postal_code, user.profile.country].filter(Boolean).join(', ')
 

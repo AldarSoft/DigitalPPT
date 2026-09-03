@@ -25,12 +25,17 @@ class Command(BaseCommand):
             problems.append("CSRF_TRUSTED_ORIGINS must contain production HTTPS origins.")
         if settings.EMAIL_BACKEND == "django.core.mail.backends.console.EmailBackend":
             problems.append("Configure a real email backend.")
-        if not settings.REDIS_URL or "redis.RedisCache" not in settings.CACHES["default"]["BACKEND"]:
-            problems.append("REDIS_URL must configure the shared Redis cache.")
+        throttle_classes = settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_CLASSES", [])
+        if "common.throttles.DatabaseScopedRateThrottle" not in throttle_classes:
+            problems.append("DatabaseScopedRateThrottle must protect production API endpoints.")
         if not settings.NOTIFICATIONS_ASYNC:
             problems.append("NOTIFICATIONS_ASYNC must be enabled.")
         if settings.PAYMENTS_DEVELOPMENT_SIMULATOR:
             problems.append("PAYMENTS_DEVELOPMENT_SIMULATOR must be disabled.")
+        if settings.DJANGO_ADMIN_ENABLED:
+            problems.append("DJANGO_ADMIN_ENABLED must be disabled.")
+        if settings.API_DOCS_ENABLED:
+            problems.append("API_DOCS_ENABLED must be disabled.")
         if not getattr(settings, "CONTENT_SECURITY_POLICY", "").strip():
             problems.append("CONTENT_SECURITY_POLICY must be configured.")
         private_root = Path(settings.PRIVATE_MEDIA_ROOT).resolve()

@@ -117,12 +117,26 @@ class AdminOrganizationLicenseService:
             status__in=cls.ACTIVE_STATUSES,
             expires_on__range=(today, today + timedelta(days=60)),
         ).aggregate(total=models.Sum("used_capacity"))
+        needing_capacity = sum(
+            1
+            for organization in Organization.objects.filter(
+                status=Organization.Status.ACTIVE,
+                is_active=True,
+            )
+            .exclude(memberships__isnull=True)
+            .distinct()
+            if OrganizationCoverageService.summary(organization=organization)[
+                "overflow_quantity"
+            ]
+            > 0
+        )
         return {
             "organizations_with_licenses": Organization.objects.filter(
                 licenses__isnull=False
             ).distinct().count(),
             "active_licenses": active_totals["total"] or 0,
             "licenses_expiring_in_60_days": expiring_totals["total"] or 0,
+            "organizations_needing_capacity": needing_capacity,
             "payments_in_review": PaymentAttempt.objects.filter(
                 status=PaymentAttempt.Status.PENDING
             ).count(),
@@ -212,6 +226,10 @@ class AdminOrganizationLicenseService:
                 f"{metadata.get('new_expiry', 'the next term')}."
             ),
             LicenseEvent.Type.EXPIRED: f"{license_name} expired.",
+            LicenseEvent.Type.CANCELLED: (
+                f"{license_name} cancelled by the Organization Owner: "
+                f"{metadata.get('reason', 'No reason provided.')}"
+            ),
             LicenseEvent.Type.NOTIFICATION_SENT: (
                 "Renewal invoice notice sent."
                 if metadata.get("notification_type") == "renewal_invoice"
@@ -420,7 +438,9 @@ class AdminLicenseNotificationService:
         license=None,
         notification_type="support",
     ):
-        if not actor or not actor.is_authenticated or not actor.is_staff:
+        if not actor or not actor.is_authenticated or not actor.is_staff or not (
+            actor.is_superuser or actor.has_perm("users.manage_licenses")
+        ):
             raise ValidationError("Only staff can send organization notifications.")
         if license and license.organization_id != organization.pk:
             raise ValidationError({"license_number": "License not found."})

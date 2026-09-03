@@ -25,7 +25,10 @@ class CategorySerializer(serializers.ModelSerializer):
 
     def get_product_count(self, obj) -> int:
         request = self.context.get("request")
-        if request and request.user and request.user.is_staff:
+        user = getattr(request, "user", None)
+        if user and user.is_authenticated and (
+            user.is_superuser or user.has_perm("users.manage_inventory")
+        ):
             return obj.products.count()
         return Product.objects.public().filter(category=obj).count()
 
@@ -62,14 +65,18 @@ class LicenseProductSummarySerializer(serializers.ModelSerializer):
 
 
 class ProductSerializer(serializers.ModelSerializer):
+    """Public catalog shape.
+
+    Customers receive a simplified availability signal (sellable quantity);
+    exact on-hand, reserved, and backordered counts and operational metadata
+    are administrator-only.
+    """
+
     category = CategorySerializer(read_only=True)
     images = ProductImageSerializer(many=True, read_only=True)
     specifications = ProductSpecificationSerializer(many=True, read_only=True)
     current_price = serializers.SerializerMethodField()
     inventory_quantity = serializers.SerializerMethodField()
-    on_hand_inventory_quantity = serializers.IntegerField(source="inventory_quantity", read_only=True)
-    reserved_inventory_quantity = serializers.SerializerMethodField()
-    backordered_inventory_quantity = serializers.SerializerMethodField()
     required_license_product = LicenseProductSummarySerializer(read_only=True)
     is_stock_tracked = serializers.BooleanField(read_only=True)
 
@@ -89,22 +96,15 @@ class ProductSerializer(serializers.ModelSerializer):
             "bulk_unit_price",
             "current_price",
             "inventory_quantity",
-            "on_hand_inventory_quantity",
-            "reserved_inventory_quantity",
-            "backordered_inventory_quantity",
             "licensing_role",
             "required_license_product",
             "license_capacity",
             "license_term_days",
             "is_stock_tracked",
-            "status",
             "is_featured",
-            "is_active",
             "category",
             "images",
             "specifications",
-            "created_at",
-            "updated_at",
         )
 
     def get_current_price(self, obj) -> Decimal:
@@ -112,12 +112,6 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_inventory_quantity(self, obj) -> int:
         return max(0, getattr(obj, "sellable_inventory_quantity", obj.inventory_quantity))
-
-    def get_reserved_inventory_quantity(self, obj) -> int:
-        return max(0, getattr(obj, "reserved_inventory_quantity", 0))
-
-    def get_backordered_inventory_quantity(self, obj) -> int:
-        return max(0, getattr(obj, "backordered_inventory_quantity", 0))
 
 
 class InventoryAdjustmentSerializer(serializers.Serializer):
@@ -132,12 +126,34 @@ class InventoryAdjustmentSerializer(serializers.Serializer):
 
 
 class AdminProductSerializer(ProductSerializer):
+    """Inventory-administrator shape with exact stock counts and metadata."""
+
+    on_hand_inventory_quantity = serializers.IntegerField(
+        source="inventory_quantity",
+        read_only=True,
+    )
+    reserved_inventory_quantity = serializers.SerializerMethodField()
+    backordered_inventory_quantity = serializers.SerializerMethodField()
+
     class Meta(ProductSerializer.Meta):
         fields = (
-            *ProductSerializer.Meta.fields[:9],
+            *ProductSerializer.Meta.fields[:13],
+            "on_hand_inventory_quantity",
+            "reserved_inventory_quantity",
+            "backordered_inventory_quantity",
             "cost_price",
-            *ProductSerializer.Meta.fields[9:],
+            *ProductSerializer.Meta.fields[13:],
+            "status",
+            "is_active",
+            "created_at",
+            "updated_at",
         )
+
+    def get_reserved_inventory_quantity(self, obj) -> int:
+        return max(0, getattr(obj, "reserved_inventory_quantity", 0))
+
+    def get_backordered_inventory_quantity(self, obj) -> int:
+        return max(0, getattr(obj, "backordered_inventory_quantity", 0))
 
 
 class ProductImageUploadRequestSerializer(serializers.Serializer):

@@ -5,6 +5,7 @@ from django.db import models
 from django.utils import timezone
 
 from common.models import ActiveModel, TimeStampedModel
+from common.validators import validate_store_url
 
 
 class Banner(ActiveModel):
@@ -23,6 +24,11 @@ class Banner(ActiveModel):
         indexes = [
             models.Index(fields=["is_active", "sort_order"]),
         ]
+
+    def clean(self):
+        super().clean()
+        validate_store_url(self.cta_url)
+        validate_store_url(self.image_url)
 
     def __str__(self):
         return self.title
@@ -121,6 +127,14 @@ class SiteSetting(TimeStampedModel):
             self.pk = SiteSetting.objects.values_list("pk", flat=True).first() or 1
         super().save(*args, **kwargs)
 
+    def clean(self):
+        super().clean()
+        validate_store_url(self.homepage_hero_secondary_cta_url)
+        validate_store_url(self.homepage_contact_cta_url)
+        for entry in self.homepage_resources or []:
+            if isinstance(entry, dict):
+                validate_store_url(entry.get("url", ""))
+
     @classmethod
     def get_solo(cls):
         return cls.objects.order_by("pk").first() or cls.objects.create()
@@ -192,6 +206,7 @@ class NotificationJob(TimeStampedModel):
         QUOTE_MESSAGE_EMAIL = "quote_message_email", "Quote message email"
         ORDER_STATUS_EMAIL = "order_status_email", "Order status email"
         ORDER_STATUS_WEBHOOK = "order_status_webhook", "Order status webhook"
+        ORDER_SHIPPED_EMAIL = "order_shipped_email", "Order shipped email"
         LICENSE_EXPIRY_EMAIL = "license_expiry_email", "License expiry email"
 
     class Status(models.TextChoices):
@@ -274,3 +289,20 @@ class UserNotification(TimeStampedModel):
 
     def __str__(self):
         return f"{self.recipient} - {self.title}"
+
+
+class RequestThrottleBucket(TimeStampedModel):
+    key = models.CharField(max_length=64, unique=True)
+    scope = models.CharField(max_length=64, db_index=True)
+    request_count = models.PositiveIntegerField(default=0)
+    window_started_at = models.DateTimeField()
+    expires_at = models.DateTimeField(db_index=True)
+
+    class Meta:
+        ordering = ("expires_at", "id")
+        indexes = [
+            models.Index(fields=["scope", "expires_at"], name="core_throttle_scope_exp_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.scope} ({self.request_count})"

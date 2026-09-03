@@ -10,11 +10,30 @@ import type { Banner, SiteSettings } from '../types'
 
 const FleetVisualization = lazy(() => import('../components/FleetVisualization'));
 
-function StoreLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
-    if (href.startsWith('/') || href.startsWith('#')) {
-        return <Link className={className} to={href}>{children}</Link>;
+const STORE_LINK_ALLOWED_SCHEMES = ['https:', 'mailto:', 'tel:']
+
+function storeLinkSafeHref(href: string) {
+    const value = (href ?? '').trim()
+    if (!value) return null
+    if (value.startsWith('#')) return value
+    if (value.startsWith('/') && !value.startsWith('//') && !value.startsWith('/\\')) return value
+    try {
+        const url = new URL(value, window.location.origin)
+        return STORE_LINK_ALLOWED_SCHEMES.includes(url.protocol) ? value : null
+    } catch {
+        return null
     }
-    return <a className={className} href={href}>{children}</a>;
+}
+
+function StoreLink({ href, className, children }: { href: string; className: string; children: ReactNode }) {
+    const safeHref = storeLinkSafeHref(href)
+    if (safeHref === null) {
+        return <span className={className}>{children}</span>;
+    }
+    if (safeHref.startsWith('/') || safeHref.startsWith('#')) {
+        return <Link className={className} to={safeHref}>{children}</Link>;
+    }
+    return <a className={className} href={safeHref}>{children}</a>;
 }
 
 type ProductGroup = 'POC Radios' | 'Holsters';

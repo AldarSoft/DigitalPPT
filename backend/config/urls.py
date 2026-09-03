@@ -40,7 +40,6 @@ def health_check(request):
 
 urlpatterns = [
     path('health/', health_check, name='health-check'),
-    path('admin/', admin.site.urls),
     path('api/v1/users/', include('users.urls')),
     path('api/v1/products/', include('products.urls')),
     path('api/v1/orders/', include('orders.urls')),
@@ -49,10 +48,17 @@ urlpatterns = [
     path('api/v1/licensing/', include('licensing.urls')),
     path('api/v1/admin/licensing/', include('licensing.admin_urls')),
     path('api/v1/core/', include('core.urls')),
-    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
-    path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-    path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 ]
+
+if settings.API_DOCS_ENABLED:
+    urlpatterns += [
+        path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+        path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+        path('api/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
+    ]
+
+if settings.DJANGO_ADMIN_ENABLED:
+    urlpatterns.append(path('admin/', admin.site.urls))
 
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

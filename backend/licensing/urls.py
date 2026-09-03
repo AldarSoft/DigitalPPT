@@ -6,6 +6,8 @@ from licensing.views import (
     LicenseCancellationView,
     LicenseAdjustmentView,
     LicenseRenewalOrderView,
+    LicenseRenewalQuoteView,
+    OrganizationDeleteView,
     OrganizationInvitationAcceptView,
     OrganizationInvitationCreateView,
     OrganizationInvitationResendView,
@@ -30,6 +32,11 @@ urlpatterns = [
         "organizations/",
         OrganizationWorkspaceListView.as_view(),
         name="licensing-organization-workspace-list",
+    ),
+    path(
+        "organizations/<int:organization_id>/",
+        OrganizationDeleteView.as_view(),
+        name="licensing-organization-delete",
     ),
     path(
         "organization/settings/",
@@ -80,6 +87,11 @@ urlpatterns = [
         "licenses/<str:license_number>/renew/",
         LicenseRenewalOrderView.as_view(),
         name="licensing-license-renewal-order",
+    ),
+    path(
+        "licenses/<str:license_number>/renewal-quote/",
+        LicenseRenewalQuoteView.as_view(),
+        name="licensing-license-renewal-quote",
     ),
     path(
         "licenses/<str:license_number>/cancel/",

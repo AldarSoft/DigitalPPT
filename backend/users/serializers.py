@@ -9,6 +9,7 @@ from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 
 from users.models import User, UserProfile
+from users.roles import STAFF_ROLE_CHOICES, assign_staff_roles, role_names_for_user
 from users.services import AccountSetupService
 from users.security import EmailVerificationService
 from common.validators import validate_phone
@@ -39,6 +40,8 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True)
+    staff_roles = serializers.SerializerMethodField()
+    staff_permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -52,8 +55,26 @@ class UserSerializer(serializers.ModelSerializer):
             "is_customer",
             "is_staff",
             "is_active",
+            "staff_roles",
+            "staff_permissions",
             "date_joined",
             "profile",
+        )
+
+    def get_staff_roles(self, obj) -> list[str]:
+        return role_names_for_user(obj)
+
+    def get_staff_permissions(self, obj) -> list[str]:
+        if not obj.is_staff:
+            return []
+        if obj.is_superuser:
+            from users.roles import STAFF_PERMISSIONS
+
+            return sorted(STAFF_PERMISSIONS)
+        return sorted(
+            permission.removeprefix("users.")
+            for permission in obj.get_all_permissions()
+            if permission.startswith("users.")
         )
 
 
@@ -104,6 +125,12 @@ class RegistrationSerializer(serializers.ModelSerializer):
             )
         password_validation.validate_password(attrs["password"])
         return attrs
+
+    def validate_email(self, value):
+        normalized = value.strip().casefold()
+        if User.objects.filter(email__iexact=normalized).exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return normalized
 
     def create(self, validated_data):
         password = validated_data.pop("password")
@@ -205,6 +232,11 @@ class ProfileUpdateSerializer(serializers.ModelSerializer):
 
 class AdminUserWriteSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8, required=False)
+    current_password = serializers.CharField(write_only=True, required=False, allow_blank=False)
+    staff_roles = serializers.ListField(
+        child=serializers.ChoiceField(choices=STAFF_ROLE_CHOICES),
+        required=False,
+    )
     profile = UserProfileSerializer(required=False)
     phone_number = serializers.CharField(required=False, allow_blank=True, validators=[validate_phone])
 
@@ -214,18 +246,82 @@ class AdminUserWriteSerializer(serializers.ModelSerializer):
             "email",
             "username",
             "password",
+            "current_password",
             "first_name",
             "last_name",
             "phone_number",
             "is_customer",
             "is_staff",
             "is_active",
+            "staff_roles",
             "profile",
         )
+
+    def validate_email(self, value):
+        normalized = value.strip().casefold()
+        matches = User.objects.filter(email__iexact=normalized)
+        if self.instance:
+            matches = matches.exclude(pk=self.instance.pk)
+        if matches.exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return normalized
+
+    def validate_password(self, value):
+        password_validation.validate_password(value, user=self.instance)
+        return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get("request")
+        actor = request.user if request else None
+        instance = self.instance
+        target_is_staff = attrs.get("is_staff", instance.is_staff if instance else False)
+        target_was_staff = bool(instance and instance.is_staff)
+        roles_supplied = "staff_roles" in attrs
+        password_supplied = bool(attrs.get("password"))
+        protected_staff_change = target_is_staff or target_was_staff or roles_supplied
+
+        if actor and not actor.is_superuser:
+            if protected_staff_change:
+                raise serializers.ValidationError({
+                    "is_staff": "Only a super administrator can manage staff accounts."
+                })
+            if password_supplied:
+                raise serializers.ValidationError({
+                    "password": "Send the customer a password-reset email instead."
+                })
+
+        if protected_staff_change:
+            if not actor or not actor.is_superuser:
+                raise serializers.ValidationError({
+                    "is_staff": "Only a super administrator can manage staff accounts."
+                })
+            current_password = attrs.get("current_password", "")
+            if not current_password or not actor.check_password(current_password):
+                raise serializers.ValidationError({
+                    "current_password": "Enter your current password to change a staff account."
+                })
+            if not target_is_staff and roles_supplied and attrs.get("staff_roles"):
+                raise serializers.ValidationError({
+                    "staff_roles": "Customer accounts cannot have staff roles."
+                })
+            if instance and instance.pk == actor.pk:
+                if attrs.get("is_staff") is False or attrs.get("is_active") is False:
+                    raise serializers.ValidationError(
+                        "You cannot remove your own administrator access."
+                    )
+
+        if not instance and target_is_staff and not password_supplied:
+            raise serializers.ValidationError({
+                "password": "Set an initial password for a new staff account."
+            })
+        return attrs
 
     def create(self, validated_data):
         profile_data = validated_data.pop("profile", {})
         password = validated_data.pop("password", None)
+        validated_data.pop("current_password", None)
+        staff_roles = validated_data.pop("staff_roles", [])
 
         # Customer accounts created by staff must choose their own password from
         # the single-use setup email. Staff accounts retain the existing path.
@@ -251,6 +347,8 @@ class AdminUserWriteSerializer(serializers.ModelSerializer):
                 validated_data.setdefault("email_verified_at", timezone.now())
             user = User.objects.create_user(password=password, **validated_data)
 
+        assign_staff_roles(user, staff_roles)
+
         if profile_data:
             for field, value in profile_data.items():
                 setattr(user.profile, field, value)
@@ -260,12 +358,17 @@ class AdminUserWriteSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         profile_data = validated_data.pop("profile", None)
         password = validated_data.pop("password", None)
+        validated_data.pop("current_password", None)
+        staff_roles = validated_data.pop("staff_roles", None)
 
         for field, value in validated_data.items():
             setattr(instance, field, value)
         if password:
             instance.set_password(password)
         instance.save()
+
+        if staff_roles is not None:
+            assign_staff_roles(instance, staff_roles)
 
         if profile_data is not None:
             profile = instance.profile

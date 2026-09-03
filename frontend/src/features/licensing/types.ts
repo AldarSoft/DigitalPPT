@@ -70,6 +70,7 @@ export interface ClientLicenseListItem {
   expires_on: string | null
   renews_on: string | null
   remaining_days: number | null
+  has_pending_renewal: boolean
 }
 
 export interface ClientLicenseListResponse {
@@ -92,6 +93,7 @@ export interface ClientLicenseDetail {
   expires_on: string | null
   renews_on: string | null
   remaining_days: number | null
+  has_pending_renewal: boolean
   subscription: { term_days: number | null; starts_on: string | null; expires_on: string | null; renews_on: string | null; remaining_days: number | null; source_order: SourceOrder | null }
   allocations: Array<{ id: number; product: { id: number; name: string; sku: string }; quantity: number; source_order: SourceOrder }>
 }
@@ -161,7 +163,7 @@ export interface AdminLicenseFilters {
 }
 
 export interface AdminOrganizationLicenseListResponse {
-  summary: { organizations_with_licenses: number; active_licenses: number; licenses_expiring_in_60_days: number; payments_in_review: number }
+  summary: { organizations_with_licenses: number; active_licenses: number; licenses_expiring_in_60_days: number; organizations_needing_capacity: number; payments_in_review: number }
   count: number
   next: string | null
   previous: string | null
@@ -209,6 +211,7 @@ export interface LicenseSummary {
   capacity: number
   used_capacity: number
   remaining_days: number | null
+  has_pending_renewal: boolean
   starts_on: string | null
   expires_on: string | null
   renews_on: string | null

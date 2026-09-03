@@ -1,24 +1,22 @@
 """Validate production security settings before starting a deployment process."""
 
 import os
-import secrets
 import sys
 
 
 def validate_configuration():
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.prod")
     import django
-    from django.core.cache import cache
     from django.core.management import call_command
+    from django.db import connection
 
     django.setup()
     call_command("check", deploy=True, fail_level="ERROR")
     call_command("check_production_settings")
-    cache_key = f"deployment:security-check:{secrets.token_urlsafe(12)}"
-    cache.set(cache_key, "ok", timeout=30)
-    if cache.get(cache_key) != "ok":
-        raise SystemExit("Shared Redis cache validation failed.")
-    cache.delete(cache_key)
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        if cursor.fetchone() != (1,):
+            raise SystemExit("Primary database validation failed.")
 
 
 def main():

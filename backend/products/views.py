@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema
 
-from common.permissions import IsAdminOrReadOnly
+from common.permissions import CanManageInventory, CanManageInventoryOrReadOnly
 from common.images import sanitize_uploaded_image
 from products.models import Category, InventoryAdjustment, Product
 from orders.models import Order, OrderItem
@@ -29,7 +29,7 @@ from products.serializers import (
 
 
 class ProductImageUploadView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [CanManageInventory]
     throttle_scope = "image_upload"
     parser_classes = [parsers.MultiPartParser, parsers.FormParser]
 
@@ -52,7 +52,7 @@ class ProductImageUploadView(APIView):
 
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.select_related("parent").prefetch_related("children")
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [CanManageInventoryOrReadOnly]
     search_fields = ("name", "slug")
     ordering_fields = ("name", "created_at")
     lookup_field = "slug"
@@ -64,7 +64,7 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
 
 class ProductViewSet(viewsets.ModelViewSet):
-    permission_classes = [IsAdminOrReadOnly]
+    permission_classes = [CanManageInventoryOrReadOnly]
     search_fields = (
         "name",
         "sku",
@@ -131,7 +131,15 @@ class ProductViewSet(viewsets.ModelViewSet):
                 output_field=IntegerField(),
             ),
         )
-        if not (self.request.user and self.request.user.is_staff):
+        can_manage_inventory = bool(
+            self.request.user
+            and self.request.user.is_authenticated
+            and (
+                self.request.user.is_superuser
+                or self.request.user.has_perm("users.manage_inventory")
+            )
+        )
+        if not can_manage_inventory:
             queryset = queryset.public()
 
         category_slug = self.request.query_params.get("category")
@@ -184,21 +192,24 @@ class ProductViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(current_price_value__gte=min_price)
         if max_price:
             queryset = queryset.filter(current_price_value__lte=max_price)
-        if status_value and self.request.user and self.request.user.is_staff:
+        if status_value and can_manage_inventory:
             queryset = queryset.filter(status=status_value)
-        if licensing_role and self.request.user and self.request.user.is_staff:
+        if licensing_role and can_manage_inventory:
             queryset = queryset.filter(licensing_role=licensing_role)
         return queryset
 
     def get_permissions(self):
         if self.action in {"create", "update", "partial_update", "destroy", "inventory_adjust"}:
-            return [IsAdminUser()]
-        return [IsAdminOrReadOnly()]
+            return [CanManageInventory()]
+        return [CanManageInventoryOrReadOnly()]
 
     def get_serializer_class(self):
         if self.action in {"create", "update", "partial_update"}:
             return ProductWriteSerializer
-        if self.request.user and self.request.user.is_staff:
+        if self.request.user and (
+            self.request.user.is_superuser
+            or self.request.user.has_perm("users.manage_inventory")
+        ):
             return AdminProductSerializer
         return ProductSerializer
 

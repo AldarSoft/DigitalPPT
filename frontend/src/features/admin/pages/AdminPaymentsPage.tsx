@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleDollarSign, CreditCard, ExternalLink, FlaskConical, Landmark, QrCode, ShieldCheck, WalletCards } from 'lucide-react'
+import { CircleDollarSign, CreditCard, ExternalLink, FlaskConical, History, Landmark, QrCode, ShieldCheck, WalletCards, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
 import { api, unwrap } from '../../../lib/api'
@@ -37,6 +37,7 @@ export function AdminPaymentsPage() {
   const [provider, setProvider] = useState<PaymentProviderCode>('stripe')
   const [outcome, setOutcome] = useState<PaymentAttempt['status']>('succeeded')
   const [attemptSearch, setAttemptSearch] = useState('')
+  const [auditAttemptId, setAuditAttemptId] = useState<number | null>(null)
   const statusQuery = useQuery({ queryKey: ['payment-status'], queryFn: api.paymentStatus })
   const attemptsQuery = useQuery({
     queryKey: ['payment-attempts'],
@@ -67,6 +68,7 @@ export function AdminPaymentsPage() {
       attempt.status,
     ].some((value) => value?.toLowerCase().includes(query))
   })
+  const auditAttempt = attempts.find((attempt) => attempt.id === auditAttemptId) ?? null
 
   const toggleProvider = useMutation({
     mutationFn: ({ id, is_customer_available }: { id: number; is_customer_available: boolean }) => api.updatePaymentProvider(id, { is_customer_available }),
@@ -143,11 +145,15 @@ export function AdminPaymentsPage() {
         <div className={tw('admin-panel')}>
           <div className={tw('payment-table-head')}><div><h2>Recent attempts</h2><input aria-label="Search payment attempts" placeholder="Search payment or order" value={attemptSearch} onChange={(event) => setAttemptSearch(event.target.value)} /></div><span>{statusQuery.data?.live_processing_available ? 'MONITOR PROVIDER RESULTS' : 'TEST DATA ONLY'}</span></div>
           <div className={tw('admin-table-wrap')}>
-            <table className={tw('admin-table admin-table-compact')}><thead><tr><th>Reference</th><th>Order</th><th>Provider</th><th>Amount</th><th>Status</th><th>Provider reference</th><th>Updated</th></tr></thead><tbody>
-              {visibleAttempts.map((attempt) => <tr key={attempt.id}><td><strong>{attempt.reference}</strong></td><td>{attempt.order_number ?? attempt.renewal_license_number ?? 'License renewal'}</td><td>{attempt.provider_name}</td><td>{money(attempt.amount, attempt.currency)}</td><td><span className={tw(`status status-${paymentStatusKey(attempt.status)}`)}>{paymentStatusLabel(attempt.status)}</span></td><td>{attempt.external_reference || 'Awaiting provider'}</td><td>{attempt.paid_at ? new Date(attempt.paid_at).toLocaleString() : new Date(attempt.created_at).toLocaleString()}</td></tr>)}
-              {!visibleAttempts.length ? <tr><td colSpan={7}>{attempts.length ? 'No payment attempts match this search.' : 'No payment attempts yet.'}</td></tr> : null}
+            <table className={tw('admin-table admin-table-compact')}><thead><tr><th>Reference</th><th>Order</th><th>Provider</th><th>Amount</th><th>Status</th><th>Provider reference</th><th>Updated</th><th>Audit</th></tr></thead><tbody>
+              {visibleAttempts.map((attempt) => <tr key={attempt.id}><td><strong>{attempt.reference}</strong></td><td>{attempt.order_number ?? attempt.renewal_license_number ?? 'License renewal'}</td><td>{attempt.provider_name}</td><td>{money(attempt.amount, attempt.currency)}</td><td><span className={tw(`status status-${paymentStatusKey(attempt.status)}`)}>{paymentStatusLabel(attempt.status)}</span></td><td>{attempt.external_reference || 'Awaiting provider'}</td><td>{attempt.paid_at ? new Date(attempt.paid_at).toLocaleString() : new Date(attempt.created_at).toLocaleString()}</td><td><button className={tw('table-action')} type="button" onClick={() => setAuditAttemptId(attempt.id)}><History size={15} />History</button></td></tr>)}
+              {!visibleAttempts.length ? <tr><td colSpan={8}>{attempts.length ? 'No payment attempts match this search.' : 'No payment attempts yet.'}</td></tr> : null}
             </tbody></table>
           </div>
+          {auditAttempt ? <section className="mt-5 border-t border-border-soft pt-5" aria-labelledby="payment-audit-title">
+            <header className="mb-4 flex items-start justify-between gap-4"><div><p className="text-xs font-bold text-brand">IMMUTABLE AUDIT HISTORY</p><h3 id="payment-audit-title" className="mt-1 text-lg font-bold">{auditAttempt.reference}</h3><p className="mt-1 text-sm text-text-subtle">{auditAttempt.order_number ?? auditAttempt.renewal_license_number ?? 'License renewal'} · {money(auditAttempt.amount, auditAttempt.currency)}</p></div><button className="grid size-10 shrink-0 place-items-center rounded-control border border-border bg-white text-ink" type="button" aria-label="Close payment audit history" onClick={() => setAuditAttemptId(null)}><X size={18} /></button></header>
+            <ol className="grid gap-2">{auditAttempt.status_events.length ? auditAttempt.status_events.map((event) => <li className="grid gap-1 rounded-control border border-border bg-surface-raised p-3 text-sm md:grid-cols-[minmax(0,1fr)_auto]" key={event.id}><div><strong className="block text-ink">{event.event_type.replaceAll('_', ' ').replace(/^./, (value) => value.toUpperCase())}: {paymentStatusLabel(event.previous_status)} to {paymentStatusLabel(event.new_status)}</strong><span className="mt-1 block break-words text-text-subtle">{event.reason || 'No reason recorded.'}</span><span className="mt-1 block break-all font-mono text-xs text-muted">Invoice {event.invoice_reference || 'not linked'} · Provider reference {event.external_reference || 'not assigned'}</span></div><div className="text-left text-xs text-muted md:text-right"><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString()}</time><span className="mt-1 block">{event.actor_email || 'Verified provider/system'}</span></div></li>) : <li className="rounded-control border border-border bg-surface-raised p-3 text-sm text-text-subtle">This legacy attempt has no recorded status events.</li>}</ol>
+          </section> : null}
         </div>
       </section>
     </main>

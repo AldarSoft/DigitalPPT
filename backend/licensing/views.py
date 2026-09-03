@@ -5,6 +5,9 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework import status
+
+from common.permissions import CanManageLicenses
 from rest_framework.views import APIView
 
 from licensing.serializers import (
@@ -27,7 +30,7 @@ from licensing.serializers import (
     OrganizationWorkspaceListSerializer,
     OrganizationSettingsSerializer,
 )
-from licensing.models import License, Organization, OrganizationInvitation
+from licensing.models import License, Organization, OrganizationInvitation, OrganizationMembership
 from licensing.permissions import OrganizationAccessPolicy
 from licensing.services import (
     CartLicenseService,
@@ -139,7 +142,7 @@ class CartCapacityView(APIView):
 
 
 class LicenseAdjustmentView(APIView):
-    permission_classes = (IsAdminUser,)
+    permission_classes = (CanManageLicenses,)
 
     @extend_schema(
         summary="Adjust a license",
@@ -277,6 +280,29 @@ class LicenseRenewalOrderView(APIView):
             organization_id=_requested_organization_id(request),
         )
         return Response(LicenseRenewalSummarySerializer(payload).data)
+
+
+class LicenseRenewalQuoteView(APIView):
+    permission_classes = (IsAuthenticated,)
+    throttle_scope = "quote"
+
+    @extend_schema(
+        summary="Request a quote-based license renewal",
+        request=None,
+        responses={200: OpenApiTypes.OBJECT, 201: OpenApiTypes.OBJECT},
+    )
+    def post(self, request, license_number):
+        from quotes.serializers import QuoteRequestSerializer
+
+        quote_request, created = LicenseRenewalOrderService.request_quote(
+            user=request.user,
+            license_number=license_number,
+            organization_id=_requested_organization_id(request),
+        )
+        return Response(
+            QuoteRequestSerializer(quote_request, context={"request": request}).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
 
 class OrganizationTeamView(APIView):
@@ -510,11 +536,14 @@ class OrganizationSettingsView(APIView):
 
     @extend_schema(summary="Get editable organization settings", responses=OrganizationSettingsSerializer)
     def get(self, request):
-        organization = self._membership(request).organization
+        membership = self._membership(request)
+        organization = membership.organization
+        is_owner = membership.role == OrganizationMembership.Role.OWNER
         return Response(OrganizationSettingsSerializer({
             "id": organization.pk,
             "name": organization.name,
-            "billing_email": organization.billing_email,
+            # Billing contact details are Owner-visible only.
+            "billing_email": organization.billing_email if is_owner else "",
             "status": organization.status,
         }).data)
 
@@ -547,3 +576,22 @@ class OrganizationSettingsView(APIView):
             "billing_email": organization.billing_email,
             "status": organization.status,
         }).data)
+
+
+class OrganizationDeleteView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        summary="Delete an empty organization as its Owner",
+        responses={204: None},
+    )
+    def delete(self, request, organization_id):
+        organization = get_object_or_404(Organization, pk=organization_id)
+        try:
+            OrganizationService.delete_organization(
+                organization=organization,
+                actor=request.user,
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+        return Response(status=204)

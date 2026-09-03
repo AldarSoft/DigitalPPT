@@ -176,19 +176,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+  deleteOrganization: (organizationId: number) =>
+    request<void>(`/licensing/organizations/${organizationId}/`, { method: 'DELETE' }),
   organizationSummary: (organizationId?: number | null) =>
     request<OrganizationSummaryResponse>(`/licensing/organization/summary/${organizationQuery(organizationId)}`),
   organizationLicenses: (organizationId?: number | null) =>
     request<ClientLicenseListResponse>(`/licensing/organization/licenses/${organizationQuery(organizationId)}`),
   organizationLicense: (licenseNumber: string, organizationId?: number | null) =>
     request<ClientLicenseDetail>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/${organizationQuery(organizationId)}`),
-  cancelOrganizationLicense: (licenseNumber: string, organizationId: number | null, data: { password: string; reason: string }) =>
+  cancelOrganizationLicense: (licenseNumber: string, organizationId: number | null, data: { password: string; reason: string; confirmed_cancellation: boolean }) =>
     request<LicenseSummary>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/cancel/${organizationQuery(organizationId)}`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),
   licenseRenewalSummary: (licenseNumber: string, organizationId?: number | null) =>
     request<LicenseRenewalSummary>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/renew/${organizationQuery(organizationId)}`),
+  requestLicenseRenewalQuote: (licenseNumber: string, organizationId?: number | null) =>
+    request<QuoteRequest>(`/licensing/licenses/${encodeURIComponent(licenseNumber)}/renewal-quote/${organizationQuery(organizationId)}`, { method: 'POST' }),
   organizationTeam: (organizationId?: number | null) =>
     request<OrganizationTeamResponse>(`/licensing/organization/team/${organizationQuery(organizationId)}`),
   organizationSettings: (organizationId?: number | null) =>
@@ -333,6 +337,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ status }),
     }),
+  shipOrder: (orderNumber: string, data: { idempotency_key: string; items: { order_item_id: number; quantity: number }[]; carrier?: string; tracking_number?: string; notes?: string }) =>
+    request<Order>(`/orders/${encodeURIComponent(orderNumber)}/ship/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   paymentStatus: () => request<PaymentStatus>('/payments/status/'),
   storefrontPaymentStatus: () => request<StorefrontPaymentStatus>('/payments/storefront-status/'),
   createPaymentSession: (data: {
@@ -376,8 +385,13 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
-  confirmBankTransfer: (orderNumber: string, data: { bank_transaction_reference: string; internal_note?: string }) =>
+  confirmBankTransfer: (orderNumber: string, data: { bank_transaction_reference: string; internal_note?: string; current_password: string; confirmed_invoice_match: boolean }) =>
     request<PaymentAttempt>(`/payments/orders/${encodeURIComponent(orderNumber)}/confirm-bank-transfer/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  rejectBankTransfer: (orderNumber: string, data: { bank_transaction_reference?: string; reason: string; current_password: string; confirmed_rejection: boolean }) =>
+    request<PaymentAttempt>(`/payments/orders/${encodeURIComponent(orderNumber)}/reject-bank-transfer/`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),

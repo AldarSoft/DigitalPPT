@@ -11,6 +11,9 @@ load_env_file(BASE_DIR / ".env")
 SECRET_KEY = env("DJANGO_SECRET_KEY", default="unsafe-dev-secret-key")
 JWT_SIGNING_KEY = env("JWT_SIGNING_KEY", default=f"{SECRET_KEY}:jwt-development-only")
 DEBUG = env("DJANGO_DEBUG", default=False, cast=bool)
+DJANGO_ADMIN_ENABLED = False
+# Interactive API documentation follows DEBUG unless explicitly overridden.
+API_DOCS_ENABLED = env("API_DOCS_ENABLED", default=DEBUG, cast=bool)
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS", default="127.0.0.1,localhost", cast=list)
 SITE_NAME = env("SITE_NAME", default="Digital PTT")
 
@@ -149,7 +152,7 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_THROTTLE_CLASSES": [
-        "rest_framework.throttling.ScopedRateThrottle",
+        "common.throttles.DatabaseScopedRateThrottle",
     ],
     "DEFAULT_THROTTLE_RATES": {
         "auth": env("THROTTLE_AUTH", default="10/min"),
@@ -255,6 +258,25 @@ NOTIFICATION_RETRY_SECONDS = env("NOTIFICATION_RETRY_SECONDS", default=60, cast=
 LICENSE_RECONCILIATION_MAX_AGE_HOURS = env("LICENSE_RECONCILIATION_MAX_AGE_HOURS", default=26, cast=int)
 NOTIFICATION_WORKER_MAX_AGE_MINUTES = env("NOTIFICATION_WORKER_MAX_AGE_MINUTES", default=10, cast=int)
 
+
+def _license_reminder_days(value: str) -> tuple[int, ...]:
+    """Parse LICENSE_REMINDER_DAYS ("60,30,7") into a sorted tuple of day offsets.
+
+    Each value is a reminder threshold: a license entering that many days before
+    expiry (or fewer, above the next tighter threshold) triggers a reminder stage.
+    """
+    days = {int(part.strip()) for part in value.split(",") if part.strip()}
+    if not days or any(day < 0 for day in days):
+        raise RuntimeError("LICENSE_REMINDER_DAYS must be a comma-separated list of non-negative day offsets.")
+    return tuple(sorted(days))
+
+
+LICENSE_REMINDER_DAYS = env(
+    "LICENSE_REMINDER_DAYS",
+    default="60,30,7",
+    cast=_license_reminder_days,
+)
+
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 PASSWORD_RESET_TIMEOUT = env("PASSWORD_RESET_TIMEOUT", default=3600, cast=int)
 EMAIL_VERIFICATION_TIMEOUT = env("EMAIL_VERIFICATION_TIMEOUT", default=86400, cast=int)
@@ -303,29 +325,6 @@ LOGGING = {
         },
     },
 }
-
-CACHE_TTL_SECONDS = env("CACHE_TTL_SECONDS", default=300, cast=int)
-REDIS_URL = env("REDIS_URL", default="").strip()
-if REDIS_URL:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.redis.RedisCache",
-            "LOCATION": REDIS_URL,
-            "TIMEOUT": CACHE_TTL_SECONDS,
-            "OPTIONS": {
-                "socket_connect_timeout": 5,
-                "socket_timeout": 5,
-            },
-        }
-    }
-else:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "commerce-platform-cache",
-            "TIMEOUT": CACHE_TTL_SECONDS,
-        }
-    }
 
 SPECTACULAR_SETTINGS = {
     "TITLE": f"{SITE_NAME} API",
@@ -436,6 +435,16 @@ SPECTACULAR_SETTINGS = {
             ("cancelled", "Cancelled"),
             ("draft", "Draft"),
         ),
+        "OrganizationLicenseStatus": (
+            ("pending_payment", "Pending payment"),
+            ("active", "Active"),
+            ("expiring_soon", "Expiring soon"),
+            ("expired", "Expired"),
+            ("cancelled", "Cancelled"),
+            ("draft", "Draft"),
+            ("no_licenses", "No licenses"),
+        ),
+        "PaymentAttemptStatus": "payments.models.PaymentAttempt.Status",
         "OrganizationStatus": "licensing.models.Organization.Status",
         "OrderOrganizationMode": ("existing", "new"),
     },

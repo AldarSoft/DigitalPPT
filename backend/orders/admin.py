@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.db.models import Sum
 
-from orders.models import InventoryReservation, Order, OrderItem
+from orders.models import InventoryReservation, Order, OrderItem, Shipment, ShipmentItem
 from orders.services import OrderService
 
 
@@ -104,3 +104,45 @@ class InventoryReservationAdmin(admin.ModelAdmin):
     list_filter = ("status", "created_at")
     search_fields = ("order_item__order__order_number", "product__name", "product__sku")
     readonly_fields = ("order_item", "product", "quantity", "status", "consumed_at", "released_at", "release_reason", "created_at", "updated_at")
+
+
+@admin.register(Shipment)
+class ShipmentAdmin(admin.ModelAdmin):
+    list_display = ("shipment_number", "order", "carrier", "tracking_number", "shipped_at", "created_by")
+    list_filter = ("carrier", "shipped_at")
+    search_fields = ("shipment_number", "order__order_number", "tracking_number", "carrier")
+    readonly_fields = (
+        "order",
+        "shipment_number",
+        "carrier",
+        "tracking_number",
+        "notes",
+        "shipped_at",
+        "created_by",
+        "shipping_address",
+        "shipping_city",
+        "shipping_state",
+        "shipping_postal_code",
+        "shipping_country",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(ShipmentItem)
+class ShipmentItemAdmin(admin.ModelAdmin):
+    list_display = ("shipment", "product_name", "sku", "quantity")
+    search_fields = ("shipment__shipment_number", "product_name", "sku")
+    readonly_fields = ("shipment", "order_item", "quantity", "product_name", "sku", "created_at", "updated_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

@@ -25,7 +25,10 @@ export function AccountOverview({
   const needsAttention = quotes.filter((quote) => (
     quote.status === 'new'
     || quote.status === 'reviewing'
-    || (quote.status === 'quoted' && quote.order_status === 'pending')
+    || quote.status === 'quote_approved'
+    || quote.status === 'invoice_sent'
+    || quote.status === 'awaiting_payment'
+    || quote.status === 'payment_rejected'
   )).length;
   return (
     <>

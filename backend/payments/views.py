@@ -8,6 +8,11 @@ from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from common.permissions import (
+    CanConfirmBankPayments,
+    CanManagePaymentSettings,
+    CanRunPaymentSimulations,
+)
 from orders.models import Order
 from payments.models import PaymentAttempt, PaymentProvider
 from payments.serializers import (
@@ -16,6 +21,7 @@ from payments.serializers import (
     LicenseRenewalCheckoutSessionCreateSerializer,
     PaymentAttemptSerializer,
     BankTransferConfirmationSerializer,
+    BankTransferRejectionSerializer,
     PaymentProviderSerializer,
     PaymentSimulationSerializer,
     StorefrontPaymentProviderSerializer,
@@ -25,7 +31,7 @@ from payments.services import PaymentProviderCallbackService, PaymentService
 
 
 class PaymentStatusView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [CanManagePaymentSettings]
 
     @extend_schema(
         summary="Get administrative payment availability",
@@ -231,12 +237,12 @@ class PaymentProviderCallbackView(APIView):
 class PaymentProviderViewSet(mixins.ListModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
     queryset = PaymentProvider.objects.all()
     serializer_class = PaymentProviderSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [CanManagePaymentSettings]
     http_method_names = ["get", "patch", "head", "options"]
 
 
 class BankTransferConfirmationView(APIView):
-    permission_classes = [IsAdminUser]
+    permission_classes = [CanConfirmBankPayments]
 
     @extend_schema(
         summary="Confirm a quote invoice bank transfer after reconciliation",
@@ -244,7 +250,7 @@ class BankTransferConfirmationView(APIView):
         responses=PaymentAttemptSerializer,
     )
     def post(self, request, order_number):
-        serializer = BankTransferConfirmationSerializer(data=request.data)
+        serializer = BankTransferConfirmationSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         order = get_object_or_404(Order.objects.select_related("quote_request"), order_number=order_number)
         attempt = PaymentService.confirm_bank_transfer(
@@ -256,16 +262,56 @@ class BankTransferConfirmationView(APIView):
         return Response(PaymentAttemptSerializer(attempt, context={"request": request}).data)
 
 
+class BankTransferRejectionView(APIView):
+    permission_classes = [CanConfirmBankPayments]
+
+    @extend_schema(
+        summary="Reject an unmatched or incorrect quote invoice bank transfer",
+        request=BankTransferRejectionSerializer,
+        responses=PaymentAttemptSerializer,
+    )
+    def post(self, request, order_number):
+        serializer = BankTransferRejectionSerializer(
+            data=request.data,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        order = get_object_or_404(
+            Order.objects.select_related("quote_request"),
+            order_number=order_number,
+        )
+        attempt = PaymentService.reject_bank_transfer(
+            order=order,
+            actor=request.user,
+            bank_transaction_reference=serializer.validated_data.get(
+                "bank_transaction_reference",
+                "",
+            ),
+            reason=serializer.validated_data["reason"],
+        )
+        return Response(PaymentAttemptSerializer(attempt, context={"request": request}).data)
+
+
 class PaymentAttemptViewSet(mixins.ListModelMixin, mixins.CreateModelMixin, viewsets.GenericViewSet):
-    queryset = PaymentAttempt.objects.select_related("order", "provider", "created_by")
+    queryset = PaymentAttempt.objects.select_related(
+        "order",
+        "provider",
+        "created_by",
+    ).prefetch_related("status_events__actor")
     serializer_class = PaymentAttemptSerializer
-    permission_classes = [IsAdminUser]
     http_method_names = ["get", "post", "head", "options"]
     search_fields = ("reference", "order__order_number", "provider__display_name", "external_reference")
     ordering_fields = ("created_at", "amount", "status")
     throttle_scope = "payment_test"
 
+    def get_permissions(self):
+        if self.action == "create":
+            return [CanRunPaymentSimulations()]
+        return [CanConfirmBankPayments()]
+
     def create(self, request, *args, **kwargs):
+        if not (settings.DEBUG and settings.PAYMENTS_DEVELOPMENT_SIMULATOR):
+            raise NotFound()
         input_serializer = PaymentSimulationSerializer(data=request.data, context={"request": request})
         input_serializer.is_valid(raise_exception=True)
         attempt = input_serializer.save()
