@@ -83,6 +83,25 @@ The service user must be able to write application logs and public uploads:
 sudo install -d -o deploy -g www-data -m 0750 backend/logs backend/media backend/staticfiles
 ```
 
+## PostgreSQL Release Test
+
+The test runner creates an isolated `test_digital_ptt` database and never uses
+the production database for test records. Grant database creation only for the
+duration of the test, then revoke it even when a test fails:
+
+```bash
+sudo -u postgres psql -c "ALTER ROLE digital_ptt CREATEDB;"
+cd /srv/digitalptt/backend
+../.venv/bin/python manage.py test users products core licensing payments orders quotes api \
+  --settings=config.settings.test
+sudo -u postgres psql -c "ALTER ROLE digital_ptt NOCREATEDB;"
+sudo -u postgres psql -tAc \
+  "SELECT rolcreatedb FROM pg_roles WHERE rolname='digital_ptt';"
+```
+
+The final query must print `f`. If the test process is interrupted, revoke the
+privilege manually before continuing.
+
 ## Deploy
 
 Install Node.js 22 before the first deployment. Then:
