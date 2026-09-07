@@ -26,12 +26,14 @@ htmlcov/
 .env
 .env.*
 !.env.example
+!/backend/.env.production.example
 /backend/db.sqlite3
 /backend/commerce.sqlite3
 /backend/media/
 /backend/private_media/
 /backend/staticfiles/
 *.log
+.previous-deploy-revision
 
 # Editor and operating-system files
 .vscode/

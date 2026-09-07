@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Digital PTT payment reconciliation every 15 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+RandomizedDelaySec=1min
+Persistent=true
+Unit=payment-reconciliation.service
+
+[Install]
+WantedBy=timers.target

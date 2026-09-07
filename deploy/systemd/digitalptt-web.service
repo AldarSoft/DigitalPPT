@@ -1,0 +1,26 @@
+[Unit]
+Description=Digital PTT Django web service
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=deploy
+Group=www-data
+WorkingDirectory=/srv/digitalptt/backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings.prod
+Environment=PORT=8000
+Environment=WEB_CONCURRENCY=2
+ExecStart=/srv/digitalptt/.venv/bin/python /srv/digitalptt/backend/deploy_start.py web
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

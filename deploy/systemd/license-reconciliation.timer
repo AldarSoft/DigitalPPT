@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Digital PTT license reconciliation hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+Unit=license-reconciliation.service
+
+[Install]
+WantedBy=timers.target

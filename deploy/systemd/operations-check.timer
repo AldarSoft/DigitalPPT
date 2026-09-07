@@ -1,0 +1,12 @@
+[Unit]
+Description=Check Digital PTT background operations hourly
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+Unit=operations-check.service
+
+[Install]
+WantedBy=timers.target

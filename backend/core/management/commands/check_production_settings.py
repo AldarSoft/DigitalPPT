@@ -23,8 +23,26 @@ class Command(BaseCommand):
         csrf_origins = getattr(settings, "CSRF_TRUSTED_ORIGINS", [])
         if not csrf_origins or any(not origin.startswith("https://") for origin in csrf_origins):
             problems.append("CSRF_TRUSTED_ORIGINS must contain production HTTPS origins.")
-        if settings.EMAIL_BACKEND == "django.core.mail.backends.console.EmailBackend":
-            problems.append("Configure a real email backend.")
+        graph_email_enabled = getattr(settings, "MICROSOFT_GRAPH_EMAIL_ENABLED", False)
+        if graph_email_enabled:
+            graph_settings = {
+                "MICROSOFT_GRAPH_TENANT_ID": getattr(settings, "MICROSOFT_GRAPH_TENANT_ID", ""),
+                "MICROSOFT_GRAPH_CLIENT_ID": getattr(settings, "MICROSOFT_GRAPH_CLIENT_ID", ""),
+                "MICROSOFT_GRAPH_CLIENT_SECRET": getattr(settings, "MICROSOFT_GRAPH_CLIENT_SECRET", ""),
+                "MICROSOFT_GRAPH_SENDER_EMAIL": getattr(settings, "MICROSOFT_GRAPH_SENDER_EMAIL", ""),
+            }
+            missing_graph_settings = [name for name, value in graph_settings.items() if not value]
+            if missing_graph_settings:
+                problems.append(
+                    "Microsoft Graph email is missing settings: "
+                    f"{', '.join(missing_graph_settings)}."
+                )
+        elif settings.EMAIL_BACKEND in {
+            "django.core.mail.backends.console.EmailBackend",
+            "django.core.mail.backends.locmem.EmailBackend",
+            "django.core.mail.backends.dummy.EmailBackend",
+        }:
+            problems.append("Configure Microsoft Graph or another real email backend.")
         throttle_classes = settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_CLASSES", [])
         if "common.throttles.DatabaseScopedRateThrottle" not in throttle_classes:
             problems.append("DatabaseScopedRateThrottle must protect production API endpoints.")

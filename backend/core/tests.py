@@ -354,26 +354,49 @@ class OperationalHealthTests(TestCase):
             call_command("check_operations")
 
 
+@override_settings(
+    DEBUG=False,
+    SECRET_KEY="s" * 64,
+    JWT_SIGNING_KEY="j" * 64,
+    DATABASES={"default": {"ENGINE": "django.db.backends.postgresql"}},
+    ALLOWED_HOSTS=["app.digitalptt.example"],
+    CSRF_TRUSTED_ORIGINS=["https://app.digitalptt.example"],
+    EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
+    NOTIFICATIONS_ASYNC=True,
+    PAYMENTS_DEVELOPMENT_SIMULATOR=False,
+    DJANGO_ADMIN_ENABLED=False,
+    API_DOCS_ENABLED=False,
+    CONTENT_SECURITY_POLICY="default-src 'self'",
+    PRIVATE_MEDIA_ROOT="/srv/digitalptt/private",
+    MEDIA_ROOT="/srv/digitalptt/media",
+    STATIC_ROOT="/srv/digitalptt/static",
+)
 class ProductionSettingsCheckTests(SimpleTestCase):
-    @override_settings(
-        DEBUG=False,
-        SECRET_KEY="s" * 64,
-        JWT_SIGNING_KEY="j" * 64,
-        DATABASES={"default": {"ENGINE": "django.db.backends.postgresql"}},
-        ALLOWED_HOSTS=["app.digitalptt.example"],
-        CSRF_TRUSTED_ORIGINS=["https://app.digitalptt.example"],
-        EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
-        NOTIFICATIONS_ASYNC=True,
-        PAYMENTS_DEVELOPMENT_SIMULATOR=False,
-        DJANGO_ADMIN_ENABLED=False,
-        API_DOCS_ENABLED=False,
-        CONTENT_SECURITY_POLICY="default-src 'self'",
-        PRIVATE_MEDIA_ROOT="/srv/digitalptt/private",
-        MEDIA_ROOT="/srv/digitalptt/media",
-        STATIC_ROOT="/srv/digitalptt/static",
-    )
     def test_production_settings_check_accepts_a_safe_configuration(self):
         call_command("check_production_settings")
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.console.EmailBackend",
+        MICROSOFT_GRAPH_EMAIL_ENABLED=True,
+        MICROSOFT_GRAPH_TENANT_ID="tenant-id",
+        MICROSOFT_GRAPH_CLIENT_ID="client-id",
+        MICROSOFT_GRAPH_CLIENT_SECRET="client-secret",
+        MICROSOFT_GRAPH_SENDER_EMAIL="sales@example.com",
+    )
+    def test_production_settings_check_accepts_configured_graph_email(self):
+        call_command("check_production_settings")
+
+    @override_settings(
+        EMAIL_BACKEND="django.core.mail.backends.console.EmailBackend",
+        MICROSOFT_GRAPH_EMAIL_ENABLED=True,
+        MICROSOFT_GRAPH_TENANT_ID="",
+        MICROSOFT_GRAPH_CLIENT_ID="client-id",
+        MICROSOFT_GRAPH_CLIENT_SECRET="client-secret",
+        MICROSOFT_GRAPH_SENDER_EMAIL="sales@example.com",
+    )
+    def test_production_settings_check_rejects_incomplete_graph_email(self):
+        with self.assertRaises(CommandError):
+            call_command("check_production_settings")
 
     @override_settings(DJANGO_ADMIN_ENABLED=True)
     def test_production_settings_check_rejects_django_admin(self):

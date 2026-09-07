@@ -1,0 +1,17 @@
+[Unit]
+Description=Digital PTT payment reconciliation
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=deploy
+Group=www-data
+WorkingDirectory=/srv/digitalptt/backend
+Environment=DJANGO_SETTINGS_MODULE=config.settings.prod
+ExecStart=/srv/digitalptt/.venv/bin/python manage.py reconcile_payments
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
