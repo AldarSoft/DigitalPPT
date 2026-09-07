@@ -111,7 +111,7 @@ class PaymentService:
     @staticmethod
     @transaction.atomic
     def close_pending_attempts(*, order, exclude_attempt_id=None, reason):
-        attempts = PaymentAttempt.objects.select_for_update().select_related(
+        attempts = PaymentAttempt.objects.select_for_update(of=("self",)).select_related(
             "order__quote_request"
         ).filter(
             order=order,
@@ -142,7 +142,7 @@ class PaymentService:
         exclude_attempt_id=None,
         reason,
     ):
-        attempts = PaymentAttempt.objects.select_for_update().select_related(
+        attempts = PaymentAttempt.objects.select_for_update(of=("self",)).select_related(
             "order__quote_request"
         ).filter(
             renewal_license=renewal_license,
@@ -175,7 +175,7 @@ class PaymentService:
             raise ValidationError({"detail": "Finance payment confirmation access is required."})
 
         locked_order = (
-            Order.objects.select_for_update()
+            Order.objects.select_for_update(of=("self",))
             .select_related("quote_request")
             .get(pk=order.pk)
         )
@@ -266,7 +266,7 @@ class PaymentService:
             raise ValidationError({"detail": "Finance payment confirmation access is required."})
 
         locked_order = (
-            Order.objects.select_for_update()
+            Order.objects.select_for_update(of=("self",))
             .select_related("quote_request")
             .get(pk=order.pk)
         )
@@ -338,7 +338,7 @@ class PaymentService:
     @transaction.atomic
     def start_checkout(*, user, order, provider, idempotency_key, billing):
         existing = (
-            PaymentAttempt.objects.select_for_update()
+            PaymentAttempt.objects.select_for_update(of=("self",))
             .select_related("order", "provider", "created_by")
             .filter(idempotency_key=idempotency_key)
             .first()
@@ -352,7 +352,11 @@ class PaymentService:
                 raise ValidationError({"idempotency_key": "This key is already in use."})
             return existing, False
 
-        locked_order = Order.objects.select_for_update().select_related("organization").get(pk=order.pk)
+        locked_order = (
+            Order.objects.select_for_update(of=("self",))
+            .select_related("organization")
+            .get(pk=order.pk)
+        )
         if not PaymentService.can_pay_order(user=user, order=locked_order):
             raise ValidationError({"order_number": "This order is not available."})
         if locked_order.status != Order.Status.PENDING:
@@ -416,7 +420,7 @@ class PaymentService:
         from licensing.services import LicenseRenewalOrderService
 
         existing = (
-            PaymentAttempt.objects.select_for_update()
+            PaymentAttempt.objects.select_for_update(of=("self",))
             .select_related("renewal_license__organization", "provider", "created_by")
             .filter(idempotency_key=idempotency_key)
             .first()
@@ -517,7 +521,7 @@ class PaymentService:
     @staticmethod
     @transaction.atomic
     def refresh_attempt(*, attempt):
-        locked = PaymentAttempt.objects.select_for_update().select_related(
+        locked = PaymentAttempt.objects.select_for_update(of=("self",)).select_related(
             "order__quote_request"
         ).get(pk=attempt.pk)
         if (
@@ -541,7 +545,7 @@ class PaymentService:
     @transaction.atomic
     def expire_pending_attempts(*, now=None):
         now = now or timezone.now()
-        attempts = PaymentAttempt.objects.select_for_update().select_related(
+        attempts = PaymentAttempt.objects.select_for_update(of=("self",)).select_related(
             "order__quote_request"
         ).filter(
             status=PaymentAttempt.Status.PENDING,
@@ -590,7 +594,7 @@ class PaymentService:
             PaymentAttempt.Status.EXPIRED,
         }:
             raise ValidationError({"payment": "Unsupported terminal payment status."})
-        locked = PaymentAttempt.objects.select_for_update().select_related(
+        locked = PaymentAttempt.objects.select_for_update(of=("self",)).select_related(
             "order__quote_request"
         ).get(pk=attempt.pk)
         if locked.status != PaymentAttempt.Status.PENDING:
@@ -625,7 +629,7 @@ class PaymentService:
         from licensing.services import PaymentSuccessProvisioningService
 
         locked = (
-            PaymentAttempt.objects.select_for_update()
+            PaymentAttempt.objects.select_for_update(of=("self",))
             .select_related("order", "renewal_license__organization", "provider", "created_by")
             .get(pk=attempt.pk)
         )
@@ -738,7 +742,11 @@ class PaymentService:
         Live-provider refund callbacks will call this method once the provider
         integration is added. It is deliberately not exposed as a client action.
         """
-        locked = PaymentAttempt.objects.select_for_update().select_related("order").get(pk=attempt.pk)
+        locked = (
+            PaymentAttempt.objects.select_for_update(of=("self",))
+            .select_related("order")
+            .get(pk=attempt.pk)
+        )
         if locked.status == PaymentAttempt.Status.REFUNDED:
             return locked
         if locked.status != PaymentAttempt.Status.SUCCEEDED:
@@ -881,7 +889,7 @@ class PaymentService:
     @transaction.atomic
     def simulate_checkout(*, attempt, user, outcome):
         locked = (
-            PaymentAttempt.objects.select_for_update()
+            PaymentAttempt.objects.select_for_update(of=("self",))
             .select_related("order", "renewal_license__organization", "provider", "created_by")
             .get(pk=attempt.pk)
         )

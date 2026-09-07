@@ -1052,7 +1052,7 @@ class OrganizationOwnershipService:
             )
 
         current_owner = (
-            OrganizationMembership.objects.select_for_update()
+            OrganizationMembership.objects.select_for_update(of=("self",))
             .select_related("user")
             .filter(
                 organization=organization,
@@ -1062,7 +1062,7 @@ class OrganizationOwnershipService:
             .first()
         )
         target = (
-            OrganizationMembership.objects.select_for_update()
+            OrganizationMembership.objects.select_for_update(of=("self",))
             .select_related("user")
             .filter(
                 pk=target_membership_id,
@@ -1231,7 +1231,7 @@ class InvitationService:
         token_hash = cls.hash_token(token)
         try:
             invitation = (
-                OrganizationInvitation.objects.select_for_update()
+                OrganizationInvitation.objects.select_for_update(of=("self",))
                 .select_related("organization")
                 .get(token_hash=token_hash)
             )
@@ -1291,7 +1291,7 @@ class InvitationService:
     @transaction.atomic
     def resend(cls, *, invitation, resent_by):
         locked = (
-            OrganizationInvitation.objects.select_for_update()
+            OrganizationInvitation.objects.select_for_update(of=("self",))
             .select_related("organization")
             .get(pk=invitation.pk)
         )
@@ -1504,7 +1504,7 @@ class LicenseLifecycleService:
         term_days=None,
         source_order_item=None,
     ):
-        locked = License.objects.select_for_update().select_related("license_product").get(
+        locked = License.objects.select_for_update(of=("self",)).select_related("license_product").get(
             pk=license.pk
         )
         days = term_days or locked.license_product.license_term_days
@@ -1606,7 +1606,7 @@ class LicenseLifecycleService:
             raise ValidationError({"password": "Password is incorrect."})
 
         locked = (
-            License.objects.select_for_update()
+            License.objects.select_for_update(of=("self",))
             .select_related("organization")
             .get(pk=license.pk)
         )
@@ -1697,7 +1697,7 @@ class LicenseExpiryService:
 
         on_date = on_date or timezone.localdate()
         locked = (
-            License.objects.select_for_update()
+            License.objects.select_for_update(of=("self",))
             .select_related("organization")
             .get(pk=license.pk)
         )
@@ -1831,7 +1831,7 @@ class LicenseRenewalOrderService:
             raise PermissionDenied("Organization license access is required.")
         licenses = License.objects
         if lock:
-            licenses = licenses.select_for_update()
+            licenses = licenses.select_for_update(of=("self",))
         license = (
             licenses
             .select_related("organization", "license_product")
@@ -2005,7 +2005,7 @@ class PaymentSuccessProvisioningService:
     def reverse(cls, *, payment_attempt, actor=None, reason="Payment refunded."):
         from payments.models import PaymentAttempt
 
-        payment = PaymentAttempt.objects.select_for_update().select_related("order").get(
+        payment = PaymentAttempt.objects.select_for_update(of=("self",)).select_related("order").get(
             pk=payment_attempt.pk
         )
         marker = (payment.metadata or {}).get(cls.METADATA_KEY, {})
@@ -2129,7 +2129,7 @@ class PaymentSuccessProvisioningService:
         from payments.models import PaymentAttempt
 
         payment = (
-            PaymentAttempt.objects.select_for_update()
+            PaymentAttempt.objects.select_for_update(of=("self",))
             .select_related("order__user", "created_by")
             .get(pk=payment_attempt.pk)
         )
@@ -2143,13 +2143,13 @@ class PaymentSuccessProvisioningService:
             return cls._result_from_marker(marker)
 
         order = (
-            Order.objects.select_for_update()
+            Order.objects.select_for_update(of=("self",))
             .select_related("user", "organization", "renewal_license")
             .prefetch_related("items__product__required_license_product")
             .get(pk=payment.order_id)
         )
         items = list(
-            OrderItem.objects.select_for_update()
+            OrderItem.objects.select_for_update(of=("self",))
             .select_related("product__required_license_product")
             .filter(order=order)
             .order_by("pk")

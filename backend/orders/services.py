@@ -47,7 +47,7 @@ class InventoryReservationService:
             return []
 
         items = list(
-            OrderItem.objects.select_for_update()
+            OrderItem.objects.select_for_update(of=("self",))
             .select_related("product")
             .filter(order=order)
         )
@@ -138,7 +138,7 @@ class InventoryReservationService:
             return []
 
         items = list(
-            OrderItem.objects.select_for_update()
+            OrderItem.objects.select_for_update(of=("self",))
             .select_related("order")
             .filter(
                 product=product,
@@ -197,7 +197,7 @@ class InventoryReservationService:
     @staticmethod
     def consume_for_order(*, order):
         reservations = list(
-            InventoryReservation.objects.select_for_update()
+            InventoryReservation.objects.select_for_update(of=("self",))
             .select_related("product")
             .filter(
                 order_item__order=order,
@@ -303,7 +303,7 @@ class ShipmentService:
         from payments.models import PaymentAttempt
 
         existing_shipment = (
-            Shipment.objects.select_for_update()
+            Shipment.objects.select_for_update(of=("self",))
             .select_related("order")
             .filter(idempotency_key=idempotency_key)
             .first()
@@ -347,7 +347,7 @@ class ShipmentService:
             requested[item_id] = quantity
 
         order_items = list(
-            OrderItem.objects.select_for_update()
+            OrderItem.objects.select_for_update(of=("self",))
             .select_related("product")
             .filter(order=order)
         )
@@ -600,7 +600,7 @@ class OrderService:
             raise ValidationError({"detail": "Sign in before starting checkout."})
 
         existing = (
-            Order.objects.select_for_update()
+            Order.objects.select_for_update(of=("self",))
             .select_related("user")
             .prefetch_related("items__product")
             .filter(checkout_key=checkout_key)
