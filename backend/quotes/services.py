@@ -76,7 +76,11 @@ class QuoteService:
         from orders.models import Order
         from quotes.claims import validate_guest_quote_claim_token
 
-        locked = QuoteService._queryset().select_for_update().get(pk=quote_request.pk)
+        locked = (
+            QuoteService._queryset()
+            .select_for_update(of=("self",))
+            .get(pk=quote_request.pk)
+        )
         validate_guest_quote_claim_token(quote_request=locked, token=token)
 
         if locked.requester_email.lower() != user.email.lower():
@@ -100,7 +104,11 @@ class QuoteService:
     @staticmethod
     @transaction.atomic
     def update_status(*, quote_request, new_status, user=None):
-        quote_request = QuoteService._queryset().select_for_update().get(pk=quote_request.pk)
+        quote_request = (
+            QuoteService._queryset()
+            .select_for_update(of=("self",))
+            .get(pk=quote_request.pk)
+        )
         if quote_request.status == new_status:
             return quote_request
 
@@ -260,7 +268,11 @@ class QuoteService:
     @staticmethod
     @transaction.atomic
     def issue_invoice(*, quote_request, user, item_prices, shipping, admin_message):
-        locked = QuoteService._queryset().select_for_update().get(pk=quote_request.pk)
+        locked = (
+            QuoteService._queryset()
+            .select_for_update(of=("self",))
+            .get(pk=quote_request.pk)
+        )
         allowed_statuses = {
             QuoteRequest.Status.QUOTE_APPROVED,
             QuoteRequest.Status.INVOICE_SENT,
