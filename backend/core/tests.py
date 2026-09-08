@@ -358,7 +358,6 @@ class OperationalHealthTests(TestCase):
     DEBUG=False,
     SECRET_KEY="s" * 64,
     JWT_SIGNING_KEY="j" * 64,
-    DATABASES={"default": {"ENGINE": "django.db.backends.postgresql"}},
     ALLOWED_HOSTS=["app.digitalptt.example"],
     CSRF_TRUSTED_ORIGINS=["https://app.digitalptt.example"],
     EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend",
@@ -370,6 +369,10 @@ class OperationalHealthTests(TestCase):
     PRIVATE_MEDIA_ROOT="/srv/digitalptt/private",
     MEDIA_ROOT="/srv/digitalptt/media",
     STATIC_ROOT="/srv/digitalptt/static",
+)
+@patch(
+    "core.management.commands.check_production_settings.settings.DATABASES",
+    {"default": {"ENGINE": "django.db.backends.postgresql"}},
 )
 class ProductionSettingsCheckTests(SimpleTestCase):
     def test_production_settings_check_accepts_a_safe_configuration(self):
