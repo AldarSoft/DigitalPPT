@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm, useWatch } from 'react-hook-form'
-import { ChevronRight, Download, Image as ImageIcon, Plus, Search, Star, Trash2, Upload, X } from 'lucide-react'
+import { ChevronRight, Download, FolderTree, Image as ImageIcon, Pencil, Plus, Search, Star, Trash2, Upload, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, mediaUrl, unwrap } from '../../../lib/api'
+import { api, mediaUrl, unwrap, type CategoryInput } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
 import type { Category, Product } from '../../../types'
 import { AdminSelect } from '../components/AdminSelect'
@@ -21,6 +21,7 @@ export function AdminProductsPage() {
     const [status, setStatus] = useState('');
     const [page, setPage] = useState(1);
     const [editing, setEditing] = useState<Product | 'new' | null>(null);
+    const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
     const productsQuery = useQuery({
       queryKey: ['admin-products', search, category, status, page],
       queryFn: () => {
@@ -37,7 +38,10 @@ export function AdminProductsPage() {
     });
     const products = productsQuery.data ? unwrap(productsQuery.data) : [];
     const totalProducts = productsQuery.data && !Array.isArray(productsQuery.data) ? productsQuery.data.count : products.length;
-    const categoriesQuery = useQuery({ queryKey: ['categories'], queryFn: api.categories });
+    const categoriesQuery = useQuery({
+      queryKey: ['categories'],
+      queryFn: api.adminCategories,
+    });
     const categories = categoriesQuery.data ? unwrap(categoriesQuery.data) : [];
     const licenseProductsQuery = useQuery({
       queryKey: ['admin-license-products'],
@@ -58,6 +62,7 @@ export function AdminProductsPage() {
         <div><Search size={19}/><input placeholder="Search by name or SKU" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }}/></div>
         <AdminSelect aria-label="Filter by category" value={category} onChange={(event) => { setCategory(event.target.value); setPage(1); }}><option value="">All categories</option>{categories.map((item) => <option value={item.slug} key={item.id}>{item.name}</option>)}</AdminSelect>
         <AdminSelect aria-label="Filter by product status" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">All status</option><option value="published">Published</option><option value="draft">Draft</option><option value="archived">Archived</option></AdminSelect>
+        <button type="button" onClick={() => setCategoryManagerOpen(true)}><FolderTree size={17}/>Manage categories</button>
         <button type="button" onClick={() => void exportAdminReport({ kind: 'products', rows: products })}><Download size={17}/>Export page</button>
       </section>
       <section className={tw("admin-panel admin-table-wrap")}>
@@ -82,7 +87,81 @@ export function AdminProductsPage() {
         onPageChange={setPage}
       />
       {editing ? <ProductEditor product={editing === 'new' ? null : editing} categories={categories} licenseProducts={licenseProducts} onClose={() => setEditing(null)}/> : null}
+      {categoryManagerOpen ? <CategoryManager categories={categories} onClose={() => setCategoryManagerOpen(false)}/> : null}
     </main>);
+}
+
+function CategoryManager({ categories, onClose }: { categories: Category[]; onClose: () => void }) {
+    const queryClient = useQueryClient();
+    const [editing, setEditing] = useState<Category | 'new' | null>(null);
+    const remove = useMutation({
+        mutationFn: (item: Category) => api.deleteCategory(item.slug),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['categories'] });
+            queryClient.invalidateQueries({ queryKey: ['admin-products'] });
+            toast.success('Category deleted');
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not delete category'),
+    });
+    const category = editing && editing !== 'new' ? editing : null;
+    return (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={onClose}>
+      <aside className={tw("product-editor")} role="dialog" aria-modal="true" aria-label="Manage product categories" onMouseDown={(event) => event.stopPropagation()}>
+        <div><h2>{editing ? (category ? 'Edit category' : 'Add category') : 'Categories'}</h2><button type="button" aria-label="Close category manager" onClick={onClose}><X /></button></div>
+        {editing ? <CategoryEditor category={category} onCancel={() => setEditing(null)} onSaved={() => setEditing(null)}/> : <>
+          <button className={tw("action-button action-button-primary mt-5 w-full")} type="button" onClick={() => setEditing('new')}><Plus size={17}/>Add category</button>
+          <div className={tw("mt-4 divide-y divide-border-soft border-y border-border-soft")}>
+            {categories.map((item) => <article className={tw("grid min-h-[68px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3")} key={item.id}>
+              <span className={tw("min-w-0")}><strong className={tw("block truncate text-sm")}>{item.name}</strong><small className={tw("mt-1 block text-xs text-text-soft")}>{item.product_count} {item.product_count === 1 ? 'product' : 'products'} - {item.is_active ? 'Active' : 'Inactive'}</small></span>
+              <span className={tw("table-actions")}>
+                <button type="button" title="Edit category" aria-label={`Edit ${item.name}`} onClick={() => setEditing(item)}><Pencil size={16}/></button>
+                <button className={tw("disabled:cursor-not-allowed disabled:opacity-40")} type="button" title={item.product_count ? 'Move products before deleting' : 'Delete category'} aria-label={`Delete ${item.name}`} disabled={item.product_count > 0 || remove.isPending} onClick={() => { if (confirm(`Delete ${item.name}?`)) remove.mutate(item); }}><Trash2 size={16}/></button>
+              </span>
+            </article>)}
+            {!categories.length ? <p className={tw("py-8 text-center text-sm text-text-soft")}>No categories yet.</p> : null}
+          </div>
+        </>}
+      </aside>
+    </div>);
+}
+
+function CategoryEditor({ category, onCancel, onSaved }: { category: Category | null; onCancel: () => void; onSaved: () => void }) {
+    const queryClient = useQueryClient();
+    const { register, handleSubmit } = useForm<CategoryInput>({
+        defaultValues: category ? {
+            name: category.name,
+            slug: category.slug,
+            description: category.description,
+            image_url: category.image_url,
+            is_active: category.is_active,
+        } : {
+            name: '',
+            slug: '',
+            description: '',
+            image_url: '',
+            is_active: true,
+        },
+    });
+    const save = useMutation({
+        mutationFn: (data: CategoryInput) => category
+            ? api.updateCategory(category.slug, data)
+            : api.createCategory(data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ['categories'] });
+            queryClient.invalidateQueries({ queryKey: ['admin-products'] });
+            queryClient.invalidateQueries({ queryKey: ['products'] });
+            toast.success(category ? 'Category saved' : 'Category created');
+            onSaved();
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : 'Could not save category'),
+    });
+    return (<form onSubmit={handleSubmit((values) => save.mutate(values))}>
+      <label>Category name<input required {...register('name')}/></label>
+      <label>Slug<input placeholder="Generated automatically when empty" {...register('slug')}/></label>
+      <label>Description<textarea rows={4} {...register('description')}/></label>
+      <label>Image URL<input {...register('image_url')}/></label>
+      <label className={tw("editor-check")}><input type="checkbox" {...register('is_active')}/>Active in storefront</label>
+      <div className={tw("editor-actions")}><button type="button" onClick={onCancel}>Cancel</button><button className={tw("admin-primary")} type="submit" disabled={save.isPending}>{save.isPending ? 'Saving...' : 'Save category'}</button></div>
+    </form>);
 }
 type ProductForm = {
     category: number;

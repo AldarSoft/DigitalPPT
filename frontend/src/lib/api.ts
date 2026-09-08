@@ -98,6 +98,14 @@ export interface StaffMfaChallenge {
   detail: string
 }
 
+export interface CategoryInput {
+  name: string
+  slug: string
+  description: string
+  image_url: string
+  is_active: boolean
+}
+
 async function requestResponse(
   path: string,
   init: RequestInit = {},
@@ -160,6 +168,13 @@ async function download(path: string, filename: string) {
 
 export const api = {
   categories: () => request<Paginated<Category> | Category[]>('/products/categories/'),
+  adminCategories: () => request<Paginated<Category> | Category[]>('/products/categories/?page_size=100&ordering=name'),
+  createCategory: (data: CategoryInput) =>
+    request<Category>('/products/categories/', { method: 'POST', body: JSON.stringify(data) }),
+  updateCategory: (slug: string, data: CategoryInput) =>
+    request<Category>(`/products/categories/${encodeURIComponent(slug)}/`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteCategory: (slug: string) =>
+    request<void>(`/products/categories/${encodeURIComponent(slug)}/`, { method: 'DELETE' }),
   downloadQuoteInvoice: (quoteNumber: string, invoiceNumber: string) =>
     download(
       `/quotes/${encodeURIComponent(quoteNumber)}/invoice-pdf/`,

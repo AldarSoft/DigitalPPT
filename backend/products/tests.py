@@ -14,6 +14,88 @@ from products.serializers import AdminProductSerializer, ProductSerializer, Prod
 from PIL import Image
 
 
+class CategoryManagementApiTests(TestCase):
+    def setUp(self):
+        self.staff = get_user_model().objects.create_user(
+            username="category-admin",
+            email="category-admin@example.com",
+            password="StrongPass123!",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.api = APIClient()
+        self.api.force_authenticate(self.staff)
+
+    def test_staff_can_create_update_and_delete_an_empty_category(self):
+        created = self.api.post(
+            "/api/v1/products/categories/",
+            {
+                "name": "Vehicle Radios",
+                "slug": "vehicle-radios",
+                "description": "Vehicle-mounted radio products.",
+                "image_url": "",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201)
+
+        updated = self.api.put(
+            "/api/v1/products/categories/vehicle-radios/",
+            {
+                "name": "Vehicle and Base Stations",
+                "slug": "vehicle-base-stations",
+                "description": "Vehicle-mounted and fixed-location equipment.",
+                "image_url": "",
+                "is_active": True,
+            },
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.data["slug"], "vehicle-base-stations")
+
+        deleted = self.api.delete(
+            "/api/v1/products/categories/vehicle-base-stations/"
+        )
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse(Category.objects.filter(slug="vehicle-base-stations").exists())
+
+    def test_category_with_products_cannot_be_deleted(self):
+        category = Category.objects.create(name="POC Radios", slug="poc-radios")
+        Product.objects.create(
+            category=category,
+            name="IPTT Test Radio",
+            sku="IPTT-TEST",
+            price="100.00",
+        )
+
+        response = self.api.delete("/api/v1/products/categories/poc-radios/")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("products", response.data["detail"])
+        self.assertTrue(Category.objects.filter(pk=category.pk).exists())
+
+    def test_inactive_categories_are_hidden_only_from_public_catalog(self):
+        Category.objects.create(name="Active category", is_active=True)
+        Category.objects.create(name="Inactive category", is_active=False)
+
+        public_response = APIClient().get("/api/v1/products/categories/")
+        public_categories = public_response.data.get("results", public_response.data)
+        staff_response = self.api.get("/api/v1/products/categories/")
+        staff_categories = staff_response.data.get("results", staff_response.data)
+
+        self.assertEqual(public_response.status_code, 200)
+        self.assertEqual(staff_response.status_code, 200)
+        self.assertEqual(
+            {category["name"] for category in public_categories},
+            {"Active category"},
+        )
+        self.assertEqual(
+            {category["name"] for category in staff_categories},
+            {"Active category", "Inactive category"},
+        )
+
+
 class ProductInventoryPrivacyTests(TestCase):
     def setUp(self):
         self.category = Category.objects.create(name="Privacy Catalog")

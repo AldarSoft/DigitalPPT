@@ -57,10 +57,28 @@ class CategoryViewSet(viewsets.ModelViewSet):
     ordering_fields = ("name", "created_at")
     lookup_field = "slug"
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        if user and user.is_authenticated and (
+            user.is_superuser or user.has_perm("users.manage_inventory")
+        ):
+            return queryset
+        return queryset.filter(is_active=True)
+
     def get_serializer_class(self):
         if self.action in {"create", "update", "partial_update"}:
             return CategoryWriteSerializer
         return CategorySerializer
+
+    def destroy(self, request, *args, **kwargs):
+        category = self.get_object()
+        if category.products.exists():
+            return Response(
+                {"detail": "Move or remove this category's products before deleting it."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
 
 
 class ProductViewSet(viewsets.ModelViewSet):
