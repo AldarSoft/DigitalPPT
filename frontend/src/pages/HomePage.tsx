@@ -4,8 +4,8 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, BadgeCheck, Check, CreditCard, Headphones, MapPin, MessageSquare, Package, Plus, Radio, RadioTower, ShieldCheck, Truck } from 'lucide-react'
 import { useCart } from '../contexts/CartContext'
 import { api, mediaUrl, unwrap } from '../lib/api'
+import { primaryProductImage } from '../lib/product-images'
 import { tw } from '../lib/tailwind-styles'
-import { toast } from 'sonner'
 import type { Banner, SiteSettings } from '../types'
 
 const FleetVisualization = lazy(() => import('../components/FleetVisualization'));
@@ -36,80 +36,10 @@ function StoreLink({ href, className, children }: { href: string; className: str
     return <a className={className} href={safeHref}>{children}</a>;
 }
 
-type ProductGroup = 'POC Radios' | 'Holsters';
-interface Product {
-    id: number;
-    slug: string;
-    eyebrow: string;
-    name: string;
-    price: number;
-    image: string;
-    group: ProductGroup;
-}
-const products: Product[] = [
-    {
-        id: 1,
-        slug: 'iptt810-iptt820',
-        eyebrow: 'POC + ANDROID HANDHELD',
-        name: 'IPTT810 / IPTT820',
-        price: 430,
-        image: '/images/radio-810.png',
-        group: 'POC Radios',
-    },
-    {
-        id: 2,
-        slug: 'iptt510',
-        eyebrow: 'POC HANDHELD RADIO',
-        name: 'IPTT510',
-        price: 120,
-        image: '/images/radio-510.png',
-        group: 'POC Radios',
-    },
-    {
-        id: 3,
-        slug: 'iptt81-dual-mode',
-        eyebrow: 'POC + ANALOG DUAL MODE',
-        name: 'IPTT81',
-        price: 340,
-        image: '/images/radio-t81.png',
-        group: 'POC Radios',
-    },
-    {
-        id: 4,
-        slug: 'iptt710-android',
-        eyebrow: 'POC ANDROID HANDHELD',
-        name: 'IPTT710',
-        price: 430,
-        image: '/images/radio-710.png',
-        group: 'POC Radios',
-    },
-    {
-        id: 5,
-        slug: 'field-harness-carry-system',
-        eyebrow: 'HANDS-FREE FIELD CARRY',
-        name: 'Field Harness Carry System',
-        price: 18,
-        image: '/images/holsters-hero.png',
-        group: 'Holsters',
-    },
-    {
-        id: 6,
-        slug: 'lightweight-chest-pack',
-        eyebrow: 'LIGHTWEIGHT RADIO CARRY',
-        name: 'Lightweight Chest Pack',
-        price: 15,
-        image: '/images/holsters-hero.png',
-        group: 'Holsters',
-    },
-    {
-        id: 7,
-        slug: 'universal-shoulder-holster',
-        eyebrow: 'UNIVERSAL QUICK ACCESS',
-        name: 'Universal Shoulder Holster',
-        price: 12,
-        image: '/images/holsters-hero.png',
-        group: 'Holsters',
-    },
+type ProductGroup = 'poc-radios' | 'radio-holsters';
+const productGroups: Array<{ slug: ProductGroup; label: string }> = [
+    { slug: 'poc-radios', label: 'POC Radios' },
+    { slug: 'radio-holsters', label: 'Holsters' },
 ];
 const categories = [
     {
@@ -225,11 +155,22 @@ function Categories() {
       </div>
     </section>);
 }
-function ProductSection({ onAdd }: {
-    onAdd: (product: Product) => void;
-}) {
-    const [activeGroup, setActiveGroup] = useState<ProductGroup>('POC Radios');
-    const visibleProducts = products.filter((product) => product.group === activeGroup);
+function ProductSection() {
+    const cart = useCart();
+    const [activeGroup, setActiveGroup] = useState<ProductGroup>('poc-radios');
+    const productsQuery = useQuery({
+        queryKey: ['homepage-products'],
+        queryFn: () => api.products('page_size=100&ordering=-is_featured,name'),
+    });
+    const products = productsQuery.data ? unwrap(productsQuery.data) : [];
+    const visibleProducts = products
+        .filter((product) => (
+            product.category.slug === activeGroup
+            && product.status !== 'draft'
+            && product.status !== 'archived'
+            && product.is_active !== false
+        ))
+        .slice(0, 4);
     return (<section className={tw("section products-section")} id="products">
       <div className={tw("shell")}>
         <div className={tw("product-heading")}>
@@ -238,27 +179,45 @@ function ProductSection({ onAdd }: {
             <h2>Radios teams rely on</h2>
           </div>
           <div className={tw("segmented-control")} aria-label="Product category filter">
-            {(['POC Radios', 'Holsters'] as ProductGroup[]).map((group) => (<button className={tw(activeGroup === group ? 'active' : '')} key={group} type="button" onClick={() => setActiveGroup(group)}>
-                {group}
+            {productGroups.map((group) => (<button className={tw(activeGroup === group.slug ? 'active' : '')} key={group.slug} type="button" onClick={() => setActiveGroup(group.slug)}>
+                {group.label}
               </button>))}
           </div>
         </div>
-        {visibleProducts.length > 0 ? (<div className={tw("product-grid")}>
-            {visibleProducts.map((product) => (<article className={tw("product-card")} key={product.id}>
+        {productsQuery.isPending ? <div className={tw("product-grid")} aria-label="Loading products">
+          {Array.from({ length: 4 }, (_, index) => <article className={tw("product-card animate-pulse")} key={index}>
+            <div className={tw("product-image bg-surface-muted")}/>
+            <div className={tw("product-meta")}><p>Loading</p><h3>Product</h3></div>
+          </article>)}
+        </div> : null}
+        {productsQuery.isError ? <div className={tw("flex min-h-48 flex-col items-center justify-center gap-3 rounded-panel border border-border bg-white text-center")} role="alert">
+          <strong>Products are temporarily unavailable.</strong>
+          <button className={tw("action-button action-button-secondary")} type="button" onClick={() => void productsQuery.refetch()}>Try again</button>
+        </div> : null}
+        {!productsQuery.isPending && !productsQuery.isError && visibleProducts.length > 0 ? (<div className={tw("product-grid")}>
+            {visibleProducts.map((product) => {
+              const image = primaryProductImage(product);
+              const isAvailable = !product.is_stock_tracked || product.inventory_quantity > 0;
+              return (<article className={tw("product-card")} key={product.id}>
                 <Link className={tw("product-card-link")} to={`/products/${product.slug}`} aria-label={`View ${product.name}`}/>
                 <div className={tw("product-image")}>
-                  <img src={product.image} alt={`${product.name} professional radio`}/>
+                  <img src={mediaUrl(image?.image_url)} alt={image?.alt_text || product.name}/>
                 </div>
                 <div className={tw("product-meta")}>
-                  <p>{product.eyebrow}</p>
+                  <p>{product.category.name.toUpperCase()}</p>
                   <h3>{product.name}</h3>
-                  <strong>${product.price.toFixed(2)}</strong>
-                  <button className={tw("add-button")} type="button" aria-label={`Add ${product.name} to cart`} onClick={() => onAdd(product)}>
+                  <strong>${Number(product.current_price).toFixed(2)}</strong>
+                  <button className={tw("add-button disabled:cursor-not-allowed disabled:opacity-45")} type="button" disabled={!isAvailable} aria-label={isAvailable ? `Add ${product.name} to cart` : `${product.name} is out of stock`} onClick={() => cart.add(product)}>
                     <Plus size={21}/>
                   </button>
                 </div>
-              </article>))}
+              </article>);
+            })}
           </div>) : null}
+        {!productsQuery.isPending && !productsQuery.isError && !visibleProducts.length ? <div className={tw("flex min-h-48 flex-col items-center justify-center gap-3 rounded-panel border border-border bg-white text-center")}>
+          <strong>No products are available in this category.</strong>
+          <Link className={tw("action-button action-button-secondary")} to={`/shop?category=${activeGroup}`}>Browse catalog</Link>
+        </div> : null}
       </div>
     </section>);
 }
@@ -371,19 +330,13 @@ function ContactCta({ settings }: { settings?: SiteSettings }) {
     </section>);
 }
 export function HomePage() {
-    const cart = useCart();
     const bannersQuery = useQuery({ queryKey: ['banners'], queryFn: api.banners });
     const settingsQuery = useQuery({ queryKey: ['site-settings'], queryFn: api.siteSettings });
     const banner = bannersQuery.data ? unwrap(bannersQuery.data).find((item) => item.is_active) : undefined;
-    const addToCart = (product: Product) => {
-        api.product(product.slug)
-            .then((liveProduct) => cart.add(liveProduct))
-            .catch(() => toast.error('This product could not be verified. Please try again.'));
-    };
     return (<main>
       <Hero banner={banner} settings={settingsQuery.data} />
       <Categories />
-      <ProductSection onAdd={addToCart}/>
+      <ProductSection />
       <Solutions settings={settingsQuery.data} />
       <Comparison settings={settingsQuery.data} />
       <Benefits />
