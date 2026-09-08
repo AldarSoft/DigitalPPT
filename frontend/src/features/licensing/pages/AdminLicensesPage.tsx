@@ -100,9 +100,9 @@ function CreateOrganizationDialog({ onClose, onCreated }: { onClose: () => void;
   </section></div>
 }
 
-function Summary({ icon: Icon, label, value, tone = 'brand' }: { icon: typeof KeyRound; label: string; value: number; tone?: 'brand' | 'success' | 'warning' | 'danger' }) {
+function Summary({ icon: Icon, label, value, tone = 'brand' }: { icon: typeof KeyRound; label: string; value?: number | null; tone?: 'brand' | 'success' | 'warning' | 'danger' }) {
   const color = { brand: 'text-brand', success: 'text-success', warning: 'text-warning', danger: 'text-danger' }[tone]
-  return <article className={tw('admin-panel')}><div className="flex items-start justify-between gap-3"><span className="text-xs font-semibold text-muted">{label}</span><Icon className={color} size={20} /></div><strong className="mt-3 block text-2xl">{value.toLocaleString()}</strong></article>
+  return <article className={tw('admin-panel')}><div className="flex items-start justify-between gap-3"><span className="text-xs font-semibold text-muted">{label}</span><Icon className={color} size={20} /></div><strong className="mt-3 block text-2xl">{(value ?? 0).toLocaleString()}</strong></article>
 }
 
 function formatDate(value: string | null) {

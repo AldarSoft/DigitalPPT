@@ -393,6 +393,7 @@ class AdminLicenseManagementSummarySerializer(serializers.Serializer):
     organizations_with_licenses = serializers.IntegerField()
     active_licenses = serializers.IntegerField()
     licenses_expiring_in_60_days = serializers.IntegerField()
+    organizations_needing_capacity = serializers.IntegerField()
     payments_in_review = serializers.IntegerField()
 
 

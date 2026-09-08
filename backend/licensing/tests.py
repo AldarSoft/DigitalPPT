@@ -1690,6 +1690,10 @@ class LicenseLifecycleTests(TestCase):
             product_filtered.data["summary"]["active_licenses"],
             1,
         )
+        self.assertEqual(
+            product_filtered.data["summary"]["organizations_needing_capacity"],
+            0,
+        )
         self.assertEqual(active_license.organization, self.organization)
 
     def test_admin_license_views_calculate_expiry_status_and_empty_organizations(self):
