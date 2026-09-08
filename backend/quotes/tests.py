@@ -12,6 +12,12 @@ from quotes.invoice_pdf import build_invoice_pdf
 from quotes.models import QuoteRequest
 
 
+def close_file_response(response):
+    for closer in response._resource_closers:
+        closer()
+    response._resource_closers.clear()
+
+
 class InvoicePdfBankTransferTests(SimpleTestCase):
     def test_bank_instructions_do_not_depend_on_payment_provider_availability(self):
         site_settings = SimpleNamespace(
@@ -112,7 +118,7 @@ class InvoicePdfPrivacyTests(TestCase):
             self.assertIn("private", response["Cache-Control"])
             self.assertEqual(response["X-Content-Type-Options"], "nosniff")
         finally:
-            response.close()
+            close_file_response(response)
 
     def test_authorized_staff_can_download_the_invoice(self):
         api = APIClient()
@@ -121,4 +127,4 @@ class InvoicePdfPrivacyTests(TestCase):
         try:
             self.assertEqual(response.status_code, 200)
         finally:
-            response.close()
+            close_file_response(response)

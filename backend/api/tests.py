@@ -33,6 +33,12 @@ from licensing.services import OrganizationService
 from users.services import AccountSetupService
 
 
+def close_response_resources(response):
+    for closer in response._resource_closers:
+        closer()
+    response._resource_closers.clear()
+
+
 class ActiveApiPermissionTests(APITestCase):
     def setUp(self):
         User = get_user_model()
@@ -584,11 +590,12 @@ class ActiveApiPermissionTests(APITestCase):
             self.assertEqual(admin_download["Content-Type"], "application/pdf")
             self.assertEqual(admin_download["Cache-Control"], "private, no-store")
             self.assertEqual(b"".join(admin_download.streaming_content)[:4], b"%PDF")
+            close_response_resources(admin_download)
 
             self.client.force_authenticate(self.customer)
             customer_download = self.client.get(invoice_download_url)
             self.assertEqual(customer_download.status_code, status.HTTP_200_OK)
-            customer_download.close()
+            close_response_resources(customer_download)
 
             outsider = get_user_model().objects.create_user(
                 username="invoice-outsider",
