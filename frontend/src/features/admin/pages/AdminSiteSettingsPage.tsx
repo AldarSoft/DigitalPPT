@@ -7,6 +7,8 @@ import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
 import type { Banner, SiteSettings } from '../../../types'
 import { AdminErrorState } from '../components/AdminErrorState'
+import { PresentationDefaultsEditor } from '../components/ProductPresentationEditor'
+import { invalidateCatalog } from '../../../lib/invalidate-catalog'
 
 type BannerForm = Omit<Banner, 'id'>
 
@@ -110,7 +112,8 @@ export function AdminSiteSettingsPage() {
 
 function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
   const queryClient = useQueryClient()
-  const { register, handleSubmit, reset, control, formState: { isDirty } } = useForm<SiteSettings>({ defaultValues: settings })
+  const { register, handleSubmit, reset, control, setValue, formState: { isDirty } } = useForm<SiteSettings>({ defaultValues: settings })
+  const presentationDefaults = useWatch({ control, name: 'product_presentation_defaults' })
   const commerceEnabled = useWatch({ control, name: 'commerce_defaults_enabled' })
   const bankTransferEnabled = useWatch({ control, name: 'bank_transfer_enabled' })
   const save = useMutation({
@@ -118,6 +121,7 @@ function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
     onSuccess: (value) => {
       queryClient.setQueryData(['admin-site-settings'], value)
       queryClient.invalidateQueries({ queryKey: ['site-settings'] })
+      invalidateCatalog(queryClient)
       reset(value)
       toast.success('Site settings saved')
     },
@@ -126,6 +130,7 @@ function SiteSettingsForm({ settings }: { settings: SiteSettings }) {
 
   return (
     <form className={tw('site-settings-form')} onSubmit={handleSubmit((values) => save.mutate(values))}>
+      <PresentationDefaultsEditor value={presentationDefaults} onChange={(value) => setValue('product_presentation_defaults', value, { shouldDirty: true })} />
       <section className={tw('admin-panel settings-section')}>
         <div className={tw('settings-section-title')}><Settings2 size={19} /><div><h2>Store identity</h2><p>Brand and customer support details used across the storefront.</p></div></div>
         <div className={tw('settings-fields two-column')}>

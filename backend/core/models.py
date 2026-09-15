@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from common.models import ActiveModel, TimeStampedModel
 from common.validators import validate_store_url
+from products.presentation import default_product_presentation
 
 
 class Banner(ActiveModel):
@@ -68,6 +69,7 @@ def default_homepage_resources():
 
 
 class SiteSetting(TimeStampedModel):
+    product_presentation_defaults = models.JSONField(default=default_product_presentation)
     site_name = models.CharField(max_length=255, default="Digital PTT")
     tagline = models.CharField(max_length=255, blank=True)
     support_email = models.EmailField(blank=True)

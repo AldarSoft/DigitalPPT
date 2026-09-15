@@ -81,7 +81,7 @@ class CategoryManagementApiTests(TestCase):
 
         public_response = APIClient().get("/api/v1/products/categories/")
         public_categories = public_response.data.get("results", public_response.data)
-        staff_response = self.api.get("/api/v1/products/categories/")
+        staff_response = self.api.get("/api/v1/products/categories/?workspace=admin")
         staff_categories = staff_response.data.get("results", staff_response.data)
 
         self.assertEqual(public_response.status_code, 200)
@@ -134,7 +134,7 @@ class ProductInventoryPrivacyTests(TestCase):
     def test_admin_product_responses_include_exact_inventory_fields(self):
         api = APIClient()
         api.force_authenticate(self.staff)
-        response = api.get("/api/v1/products/catalog/privacy-radio/")
+        response = api.get("/api/v1/products/catalog/privacy-radio/?workspace=admin")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["on_hand_inventory_quantity"], 5)

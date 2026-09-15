@@ -109,6 +109,8 @@ class Product(ActiveModel):
         db_index=True,
     )
     is_featured = models.BooleanField(default=False, db_index=True)
+    detail_layout = models.CharField(max_length=16, choices=[("radio", "Radio"), ("license", "License"), ("accessory", "Accessory")], default="accessory")
+    presentation_overrides = models.JSONField(default=dict, blank=True)
 
     objects = ProductQuerySet.as_manager()
 
@@ -266,6 +268,7 @@ class ProductImage(TimeStampedModel):
 
 
 class ProductSpecification(TimeStampedModel):
+    show_in_highlights = models.BooleanField(default=False)
     product = models.ForeignKey(
         Product,
         on_delete=models.CASCADE,

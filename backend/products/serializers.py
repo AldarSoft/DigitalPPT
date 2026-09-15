@@ -3,6 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 
 from rest_framework import serializers
+from django.db import transaction
+from products.presentation import ContentSectionsSerializer, resolve_presentation
 
 from products.models import Category, InventoryAdjustment, Product, ProductImage, ProductSpecification
 
@@ -26,7 +28,7 @@ class CategorySerializer(serializers.ModelSerializer):
     def get_product_count(self, obj) -> int:
         request = self.context.get("request")
         user = getattr(request, "user", None)
-        if user and user.is_authenticated and (
+        if request and request.query_params.get("workspace") == "admin" and user and user.is_authenticated and (
             user.is_superuser or user.has_perm("users.manage_inventory")
         ):
             return obj.products.count()
@@ -42,7 +44,7 @@ class ProductImageSerializer(serializers.ModelSerializer):
 class ProductSpecificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductSpecification
-        fields = ("id", "key", "value", "sort_order")
+        fields = ("id", "key", "value", "sort_order", "show_in_highlights")
 
 
 class LicenseProductSummarySerializer(serializers.ModelSerializer):
@@ -79,6 +81,13 @@ class ProductSerializer(serializers.ModelSerializer):
     inventory_quantity = serializers.SerializerMethodField()
     required_license_product = LicenseProductSummarySerializer(read_only=True)
     is_stock_tracked = serializers.BooleanField(read_only=True)
+    presentation = serializers.SerializerMethodField()
+
+    def get_presentation(self, obj) -> dict:
+        from core.models import SiteSetting
+        if "presentation_defaults" not in self.context:
+            self.context["presentation_defaults"] = SiteSetting.get_solo().product_presentation_defaults
+        return resolve_presentation(obj, self.context["presentation_defaults"])
 
     class Meta:
         model = Product
@@ -105,6 +114,8 @@ class ProductSerializer(serializers.ModelSerializer):
             "category",
             "images",
             "specifications",
+            "detail_layout",
+            "presentation",
         )
 
     def get_current_price(self, obj) -> Decimal:
@@ -142,6 +153,7 @@ class AdminProductSerializer(ProductSerializer):
             "reserved_inventory_quantity",
             "backordered_inventory_quantity",
             "cost_price",
+            "presentation_overrides",
             *ProductSerializer.Meta.fields[13:],
             "status",
             "is_active",
@@ -178,6 +190,12 @@ class CategoryWriteSerializer(serializers.ModelSerializer):
 
 
 class ProductWriteSerializer(serializers.ModelSerializer):
+    presentation_overrides = ContentSectionsSerializer(required=False)
+
+    def validate_presentation_overrides(self, value):
+        serializer = ContentSectionsSerializer(data=value)
+        serializer.is_valid(raise_exception=True)
+        return serializer.validated_data
     images = ProductImageSerializer(many=True, required=False)
     specifications = ProductSpecificationSerializer(many=True, required=False)
     required_license_product_id = serializers.PrimaryKeyRelatedField(
@@ -213,6 +231,8 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             "is_active",
             "images",
             "specifications",
+            "detail_layout",
+            "presentation_overrides",
         )
 
     def validate(self, attrs):
@@ -286,12 +306,16 @@ class ProductWriteSerializer(serializers.ModelSerializer):
         if self.instance and required_license_product == self.instance:
             errors["required_license_product_id"] = "A product cannot require itself."
         images = attrs.get("images")
+        specifications = attrs.get("specifications")
+        if specifications is not None and sum(bool(row.get("show_in_highlights")) for row in specifications) > 4:
+            errors["specifications"] = "Select no more than four highlights."
         if images is not None and sum(bool(image.get("is_primary")) for image in images) > 1:
             errors["images"] = "Only one product image can be primary."
         if errors:
             raise serializers.ValidationError(errors)
         return attrs
 
+    @transaction.atomic
     def create(self, validated_data):
         images_data = validated_data.pop("images", [])
         specifications_data = validated_data.pop("specifications", [])
@@ -299,6 +323,7 @@ class ProductWriteSerializer(serializers.ModelSerializer):
         self._sync_children(product, images_data, specifications_data)
         return product
 
+    @transaction.atomic
     def update(self, instance, validated_data):
         images_data = validated_data.pop("images", None)
         specifications_data = validated_data.pop("specifications", None)

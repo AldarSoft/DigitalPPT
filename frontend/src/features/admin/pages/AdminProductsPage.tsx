@@ -5,7 +5,10 @@ import { ArrowDown, ArrowUp, ChevronRight, Download, FolderTree, Image as ImageI
 import { toast } from 'sonner'
 import { api, mediaUrl, unwrap, type CategoryInput } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
-import type { Category, Product } from '../../../types'
+import type { Category, Product, ProductLayout, ProductPresentation } from '../../../types'
+import { ProductPresentationEditor } from '../components/ProductPresentationEditor'
+import { invalidateCatalog } from '../../../lib/invalidate-catalog'
+import { Link } from 'react-router-dom'
 import { AdminSelect } from '../components/AdminSelect'
 import { AdminErrorState } from '../components/AdminErrorState'
 import { Pagination } from '../../../components/Pagination'
@@ -32,26 +35,26 @@ export function AdminProductsPage() {
         query.set('ordering', '-updated_at');
         query.set('page', String(page));
         query.set('page_size', String(PAGE_SIZE));
-        return api.products(query.toString());
+        return api.adminProducts(query.toString());
       },
       placeholderData: keepPreviousData,
     });
     const products = productsQuery.data ? unwrap(productsQuery.data) : [];
     const totalProducts = productsQuery.data && !Array.isArray(productsQuery.data) ? productsQuery.data.count : products.length;
     const categoriesQuery = useQuery({
-      queryKey: ['categories'],
+      queryKey: ['admin-categories'],
       queryFn: api.adminCategories,
     });
     const categories = categoriesQuery.data ? unwrap(categoriesQuery.data) : [];
     const licenseProductsQuery = useQuery({
       queryKey: ['admin-license-products'],
-      queryFn: () => api.products('licensing_role=license_product&page_size=100'),
+      queryFn: () => api.adminProducts('licensing_role=license_product&page_size=100'),
     });
     const licenseProducts = licenseProductsQuery.data ? unwrap(licenseProductsQuery.data) : [];
 
     const remove = useMutation({
         mutationFn: (product: Product) => api.deleteProduct(product.slug),
-        onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['admin-products'] }); toast.success('Product deleted'); },
+        onSuccess: () => { invalidateCatalog(queryClient); toast.success('Product deleted'); },
         onError: () => toast.error('Could not delete product'),
     });
     if (productsQuery.isError || categoriesQuery.isError || licenseProductsQuery.isError)
@@ -97,7 +100,7 @@ function CategoryManager({ categories, onClose }: { categories: Category[]; onCl
     const remove = useMutation({
         mutationFn: (item: Category) => api.deleteCategory(item.slug),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['categories'] });
+            invalidateCatalog(queryClient);
             queryClient.invalidateQueries({ queryKey: ['admin-products'] });
             toast.success('Category deleted');
         },
@@ -149,7 +152,7 @@ function CategoryEditor({ category, onCancel, onSaved }: { category: Category | 
             ? api.updateCategory(category.slug, data)
             : api.createCategory(data),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['categories'] });
+            invalidateCatalog(queryClient);
             queryClient.invalidateQueries({ queryKey: ['admin-products'] });
             queryClient.invalidateQueries({ queryKey: ['products'] });
             toast.success(category ? 'Category saved' : 'Category created');
@@ -198,6 +201,7 @@ type EditableProductImage = {
 };
 
 type EditableProductSpecification = {
+    show_in_highlights: boolean;
     id: string;
     key: string;
     value: string;
@@ -210,6 +214,10 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
     onClose: () => void;
 }) {
     const queryClient = useQueryClient();
+    const defaultsQuery = useQuery({ queryKey: ['site-settings'], queryFn: api.siteSettings });
+    const [layout, setLayout] = useState<ProductLayout>(product?.detail_layout ?? 'accessory');
+    const [overrides, setOverrides] = useState<Partial<ProductPresentation>>(product?.presentation_overrides ?? {});
+    const dialogRef = useRef<HTMLElement>(null);
     const objectUrls = useRef(new Set<string>());
     const [images, setImages] = useState<EditableProductImage[]>(() => {
         const source = orderedProductImages(product?.images ?? []);
@@ -227,13 +235,14 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             id: crypto.randomUUID(),
             key: specification.key,
             value: specification.value,
+            show_in_highlights: specification.show_in_highlights ?? false,
         })),
     );
     useEffect(() => () => {
         objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
         objectUrls.current.clear();
     }, []);
-    const { register, handleSubmit, control } = useForm<ProductForm>({
+    const { register, handleSubmit, control, formState: { isDirty } } = useForm<ProductForm>({
         defaultValues: product ? {
             category: product.category.id,
             name: product.name,
@@ -268,6 +277,28 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
         },
     });
     const licensingRole = useWatch({ control, name: 'licensing_role' });
+    const [initialExtras] = useState(() => JSON.stringify({ images, specifications, layout, overrides }));
+    const dirty = isDirty || initialExtras !== JSON.stringify({ images, specifications, layout, overrides });
+    const requestClose = () => { if (!dirty || window.confirm('Discard unsaved product changes?')) onClose(); };
+    useEffect(() => {
+        const element = dialogRef.current;
+        const previous = document.activeElement as HTMLElement | null;
+        element?.focus();
+        const trap = (event: KeyboardEvent) => {
+            if (event.key !== 'Tab') return;
+            const focusable = Array.from(element?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary') ?? []).filter((item) => item.offsetParent !== null && !item.closest('fieldset:disabled'));
+            const first = focusable[0], last = focusable[focusable.length - 1];
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === element)) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        };
+        element?.addEventListener('keydown', trap);
+        return () => { element?.removeEventListener('keydown', trap); previous?.focus(); };
+    }, []);
+    useEffect(() => {
+        const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
+        window.addEventListener('beforeunload', warn);
+        return () => window.removeEventListener('beforeunload', warn);
+    }, [dirty]);
     const save = useMutation({
         mutationFn: async (data: ProductForm) => {
             const uploadedImages = await Promise.all(images.map(async (image) => ({
@@ -278,6 +309,8 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             })));
             const payload = {
                 ...data,
+                detail_layout: layout,
+                presentation_overrides: overrides,
                 cost_price: data.cost_price || null,
                 sale_price: data.sale_price || null,
                 bulk_minimum_quantity: data.bulk_minimum_quantity ? Number(data.bulk_minimum_quantity) : null,
@@ -301,6 +334,7 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
                     sort_order: index,
                 })),
                 specifications: specifications.map((specification, index) => ({
+                    show_in_highlights: specification.show_in_highlights,
                     key: specification.key.trim(),
                     value: specification.value.trim(),
                     sort_order: index,
@@ -309,8 +343,7 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             return product ? api.updateProduct(product.slug, payload) : api.createProduct(payload);
         },
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['admin-products'] });
-            queryClient.invalidateQueries({ queryKey: ['products'] });
+            invalidateCatalog(queryClient);
             toast.success(product ? 'Product saved' : 'Product created');
             onClose();
         },
@@ -374,9 +407,10 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             return next;
         });
     };
-    return (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={onClose}>
-      <aside className={tw("product-editor")} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-        <div><h2>{product ? 'Edit product' : 'Add product'}</h2><button type="button" aria-label="Close editor" onClick={onClose}><X /></button></div>
+    return (<div className={`${tw("editor-backdrop")} !z-[120]`} role="presentation" onMouseDown={requestClose}>
+      <aside ref={dialogRef} tabIndex={-1} className={tw("product-editor")} role="dialog" aria-label={product ? 'Edit product' : 'Add product'} aria-modal="true" onKeyDown={(event) => { if (event.key === 'Escape') requestClose(); }} onMouseDown={(event) => event.stopPropagation()}>
+        <div className="sticky -top-6 z-10 bg-white py-3"><h2>{product ? 'Edit product' : 'Add product'}</h2><button type="button" aria-label="Close editor" onClick={requestClose}><X /></button></div>
+        {product ? <Link className="text-sm text-brand underline" target="_blank" to={`/product-preview/${product.slug}`}>Preview saved product</Link> : null}
         <form onSubmit={handleSubmit((values) => save.mutate(values))}>
           <label>Product name<input required {...register('name')}/></label>
           <div className={tw("editor-row")}><label>SKU<input required {...register('sku')}/></label><label>Brand<input {...register('brand')}/></label></div>
@@ -391,12 +425,13 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
           <label>Description<textarea rows={4} {...register('description')}/></label>
           <fieldset className={tw("product-specification-editor")}>
             <legend>Product highlights and specifications</legend>
-            <p>The first four rows appear in the product highlight banner. Every row appears in technical details.</p>
+            <p>{specifications.filter((item) => item.show_in_highlights).length} / 4 highlights selected</p>
             {specifications.length ? <div className={tw("product-specification-list")}>
               {specifications.map((specification, index) => <article key={specification.id}>
                 <span>{index + 1}</span>
                 <label>Label<input required maxLength={120} value={specification.key} onChange={(event) => updateSpecification(specification.id, 'key', event.target.value)}/></label>
                 <label>Value<input required maxLength={255} value={specification.value} onChange={(event) => updateSpecification(specification.id, 'value', event.target.value)}/></label>
+                <label className="!col-start-2 !flex items-center gap-2"><input className="!size-4 !min-h-0" type="checkbox" checked={specification.show_in_highlights} disabled={!specification.show_in_highlights && specifications.filter((item) => item.show_in_highlights).length >= 4} onChange={(event) => setSpecifications((current) => current.map((item) => item.id === specification.id ? { ...item, show_in_highlights: event.target.checked } : item))} />Highlight</label>
                 <div className={tw("product-specification-actions")}>
                   <button type="button" title="Move up" aria-label={`Move specification ${index + 1} up`} disabled={index === 0} onClick={() => moveSpecification(index, -1)}><ArrowUp size={15}/></button>
                   <button type="button" title="Move down" aria-label={`Move specification ${index + 1} down`} disabled={index === specifications.length - 1} onClick={() => moveSpecification(index, 1)}><ArrowDown size={15}/></button>
@@ -404,8 +439,9 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
                 </div>
               </article>)}
             </div> : <div className={tw("product-specification-empty")}><span>No specifications added. The highlight banner will stay hidden.</span></div>}
-            <button className={tw("action-button action-button-secondary w-full")} type="button" onClick={() => setSpecifications((current) => [...current, { id: crypto.randomUUID(), key: '', value: '' }])}><Plus size={16}/>Add specification</button>
+            <button className={tw("action-button action-button-secondary w-full")} type="button" onClick={() => setSpecifications((current) => [...current, { id: crypto.randomUUID(), key: '', value: '', show_in_highlights: false }])}><Plus size={16}/>Add specification</button>
           </fieldset>
+          {defaultsQuery.data ? <ProductPresentationEditor layout={layout} onLayoutChange={setLayout} defaults={defaultsQuery.data.product_presentation_defaults} overrides={overrides} onChange={setOverrides} /> : <p role="status">{defaultsQuery.isError ? 'Could not load content defaults.' : 'Loading content defaults...'}</p>}
           <fieldset className={tw('product-image-upload')}>
             <legend>Product images</legend>
             {images.length ? <div className={tw('product-image-list')}>
@@ -430,7 +466,7 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             <small>The primary image appears on product cards. All images appear in the product gallery. WEBP, JPG, or PNG, up to 5 MB each.</small>
           </fieldset>
           <div className={tw("editor-row")}><label>Status<AdminSelect {...register('status')}><option value="draft">Draft</option><option value="published">Published</option><option value="archived">Archived</option></AdminSelect></label><label className={tw("editor-check")}><input type="checkbox" {...register('is_active')}/>Active in storefront</label></div>
-          <div className={tw("editor-actions")}><button type="button" onClick={onClose}>Cancel</button><button className={tw("admin-primary")} type="submit" disabled={save.isPending}>{save.isPending ? 'Saving...' : 'Save product'}</button></div>
+          <div className={`${tw("editor-actions")} sticky -bottom-6 border-t border-border bg-white py-4`}><button type="button" onClick={requestClose}>Cancel</button><button className={tw("admin-primary")} type="submit" disabled={save.isPending || !defaultsQuery.data}>{save.isPending ? 'Saving...' : 'Save product'}</button></div>
         </form>
       </aside>
     </div>);

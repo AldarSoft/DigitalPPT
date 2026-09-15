@@ -197,3 +197,33 @@ DEPLOY_SKIP_UPDATE=1 ./deploy/scripts/deploy.sh
 
 For destructive or incompatible migrations, restore the verified database dump
 and the matching code revision during a maintenance window.
+
+## Product Presentation Release
+
+Deploy the backend and frontend together for this release. Run the PostgreSQL
+backup script first, then apply migrations and rebuild the frontend using the
+normal deployment procedure. The new migrations are additive:
+
+- `core.0020` adds shared product page defaults.
+- `products.0009` adds presentation overrides and explicit highlight selection.
+- `products.0010` assigns existing product templates and preserves the first four
+  radio specifications as highlights. Existing specification values are retained.
+
+For the temporary IP test installation, restart `digitalptt-ip-test-web` and
+`digitalptt-ip-test-worker` after deploying; validated production installations
+use `digitalptt-web` and `digitalptt-worker` instead.
+
+In Site settings, review Product page defaults before publishing. In Products,
+each product inherits the selected template and information badges. Customize
+copies one section into the product's overrides; Reset to defaults removes that
+section's override. Global edits affect inherited sections only. Visibility and
+ordering are editable, and online payment badges appear only when a live online
+provider is available. Editing descriptive content never enables payments.
+
+Public catalog requests return only published, active products in active
+categories, including when the visitor is an administrator. Inventory screens
+request `?workspace=admin`; the `/catalog/<slug>/preview/` endpoint requires
+inventory permission. The admin product editor links to the saved preview.
+
+After deployment, verify a draft is absent from the shop, homepage and direct
+product URL, then verify its authorized preview and a published product's badges.

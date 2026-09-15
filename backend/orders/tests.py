@@ -267,7 +267,7 @@ class InventoryReservationLifecycleTests(TestCase):
         )
         staff_client = APIClient()
         staff_client.force_authenticate(staff)
-        staff_response = staff_client.get("/api/v1/products/catalog/reservation-radio/")
+        staff_response = staff_client.get("/api/v1/products/catalog/reservation-radio/?workspace=admin")
         self.assertEqual(staff_response.status_code, 200)
         self.assertEqual(staff_response.data["on_hand_inventory_quantity"], 2)
         self.assertEqual(staff_response.data["reserved_inventory_quantity"], 1)

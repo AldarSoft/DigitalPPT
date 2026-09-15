@@ -1,3 +1,26 @@
+export type ProductLayout = 'radio' | 'license' | 'accessory'
+export type ProductContentIcon = 'truck' | 'shield-check' | 'lock-keyhole' | 'message-circle' | 'arrow-up-right' | 'users' | 'credit-card' | 'map-pin' | 'battery' | 'package' | 'info'
+export interface ProductContentItem {
+  id: string
+  icon: ProductContentIcon
+  title: string
+  description: string
+  active: boolean
+}
+export interface ProductIntroduction {
+  eyebrow: string
+  heading: string
+  description: string
+  notice: string
+  active: boolean
+}
+export interface ProductPresentation {
+  intro: ProductIntroduction
+  features: ProductContentItem[]
+  assurances: ProductContentItem[]
+}
+export type ProductPresentationDefaults = Record<ProductLayout, Pick<ProductPresentation, 'intro' | 'features'>> & { assurances: ProductContentItem[] }
+
 export interface Paginated<T> {
   count: number
   next: string | null
@@ -24,6 +47,7 @@ export interface ProductImage {
 }
 
 export interface ProductSpecification {
+  show_in_highlights?: boolean
   id?: number
   key: string
   value: string
@@ -41,6 +65,9 @@ export interface LicenseProductSummary {
 }
 
 export interface Product {
+  detail_layout: ProductLayout
+  presentation: ProductPresentation
+  presentation_overrides?: Partial<ProductPresentation>
   id: number
   name: string
   slug: string
@@ -140,6 +167,7 @@ export interface Banner {
 }
 
 export interface SiteSettings {
+  product_presentation_defaults: ProductPresentationDefaults
   site_name: string
   tagline: string
   support_email: string

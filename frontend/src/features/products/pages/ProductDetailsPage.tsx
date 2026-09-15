@@ -2,13 +2,14 @@ import { tw } from "../../../lib/tailwind-styles";
 import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowUpRight, BatteryCharging, CreditCard, Info, LockKeyhole, MapPinned, MessageCircle, Minus, PackageCheck, Plus, ShieldCheck, ShoppingBag, Truck, UsersRound, } from 'lucide-react';
-import { toast } from 'sonner';
+import { AlertTriangle, ArrowUpRight, CreditCard, MessageCircle, Minus, PackageCheck, Plus, ShieldCheck, ShoppingBag, } from 'lucide-react';
 import { useCart } from '../../../contexts/CartContext';
 import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api';
 import { productRequestState } from '../../../lib/catalog-request-state';
 import { unitPriceForQuantity } from '../../../lib/pricing';
 import type { Product } from '../../../types';
+import { ProductAssurances, ProductMarketing } from '../components/ProductContent';
+import { visibleAssurances } from '../../../lib/product-presentation';
 import { orderedProductImages, primaryProductImage } from '../../../lib/product-images';
 const defaultGallery = [
     {
@@ -24,38 +25,7 @@ const defaultGallery = [
         alt: 'IPTT510 radio top and side control detail',
     },
 ];
-const featureItems = [
-    {
-        icon: MessageCircle,
-        title: 'One-touch communication',
-        copy: 'Fast push-to-talk for individuals or teams',
-    },
-    {
-        icon: ArrowUpRight,
-        title: 'Unlimited talk range',
-        copy: 'Communicate wherever cellular service is available',
-    },
-    {
-        icon: UsersRound,
-        title: 'Private and group calls',
-        copy: 'Member lists, parent groups and dispatch',
-    },
-    {
-        icon: CreditCard,
-        title: 'Dual SIM card',
-        copy: 'Flexible network access for dependable coverage',
-    },
-    {
-        icon: MapPinned,
-        title: 'Web dispatch ready',
-        copy: 'Coordinate users and talk groups centrally',
-    },
-    {
-        icon: BatteryCharging,
-        title: 'Long-duration operation',
-        copy: '3000mAh battery for the working day',
-    },
-];
+
 function ProductBenefits() {
     const benefits = [
         { icon: PackageCheck, title: 'Delivery & returns', copy: 'Clear policies, secure delivery' },
@@ -75,7 +45,7 @@ function ProductBenefits() {
       </div>
     </section>);
 }
-export function ProductDetailsPage() {
+export function ProductDetailsPage({ preview = false }: { preview?: boolean }) {
     const cart = useCart();
     const navigate = useNavigate();
     const onAdd = (product: Product, quantity: number) => cart.add(product, quantity);
@@ -85,11 +55,12 @@ export function ProductDetailsPage() {
     };
     const { slug = 'iptt510' } = useParams();
     const productQuery = useQuery({
-        queryKey: ['product', slug],
-        queryFn: () => api.product(slug),
+        queryKey: [preview ? 'product-preview' : 'product', slug],
+        queryFn: () => preview ? api.previewProduct(slug) : api.product(slug),
         retry: (failureCount, error) => !(error instanceof ApiError && error.status === 404) && failureCount < 2,
     });
-    const product = productQuery.data;
+    const paymentStatus = useQuery({ queryKey: ['storefront-payment-status'], queryFn: api.storefrontPaymentStatus });
+    const product = productQuery.isError ? undefined : productQuery.data;
     const requestState = productRequestState({
         hasData: Boolean(product),
         isLoading: productQuery.isLoading,
@@ -139,7 +110,7 @@ export function ProductDetailsPage() {
     const activeImage = galleryState.productId === product.id
         ? Math.min(galleryState.index, gallery.length - 1)
         : 0;
-    const isRadio = product.category.slug.includes('radio') && !product.category.slug.includes('holster');
+    const isRadio = product.detail_layout === 'radio';
     const quoteHref = `mailto:sales@digitalptt.com?subject=${encodeURIComponent(`Quote request: ${product.name}`)}&body=${encodeURIComponent(`Hello, I would like a quote for ${product.name} (SKU: ${product.sku}).`)}`;
     const relatedProducts = (relatedQuery.data ? unwrap(relatedQuery.data) : [])
         .filter((item) => item.category.slug === product.category.slug && item.id !== product.id)
@@ -151,7 +122,7 @@ export function ProductDetailsPage() {
         { key: 'Category', value: product.category.name },
         ...product.specifications,
     ];
-    const highlightItems = product.specifications.slice(0, 4);
+    const highlightItems = product.specifications.filter((item) => item.show_in_highlights).slice(0, 4);
     const highlightColumns = {
         1: 'grid-cols-1',
         2: 'grid-cols-2',
@@ -160,6 +131,7 @@ export function ProductDetailsPage() {
     }[highlightItems.length];
     const detailRows = Array.from({ length: Math.ceil(detailItems.length / 2) }, (_, index) => detailItems.slice(index * 2, index * 2 + 2));
     return (<main className={tw("product-page")}>
+      {preview ? <div className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm">Product preview · {product.status} <Link className="ml-4 underline" to="/admin/products">Back to products</Link></div> : null}
       <nav className={tw("product-breadcrumb")} aria-label="Breadcrumb">
         <div className={tw("shell")}>
           <Link to="/">Home</Link>
@@ -196,7 +168,7 @@ export function ProductDetailsPage() {
             {product.bulk_minimum_quantity && product.bulk_unit_price ? <p className={tw(`product-bulk-price ${bulkPriceActive ? 'active' : ''}`)}>{bulkPriceActive ? `Bulk price active - $${unitPrice.toFixed(2)} each` : `Buy ${product.bulk_minimum_quantity}+ for $${Number(product.bulk_unit_price).toFixed(2)} each`}</p> : null}
             <p className={tw(`product-stock ${isOutOfStock ? 'out' : ''}`)}><span /> {isOutOfStock ? 'Currently out of stock' : isLicenseProduct ? `${product.license_term_days ?? 365}-day digital license - activates after payment approval` : `In stock - ${availableStock} ready to ship`}</p>
 
-            <div className={tw("product-purchase-row")}>
+            <div className={tw("product-purchase-row")} inert={preview}>
               <div className={tw(`quantity-control ${isOutOfStock ? 'disabled' : ''}`)} aria-label="Quantity selector" aria-disabled={isOutOfStock}>
                 <button type="button" aria-label="Decrease quantity" disabled={isOutOfStock || quantity <= 1} onClick={() => updateQuantity(quantity - 1)}>
                   <Minus size={17}/>
@@ -214,71 +186,22 @@ export function ProductDetailsPage() {
                   Add to cart
                 </button>)}
             </div>
-            {isOutOfStock ? null : (<button className={tw("product-buy-button")} type="button" onClick={() => onBuyNow(product, quantity)}>
+            {isOutOfStock || preview ? null : (<button className={tw("product-buy-button")} type="button" onClick={() => onBuyNow(product, quantity)}>
                 Buy now
               </button>)}
 
-            <div className={tw("product-assurances")}>
-              <button type="button" onClick={() => toast('Delivery is calculated during checkout.')}>
-                <Truck size={24}/>
-                <span>Delivery quote</span>
-              </button>
-              <button type="button" onClick={() => toast('This radio includes a 12-month warranty.')}>
-                <ShieldCheck size={24}/>
-                <span>12-month warranty</span>
-              </button>
-              <button type="button" onClick={() => toast('Secure payment options will appear at checkout.')}>
-                <LockKeyhole size={24}/>
-                <span>Secure payment</span>
-              </button>
-            </div>
+            <ProductAssurances items={visibleAssurances(product.presentation.assurances, paymentStatus.data)} />
           </div>
         </div>
       </section>
 
-      {isRadio && highlightItems.length ? (<section className={tw("product-stat-band", highlightColumns)} aria-label="Product highlights">
+      {highlightItems.length ? (<section className={tw("product-stat-band", highlightColumns)} aria-label="Product highlights">
           {highlightItems.map((item) => <div key={`${item.key}-${item.sort_order}`}><strong>{item.value}</strong><small>{item.key.toUpperCase()}</small></div>)}
         </section>) : null}
 
-      {isRadio ? <section className={tw("product-features")}>
-        <div className={tw("shell product-feature-grid")}>
-          <div className={tw("product-feature-copy")}>
-            <p className={tw("eyebrow")}>CONNECTED COMMUNICATION</p>
-            <h2>Instant voice across the whole country</h2>
-            <p>
-              {product.name} combines instant voice communication with connected
-              field workflows. {product.description || product.short_description}
-            </p>
-            <div className={tw("product-notice")}>
-              <Info size={21}/>
-              <span>A monthly subscription is required for Web Dispatch and managed talk groups.</span>
-            </div>
-          </div>
-          <div className={tw("product-feature-list")}>
-            {featureItems.map(({ icon: Icon, title, copy }) => (<div className={tw("product-feature-item")} key={title}>
-                <span><Icon size={24}/></span>
-                <div><strong>{title}</strong><small>{copy}</small></div>
-              </div>))}
-          </div>
-        </div>
-      </section> : (<section className={tw("product-features")}>
-          <div className={tw("shell product-feature-grid")}>
-            <div className={tw("product-feature-copy")}>
-              <p className={tw("eyebrow")}>{isLicenseProduct ? 'RADIOADMIN SERVICE' : 'FIELD-READY ACCESSORY'}</p>
-              <h2>{isLicenseProduct ? 'Annual capacity for your connected radio products' : 'Designed for dependable daily carry'}</h2>
-              <p>{product.description || product.short_description}</p>
-              <div className={tw("product-notice")}><Info size={21}/><span>{isLicenseProduct ? `Each license supports up to ${product.license_capacity ?? 0} compatible products and can extend an existing license or prepare capacity for future radio orders.` : 'Confirm radio fit and carry preference before placing a larger fleet order.'}</span></div>
-            </div>
-            <div className={tw("product-feature-list")}>
-              {product.specifications.map((spec) => (<div className={tw("product-feature-item")} key={spec.key}>
-                  <span><ShieldCheck size={24}/></span>
-                  <div><strong>{spec.key}</strong><small>{spec.value}</small></div>
-                </div>))}
-            </div>
-          </div>
-        </section>)}
+      <ProductMarketing content={product.presentation} description={product.description || product.short_description} />
 
-      {isRadio ? <section className={tw("product-specs")}>
+      {detailItems.length ? <section className={tw("product-specs")}>
         <div className={tw("shell")}>
           <p className={tw("eyebrow")}>TECHNICAL DETAILS</p>
           <h2>{product.name} specifications</h2>
@@ -290,7 +213,7 @@ export function ProductDetailsPage() {
                   </Fragment>))}
               </div>))}
           </div>
-          <p className={tw("product-spec-note")}>*Range depends on cellular network availability and active service.</p>
+          {isRadio ? <p className={tw("product-spec-note")}>*Range depends on cellular network availability and active service.</p> : null}
         </div>
       </section> : null}
 

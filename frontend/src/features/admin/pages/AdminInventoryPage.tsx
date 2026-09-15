@@ -20,7 +20,7 @@ export function AdminInventoryPage() {
     const [mode, setMode] = useState<'add' | 'set'>('add');
     const [quantity, setQuantity] = useState(1);
     const [reason, setReason] = useState('stock_received');
-    const productsQuery = useQuery({ queryKey: ['admin-products'], queryFn: () => api.products('ordering=inventory_quantity&page_size=100') });
+    const productsQuery = useQuery({ queryKey: ['admin-products'], queryFn: () => api.adminProducts('ordering=inventory_quantity&page_size=100') });
     const allProducts = productsQuery.data ? unwrap(productsQuery.data) : [];
     const stockTrackedProducts = allProducts.filter((product) => product.is_stock_tracked !== false);
     const products = allProducts.filter((product) => (!search || `${product.name} ${product.sku}`.toLowerCase().includes(search.toLowerCase())) &&

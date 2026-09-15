@@ -168,7 +168,7 @@ async function download(path: string, filename: string) {
 
 export const api = {
   categories: () => request<Paginated<Category> | Category[]>('/products/categories/'),
-  adminCategories: () => request<Paginated<Category> | Category[]>('/products/categories/?page_size=100&ordering=name'),
+  adminCategories: () => request<Paginated<Category> | Category[]>('/products/categories/?page_size=100&ordering=name&workspace=admin'),
   createCategory: (data: CategoryInput) =>
     request<Category>('/products/categories/', { method: 'POST', body: JSON.stringify(data) }),
   updateCategory: (slug: string, data: CategoryInput) =>
@@ -269,6 +269,8 @@ export const api = {
     }),
   products: (query = '') =>
     request<Paginated<Product> | Product[]>(`/products/catalog/${query ? `?${query}` : ''}`),
+  adminProducts: (query = '') => request<Paginated<Product> | Product[]>(`/products/catalog/?${query}&workspace=admin`),
+  previewProduct: (slug: string) => request<Product>(`/products/catalog/${encodeURIComponent(slug)}/preview/`),
   product: (slug: string) => request<Product>(`/products/catalog/${slug}/`),
   createProduct: (data: unknown) =>
     request<Product>('/products/catalog/', { method: 'POST', body: JSON.stringify(data) }),

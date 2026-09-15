@@ -5,6 +5,7 @@ from rest_framework import serializers
 
 from core.models import Banner, ContactMessage, Promotion, SiteSetting, UserNotification
 from common.validators import validate_phone, validate_store_url
+from products.presentation import ProductPresentationDefaultsSerializer
 
 
 class BannerSerializer(serializers.ModelSerializer):
@@ -37,6 +38,7 @@ class BannerSerializer(serializers.ModelSerializer):
 
 
 PUBLIC_SITE_SETTING_FIELDS = (
+    "product_presentation_defaults",
     "site_name",
     "tagline",
     "support_email",
@@ -85,6 +87,12 @@ class PublicSiteSettingSerializer(serializers.ModelSerializer):
 
 
 class AdminSiteSettingSerializer(serializers.ModelSerializer):
+    product_presentation_defaults = ProductPresentationDefaultsSerializer(required=False)
+
+    def validate_product_presentation_defaults(self, value):
+        serializer = ProductPresentationDefaultsSerializer(data=value)
+        serializer.is_valid(raise_exception=True)
+        return serializer.validated_data
     homepage_hero_secondary_cta_url = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -102,6 +110,7 @@ class AdminSiteSettingSerializer(serializers.ModelSerializer):
         model = SiteSetting
         fields = (
             "site_name",
+            "product_presentation_defaults",
             "tagline",
             "support_email",
             "support_phone",

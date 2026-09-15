@@ -66,6 +66,9 @@ export function AppRouter() {
             <Route path="payment" element={<PaymentPage />} />
           </Route>
           <Route element={<RequireStaff />}>
+            <Route element={<RequireStaffPermission anyOf={['manage_inventory']} />}>
+              <Route path="product-preview/:slug" element={<ProductDetailsPage preview />} />
+            </Route>
             <Route path="payment-preview" element={<PaymentPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />

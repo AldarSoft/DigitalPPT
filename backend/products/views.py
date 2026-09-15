@@ -57,10 +57,16 @@ class CategoryViewSet(viewsets.ModelViewSet):
     ordering_fields = ("name", "created_at")
     lookup_field = "slug"
 
+    def is_workspace_request(self):
+        return self.action in {"create", "update", "partial_update", "destroy"} or self.request.query_params.get("workspace") == "admin"
+
+    def get_permissions(self):
+        return [CanManageInventory()] if self.is_workspace_request() else super().get_permissions()
+
     def get_queryset(self):
         queryset = super().get_queryset()
         user = self.request.user
-        if user and user.is_authenticated and (
+        if self.is_workspace_request() and user and user.is_authenticated and (
             user.is_superuser or user.has_perm("users.manage_inventory")
         ):
             return queryset
@@ -157,7 +163,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 or self.request.user.has_perm("users.manage_inventory")
             )
         )
-        if not can_manage_inventory:
+        if not (can_manage_inventory and self.is_workspace_request()):
             queryset = queryset.public()
 
         category_slug = self.request.query_params.get("category")
@@ -217,6 +223,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         return queryset
 
     def get_permissions(self):
+        if self.is_workspace_request():
+            return [CanManageInventory()]
         if self.action in {"create", "update", "partial_update", "destroy", "inventory_adjust"}:
             return [CanManageInventory()]
         return [CanManageInventoryOrReadOnly()]
@@ -224,12 +232,21 @@ class ProductViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action in {"create", "update", "partial_update"}:
             return ProductWriteSerializer
-        if self.request.user and (
+        if self.is_workspace_request() and self.request.user and (
             self.request.user.is_superuser
             or self.request.user.has_perm("users.manage_inventory")
         ):
             return AdminProductSerializer
         return ProductSerializer
+
+    def is_workspace_request(self):
+        return self.action in {"create", "update", "partial_update", "destroy", "inventory_adjust", "preview"} or self.request.query_params.get("workspace") == "admin"
+
+    @action(detail=True, methods=["get"])
+    def preview(self, request, slug=None):
+        response = Response(self.get_serializer(self.get_object()).data)
+        response["Cache-Control"] = "private, no-store"
+        return response
 
     def perform_update(self, serializer):
         previous_inventory = serializer.instance.inventory_quantity

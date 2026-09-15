@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit --incremental false -p tsconfig.app.json",
-    "test": "node --test --experimental-strip-types src/lib/session-refresh.test.ts src/lib/catalog-validation.test.ts src/lib/catalog-request-state.test.ts",
+    "test": "node --test --experimental-strip-types src/lib/session-refresh.test.ts src/lib/catalog-validation.test.ts src/lib/catalog-request-state.test.ts src/lib/product-presentation.test.ts",
     "build": "npm run typecheck && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
