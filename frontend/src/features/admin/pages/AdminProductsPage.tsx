@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useForm, useWatch } from 'react-hook-form'
-import { ChevronRight, Download, FolderTree, Image as ImageIcon, Pencil, Plus, Search, Star, Trash2, Upload, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, ChevronRight, Download, FolderTree, Image as ImageIcon, Pencil, Plus, Search, Star, Trash2, Upload, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, mediaUrl, unwrap, type CategoryInput } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
@@ -105,20 +105,23 @@ function CategoryManager({ categories, onClose }: { categories: Category[]; onCl
     });
     const category = editing && editing !== 'new' ? editing : null;
     return (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={onClose}>
-      <aside className={tw("product-editor")} role="dialog" aria-modal="true" aria-label="Manage product categories" onMouseDown={(event) => event.stopPropagation()}>
-        <div><h2>{editing ? (category ? 'Edit category' : 'Add category') : 'Categories'}</h2><button type="button" aria-label="Close category manager" onClick={onClose}><X /></button></div>
+      <aside className={tw("product-editor category-manager")} role="dialog" aria-modal="true" aria-label="Manage product categories" onMouseDown={(event) => event.stopPropagation()}>
+        <div><span><h2>{editing ? (category ? 'Edit category' : 'Add category') : 'Categories'}</h2>{!editing ? <small>{categories.length} {categories.length === 1 ? 'category' : 'categories'}</small> : null}</span><button type="button" aria-label="Close category manager" onClick={onClose}><X /></button></div>
         {editing ? <CategoryEditor category={category} onCancel={() => setEditing(null)} onSaved={() => setEditing(null)}/> : <>
           <button className={tw("action-button action-button-primary mt-5 w-full")} type="button" onClick={() => setEditing('new')}><Plus size={17}/>Add category</button>
-          <div className={tw("mt-4 divide-y divide-border-soft border-y border-border-soft")}>
-            {categories.map((item) => <article className={tw("grid min-h-[68px] grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-3")} key={item.id}>
-              <span className={tw("min-w-0")}><strong className={tw("block truncate text-sm")}>{item.name}</strong><small className={tw("mt-1 block text-xs text-text-soft")}>{item.product_count} {item.product_count === 1 ? 'product' : 'products'} - {item.is_active ? 'Active' : 'Inactive'}</small></span>
-              <span className={tw("table-actions")}>
+          <section className={tw("category-list")} aria-label="Product categories">
+            <div className={tw("category-list-head")} aria-hidden="true"><span>Category</span><span>Products</span><span>Status</span><span>Actions</span></div>
+            {categories.map((item) => <article className={tw("category-list-row")} key={item.id}>
+              <span className={tw("min-w-0")}><strong>{item.name}</strong><small>{item.slug}</small></span>
+              <span className={tw("category-product-count")}>{item.product_count} {item.product_count === 1 ? 'product' : 'products'}</span>
+              <span className={tw(`category-status ${item.is_active ? 'active' : 'inactive'}`)}>{item.is_active ? 'Active' : 'Inactive'}</span>
+              <span className={tw("table-actions justify-end")}>
                 <button type="button" title="Edit category" aria-label={`Edit ${item.name}`} onClick={() => setEditing(item)}><Pencil size={16}/></button>
                 <button className={tw("disabled:cursor-not-allowed disabled:opacity-40")} type="button" title={item.product_count ? 'Move products before deleting' : 'Delete category'} aria-label={`Delete ${item.name}`} disabled={item.product_count > 0 || remove.isPending} onClick={() => { if (confirm(`Delete ${item.name}?`)) remove.mutate(item); }}><Trash2 size={16}/></button>
               </span>
             </article>)}
-            {!categories.length ? <p className={tw("py-8 text-center text-sm text-text-soft")}>No categories yet.</p> : null}
-          </div>
+            {!categories.length ? <div className={tw("admin-empty-row")}><FolderTree size={26}/><strong>No categories yet</strong><span>Add the first category to organize products.</span></div> : null}
+          </section>
         </>}
       </aside>
     </div>);
@@ -194,6 +197,12 @@ type EditableProductImage = {
     file?: File;
 };
 
+type EditableProductSpecification = {
+    id: string;
+    key: string;
+    value: string;
+};
+
 function ProductEditor({ product, categories, licenseProducts, onClose }: {
     product: Product | null;
     categories: Category[];
@@ -213,6 +222,13 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             isPrimary: image.is_primary || (!hasPrimary && index === 0),
         }));
     });
+    const [specifications, setSpecifications] = useState<EditableProductSpecification[]>(() =>
+        (product?.specifications ?? []).map((specification) => ({
+            id: crypto.randomUUID(),
+            key: specification.key,
+            value: specification.value,
+        })),
+    );
     useEffect(() => () => {
         objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
         objectUrls.current.clear();
@@ -284,6 +300,11 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
                     is_primary: image.isPrimary,
                     sort_order: index,
                 })),
+                specifications: specifications.map((specification, index) => ({
+                    key: specification.key.trim(),
+                    value: specification.value.trim(),
+                    sort_order: index,
+                })),
             };
             return product ? api.updateProduct(product.slug, payload) : api.createProduct(payload);
         },
@@ -339,6 +360,20 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             return remaining;
         });
     };
+    const updateSpecification = (id: string, field: 'key' | 'value', value: string) => {
+        setSpecifications((current) => current.map((specification) =>
+            specification.id === id ? { ...specification, [field]: value } : specification,
+        ));
+    };
+    const moveSpecification = (index: number, direction: -1 | 1) => {
+        setSpecifications((current) => {
+            const destination = index + direction;
+            if (destination < 0 || destination >= current.length) return current;
+            const next = [...current];
+            [next[index], next[destination]] = [next[destination], next[index]];
+            return next;
+        });
+    };
     return (<div className={tw("editor-backdrop")} role="presentation" onMouseDown={onClose}>
       <aside className={tw("product-editor")} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
         <div><h2>{product ? 'Edit product' : 'Add product'}</h2><button type="button" aria-label="Close editor" onClick={onClose}><X /></button></div>
@@ -354,6 +389,23 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
           <div className={tw("editor-row")}><label>Cost price<input type="number" min="0" step="0.01" {...register('cost_price')}/></label><label>Stock quantity<input type="number" min="0" {...register('inventory_quantity', { valueAsNumber: true })}/></label></div>
           <label>Short description<input {...register('short_description')}/></label>
           <label>Description<textarea rows={4} {...register('description')}/></label>
+          <fieldset className={tw("product-specification-editor")}>
+            <legend>Product highlights and specifications</legend>
+            <p>The first four rows appear in the product highlight banner. Every row appears in technical details.</p>
+            {specifications.length ? <div className={tw("product-specification-list")}>
+              {specifications.map((specification, index) => <article key={specification.id}>
+                <span>{index + 1}</span>
+                <label>Label<input required maxLength={120} value={specification.key} onChange={(event) => updateSpecification(specification.id, 'key', event.target.value)}/></label>
+                <label>Value<input required maxLength={255} value={specification.value} onChange={(event) => updateSpecification(specification.id, 'value', event.target.value)}/></label>
+                <div className={tw("product-specification-actions")}>
+                  <button type="button" title="Move up" aria-label={`Move specification ${index + 1} up`} disabled={index === 0} onClick={() => moveSpecification(index, -1)}><ArrowUp size={15}/></button>
+                  <button type="button" title="Move down" aria-label={`Move specification ${index + 1} down`} disabled={index === specifications.length - 1} onClick={() => moveSpecification(index, 1)}><ArrowDown size={15}/></button>
+                  <button className={tw("danger")} type="button" title="Remove specification" aria-label={`Remove specification ${index + 1}`} onClick={() => setSpecifications((current) => current.filter((item) => item.id !== specification.id))}><Trash2 size={15}/></button>
+                </div>
+              </article>)}
+            </div> : <div className={tw("product-specification-empty")}><span>No specifications added. The highlight banner will stay hidden.</span></div>}
+            <button className={tw("action-button action-button-secondary w-full")} type="button" onClick={() => setSpecifications((current) => [...current, { id: crypto.randomUUID(), key: '', value: '' }])}><Plus size={16}/>Add specification</button>
+          </fieldset>
           <fieldset className={tw('product-image-upload')}>
             <legend>Product images</legend>
             {images.length ? <div className={tw('product-image-list')}>

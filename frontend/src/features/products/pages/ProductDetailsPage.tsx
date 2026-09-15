@@ -151,6 +151,13 @@ export function ProductDetailsPage() {
         { key: 'Category', value: product.category.name },
         ...product.specifications,
     ];
+    const highlightItems = product.specifications.slice(0, 4);
+    const highlightColumns = {
+        1: 'grid-cols-1',
+        2: 'grid-cols-2',
+        3: 'grid-cols-3 max-[760px]:grid-cols-2',
+        4: 'grid-cols-4 max-[760px]:grid-cols-2',
+    }[highlightItems.length];
     const detailRows = Array.from({ length: Math.ceil(detailItems.length / 2) }, (_, index) => detailItems.slice(index * 2, index * 2 + 2));
     return (<main className={tw("product-page")}>
       <nav className={tw("product-breadcrumb")} aria-label="Breadcrumb">
@@ -229,11 +236,8 @@ export function ProductDetailsPage() {
         </div>
       </section>
 
-      {isRadio ? (<section className={tw("product-stat-band")} aria-label="Product highlights">
-          <div><strong>4G LTE</strong><small>NETWORK</small></div>
-          <div><strong>GLOBAL</strong><small>COVERAGE</small></div>
-          <div><strong>3000 mAh</strong><small>BATTERY</small></div>
-          <div><strong>FIELD</strong><small>READY</small></div>
+      {isRadio && highlightItems.length ? (<section className={tw("product-stat-band", highlightColumns)} aria-label="Product highlights">
+          {highlightItems.map((item) => <div key={`${item.key}-${item.sort_order}`}><strong>{item.value}</strong><small>{item.key.toUpperCase()}</small></div>)}
         </section>) : null}
 
       {isRadio ? <section className={tw("product-features")}>
