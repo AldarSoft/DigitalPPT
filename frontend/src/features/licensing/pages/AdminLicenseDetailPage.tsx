@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, ArrowLeft, Bell, CalendarDays, CreditCard, KeyRound, LoaderCircle, RefreshCw, Send, ShieldCheck, UserPlus, Users, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Bell, CalendarDays, CreditCard, KeyRound, LoaderCircle, RefreshCw, Send, ShieldCheck, ShieldPlus, UserPlus, Users, X } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Pagination } from '../../../components/Pagination'
@@ -8,7 +8,7 @@ import { ApiError, api } from '../../../lib/api'
 import { tw } from '../../../lib/tailwind-styles'
 import { LicenseStatusBadge } from '../components/LicenseStatusBadge'
 import { licensingKeys } from '../queryKeys'
-import type { AdminOrganizationUsers, ClientLicenseDetail, LicenseStatus } from '../types'
+import type { AdminManualCoverageCandidate, AdminManualCoveragePlan, AdminOrganizationUsers, ClientLicenseDetail, LicenseStatus } from '../types'
 
 const HISTORY_PAGE_SIZE = 5
 
@@ -16,6 +16,7 @@ export function AdminLicenseDetailPage() {
   const organizationId = Number(useParams().organizationId)
   const queryClient = useQueryClient()
   const [adjustingLicense, setAdjustingLicense] = useState<ClientLicenseDetail | null>(null)
+  const [manualCoverageOpen, setManualCoverageOpen] = useState(false)
   const [notificationOpen, setNotificationOpen] = useState(false)
   const [renewalInvoiceOpen, setRenewalInvoiceOpen] = useState(false)
   const [organizationUsersOpen, setOrganizationUsersOpen] = useState(false)
@@ -59,21 +60,21 @@ export function AdminLicenseDetailPage() {
         <div><p className={tw('admin-breadcrumb')}>Workspace / License management / Organization</p><h1>{detail?.organization.name ?? 'Organization license details'}</h1><p>Organization license details · {detail?.organization.owner?.name ?? 'No owner'} is the Organization Owner</p></div>
         {detail ? <LicenseStatusBadge status={detail.summary.status} /> : null}
       </div>
-      {detailQuery.isLoading ? <AdminDetailState icon={<LoaderCircle className="animate-spin text-brand" size={22} />} title="Loading organization licenses" text="Retrieving subscription, license capacity, and support history." /> : null}
+      {detailQuery.isLoading ? <AdminDetailState icon={<LoaderCircle className="animate-spin text-brand" size={22} />} title="Loading organization licenses" text="Retrieving subscriptions, covered radios, and support history." /> : null}
       {accessDenied ? <AdminDetailState icon={<ShieldCheck className="text-warning" size={22} />} title="Organization license access is required" text="Only Digital PTT administrators can open this organization." /> : null}
       {detailQuery.isError && !accessDenied ? <AdminDetailState icon={<AlertTriangle className="text-danger" size={22} />} title="Organization details could not be loaded" text={messageFrom(detailQuery.error)} action={<button className="min-h-9 rounded-control border border-border-input bg-white px-3 text-xs font-bold text-brand" type="button" onClick={() => void detailQuery.refetch()}>Try again</button>} /> : null}
-      {detail?.summary.overflow_quantity ? <section className="mb-4 flex items-start gap-3 rounded-panel border border-danger bg-danger-soft px-5 py-4 text-danger"><AlertTriangle className="mt-0.5 shrink-0" size={21} /><div><h2 className="text-base">License capacity warning</h2><p className="mt-1 text-sm">{detail.summary.overflow_quantity} purchased radio product(s) are beyond usable compatible capacity. The organization and staff receive one in-app reminder per day until coverage is restored.</p></div></section> : null}
+      {detail?.summary.overflow_quantity ? <section className="mb-4 flex flex-wrap items-start gap-3 rounded-panel border border-danger bg-danger-soft px-5 py-4 text-danger"><AlertTriangle className="mt-0.5 shrink-0" size={21} /><div className="min-w-0 flex-1"><h2 className="text-base">Radio coverage warning</h2><p className="mt-1 text-sm">{detail.summary.overflow_quantity} purchased radio product(s) do not have usable compatible license coverage. The organization and staff receive one in-app reminder per day until coverage is restored.</p></div>{detail.permissions.can_issue_manual_coverage && detail.manual_coverage.candidates.length && detail.manual_coverage.plans.some((plan) => plan.available) ? <button className="inline-flex min-h-10 shrink-0 items-center gap-2 rounded-control border border-danger bg-white px-3 text-sm font-bold text-danger" type="button" onClick={() => setManualCoverageOpen(true)}><ShieldPlus size={17} />Add corrective coverage</button> : null}</section> : null}
       {detail ? (
         <div className="grid gap-4">
           <section className="grid gap-3 md:grid-cols-3">
             <SummaryCard icon={CalendarDays} label="Subscription" value={`${formatDate(detail.summary.subscription_starts_on)} – ${formatDate(detail.summary.subscription_expires_on)}`} note="Annual subscription" />
             <SummaryCard icon={Users} label="Organization control" value={`${detail.organization.owner ? 1 : 0} Owner · ${detail.organization.license_manager_count} License Managers`} note={detail.organization.owner ? `${detail.organization.owner.name} · ${detail.organization.owner.email}` : 'No owner'} action="Manage users" onAction={() => setOrganizationUsersOpen(true)} />
-            <SummaryCard icon={CreditCard} label="Licensed products" value={`${detail.summary.licensed_product_count} products · ${detail.summary.active_quantity} radios`} note={`${detail.summary.usable_license_capacity} usable capacity`} />
+            <SummaryCard icon={CreditCard} label="Licensed products" value={`${detail.summary.licensed_product_count} products · ${detail.summary.active_quantity} radios`} note={`${detail.summary.usable_license_capacity} radios covered`} />
           </section>
           <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(280px,.7fr)]">
             <section className={tw('admin-panel admin-table-wrap')}>
-              <div className="flex items-center justify-between gap-3 px-4 py-3"><div><h2 className="text-xl">Product licenses</h2><p className="mt-1 text-xs text-muted">Capacity, assigned products, and expiry by license.</p></div><span className="text-xs text-muted">Changes are audited</span></div>
-              {detail.licenses.length ? <table className={tw('admin-table admin-table-compact')}><thead><tr><th>License</th><th>Capacity</th><th>Assigned</th><th>Expiry</th><th>Action</th></tr></thead><tbody>{detail.licenses.map((license) => <tr key={license.license_number}><td><strong className="block">{license.name}</strong><span className="text-[11px] text-muted">{license.license_number}</span>{license.has_pending_renewal ? <span className="mt-1 inline-block rounded-control bg-brand-soft px-2 py-0.5 text-[10px] font-bold text-brand">Renewal pending</span> : null}</td><td>{license.capacity}</td><td>{license.used_capacity}</td><td><div className="inline-flex items-center gap-2 whitespace-nowrap"><span>{formatDate(license.expires_on)}</span><LicenseStatusBadge status={license.status} /></div></td><td><button className="border-0 bg-transparent text-xs font-bold text-brand" type="button" onClick={() => setAdjustingLicense(license)}>Adjust</button></td></tr>)}</tbody></table> : <p className="px-4 py-8 text-center text-sm text-muted">No product licenses have been created for this organization.</p>}
+              <div className="flex items-center justify-between gap-3 px-4 py-3"><div><h2 className="text-xl">Product licenses</h2><p className="mt-1 text-xs text-muted">Covered radios, source allocations, and expiry by license.</p></div><span className="text-xs text-muted">Changes are audited</span></div>
+              {detail.licenses.length ? <table className={tw('admin-table admin-table-compact')}><thead><tr><th>License</th><th>Coverage</th><th>Assigned</th><th>Expiry</th><th>Action</th></tr></thead><tbody>{detail.licenses.map((license) => <tr key={license.license_number}><td><strong className="block">{license.name}</strong><span className="text-[11px] text-muted">{license.license_number}</span>{license.has_pending_renewal ? <span className="mt-1 inline-block rounded-control bg-brand-soft px-2 py-0.5 text-[10px] font-bold text-brand">Renewal pending</span> : null}</td><td>{license.billing_model === 'per_radio_order' ? `${license.covered_radio_count} radios` : `${license.capacity} capacity`}</td><td>{license.used_capacity}</td><td><div className="inline-flex items-center gap-2 whitespace-nowrap"><span>{formatDate(license.expires_on)}</span><LicenseStatusBadge status={license.status} /></div></td><td><button className="border-0 bg-transparent text-xs font-bold text-brand" type="button" onClick={() => setAdjustingLicense(license)}>Adjust</button></td></tr>)}</tbody></table> : <p className="px-4 py-8 text-center text-sm text-muted">No product licenses have been created for this organization.</p>}
             </section>
             <aside className={tw('admin-panel')}>
               <h2 className="text-xl">Support and notifications</h2>
@@ -115,6 +116,7 @@ export function AdminLicenseDetailPage() {
         </div>
       ) : null}
       {adjustingLicense ? <AdjustmentDialog organizationId={organizationId} license={adjustingLicense} onClose={() => setAdjustingLicense(null)} onSaved={() => { setAdjustingLicense(null); void refreshDetail() }} /> : null}
+      {manualCoverageOpen && detail ? <ManualCoverageDialog organizationId={organizationId} plans={detail.manual_coverage.plans} candidates={detail.manual_coverage.candidates} onClose={() => setManualCoverageOpen(false)} onSaved={() => { setManualCoverageOpen(false); toast.success('Corrective radio coverage added.'); void refreshDetail() }} /> : null}
       {notificationOpen && detail ? <NotificationDialog organizationId={organizationId} licenses={detail.licenses} onClose={() => setNotificationOpen(false)} onSent={() => { setNotificationOpen(false); void refreshDetail() }} /> : null}
       {renewalInvoiceOpen && detail ? <RenewalRequestDialog organizationName={detail.organization.name} pending={renewalInvoiceMutation.isPending} error={renewalInvoiceMutation.error} onClose={() => setRenewalInvoiceOpen(false)} onConfirm={() => renewalInvoiceMutation.mutate(undefined, { onSuccess: () => { setRenewalInvoiceOpen(false); void refreshDetail() } })} /> : null}
       {organizationUsersOpen ? <OrganizationUsersDialog organizationId={organizationId} data={organizationUsersQuery.data} loading={organizationUsersQuery.isLoading} error={organizationUsersQuery.error} onClose={() => setOrganizationUsersOpen(false)} onRetry={() => void organizationUsersQuery.refetch()} onChanged={() => { void organizationUsersQuery.refetch(); void refreshDetail() }} /> : null}
@@ -138,12 +140,73 @@ function formatDateTime(value: string) {
   return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value))
 }
 
+function localDateInputValue() {
+  const now = new Date()
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10)
+}
+
+function ManualCoverageDialog({ organizationId, plans, candidates, onClose, onSaved }: { organizationId: number; plans: AdminManualCoveragePlan[]; candidates: AdminManualCoverageCandidate[]; onClose: () => void; onSaved: () => void }) {
+  const availablePlans = plans.filter((plan) => plan.available)
+  const [planId, setPlanId] = useState(availablePlans[0]?.id ?? plans[0]?.id ?? 0)
+  const [startsOn, setStartsOn] = useState(localDateInputValue)
+  const [quantities, setQuantities] = useState<Record<number, number>>({})
+  const [reason, setReason] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const plan = plans.find((item) => item.id === planId)
+  const compatibleCandidates = candidates.filter((item) => item.license_product_id === planId)
+  const allocations = compatibleCandidates.flatMap((item) => {
+    const quantity = quantities[item.order_item_id] ?? 0
+    return quantity > 0 ? [{ order_item_id: item.order_item_id, quantity }] : []
+  })
+  const selectedQuantity = allocations.reduce((total, item) => total + item.quantity, 0)
+  const projectedExpiry = plan && startsOn ? (() => {
+    const value = new Date(`${startsOn}T00:00:00Z`)
+    value.setUTCDate(value.getUTCDate() + plan.term_days - 1)
+    return value.toISOString().slice(0, 10)
+  })() : null
+  const mutation = useMutation({
+    mutationFn: () => api.issueAdminManualCoverage(organizationId, {
+      license_product_id: planId,
+      starts_on: startsOn,
+      allocations,
+      reason,
+      confirmed_no_payment: confirmed,
+    }),
+    onSuccess: onSaved,
+  })
+  const canSubmit = Boolean(plan?.available && selectedQuantity > 0 && startsOn && reason.trim() && confirmed)
+
+  const toggleCandidate = (candidate: AdminManualCoverageCandidate, selected: boolean) => {
+    setQuantities((current) => {
+      const next = { ...current }
+      if (selected) next[candidate.order_item_id] = candidate.uncovered_quantity
+      else delete next[candidate.order_item_id]
+      return next
+    })
+  }
+
+  return <Dialog title="Add corrective radio coverage" wide onClose={mutation.isPending ? () => undefined : onClose}>
+    <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); if (canSubmit) mutation.mutate() }}>
+      <div className="rounded-control border border-[#bfd5f5] bg-info-soft px-3 py-3 text-sm text-[#244368]"><strong className="block">Recovery action only</strong><p className="mt-1">This creates one grouped annual license for selected paid radio lines. It does not create an order, invoice, or payment. Incompatible old allocations are released with an audit entry.</p></div>
+      {plans.length > 1 ? <label className="grid gap-1.5 text-sm font-bold">License plan<select className="min-h-11 rounded-control border border-border-input bg-white px-3 font-normal" value={planId} onChange={(event) => { setPlanId(Number(event.target.value)); setQuantities({}) }}>{plans.map((item) => <option value={item.id} disabled={!item.available} key={item.id}>{item.name} · {item.sku}{item.available ? '' : ' · unavailable'}</option>)}</select></label> : plan ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-control border border-border px-3 py-3"><div><span className="block text-xs font-bold text-muted">License plan</span><strong className="mt-1 block text-sm">{plan.name}</strong><span className="text-xs text-muted">{plan.sku} · {plan.term_days} days</span></div><strong className="text-sm text-brand">{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(plan.unit_price))} / radio</strong></div> : null}
+      {!availablePlans.length ? <p className="rounded-control bg-warning-soft px-3 py-2 text-sm text-warning">Publish an active per-radio license plan before issuing corrective coverage.</p> : null}
+      <div className="grid gap-1.5"><span className="text-sm font-bold">Paid radio lines to cover</span><div className="max-h-72 divide-y divide-border overflow-y-auto rounded-panel border border-border">{compatibleCandidates.map((candidate) => { const selected = Boolean(quantities[candidate.order_item_id]); return <div className="grid gap-3 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_130px] sm:items-center" key={candidate.order_item_id}><label className="flex min-w-0 cursor-pointer items-start gap-3"><input className="mt-1 size-4 accent-brand" type="checkbox" checked={selected} onChange={(event) => toggleCandidate(candidate, event.target.checked)} /><span className="min-w-0"><strong className="block truncate text-sm">{candidate.product_name}</strong><span className="block text-xs text-muted">{candidate.product_sku} · {candidate.order_number} · {formatDate(candidate.ordered_at)}</span><span className="mt-1 block text-xs text-danger">{candidate.uncovered_quantity} uncovered{candidate.stale_quantity ? ` · ${candidate.stale_quantity} stale allocation(s) will be replaced` : ''}</span></span></label><label className="grid grid-cols-[auto_72px] items-center justify-end gap-2 text-xs font-bold text-muted">Quantity<input className="min-h-9 rounded-control border border-border-input px-2 text-center text-sm text-ink disabled:bg-surface-muted" type="number" min={1} max={candidate.uncovered_quantity} disabled={!selected} value={selected ? quantities[candidate.order_item_id] : ''} onChange={(event) => setQuantities((current) => ({ ...current, [candidate.order_item_id]: Math.min(candidate.uncovered_quantity, Math.max(1, Number(event.target.value) || 1)) }))} /></label></div>})}{!compatibleCandidates.length ? <p className="px-3 py-6 text-center text-sm text-muted">No eligible uncovered radio lines use this plan.</p> : null}</div></div>
+      <div className="grid gap-3 sm:grid-cols-2"><label className="grid gap-1.5 text-sm font-bold">Coverage starts<input className="min-h-11 rounded-control border border-border-input px-3 font-normal" type="date" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} required /></label><div className="rounded-control bg-surface-muted px-3 py-2"><span className="block text-xs font-bold text-muted">Result</span><strong className="mt-1 block text-sm">{selectedQuantity} radio{selectedQuantity === 1 ? '' : 's'} · expires {projectedExpiry ? formatDate(projectedExpiry) : 'Not set'}</strong>{plan ? <span className="text-xs text-muted">Administrative value: {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(selectedQuantity * Number(plan.unit_price))}</span> : null}</div></div>
+      <label className="grid gap-1.5 text-sm font-bold">Audit reason<textarea className="min-h-24 rounded-control border border-border-input p-3 font-normal" maxLength={500} placeholder="Explain why paid coverage was not provisioned automatically." value={reason} onChange={(event) => setReason(event.target.value)} required /></label>
+      <label className="flex cursor-pointer items-start gap-3 rounded-control border border-border px-3 py-3 text-sm"><input className="mt-0.5 size-4 accent-brand" type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span><strong className="block">I confirm this is corrective coverage.</strong><span className="mt-0.5 block text-xs text-muted">No payment will be recorded. The reason and all allocation changes will remain in license history.</span></span></label>
+      {mutation.isError ? <p className="rounded-control bg-danger-soft px-3 py-2 text-sm text-danger">{messageFrom(mutation.error)}</p> : null}
+      <div className="flex justify-end gap-3"><button className="min-h-10 rounded-control border border-border-input bg-white px-4 text-sm font-bold" type="button" disabled={mutation.isPending} onClick={onClose}>Cancel</button><button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-control border-0 bg-brand px-4 text-sm font-bold text-white disabled:opacity-55" type="submit" disabled={!canSubmit || mutation.isPending}><ShieldPlus size={17} />{mutation.isPending ? 'Adding coverage...' : `Add coverage for ${selectedQuantity}`}</button></div>
+    </form>
+  </Dialog>
+}
+
 function AdjustmentDialog({ organizationId, license, onClose, onSaved }: { organizationId: number; license: ClientLicenseDetail; onClose: () => void; onSaved: () => void }) {
   const [capacity, setCapacity] = useState(String(license.capacity))
   const [status, setStatus] = useState<LicenseStatus>(license.status)
   const [reason, setReason] = useState('')
-  const mutation = useMutation({ mutationFn: () => api.adjustAdminLicense(organizationId, license.license_number, { capacity: Number(capacity), status, reason }), onSuccess: onSaved })
-  return <Dialog title={`Adjust ${license.name}`} onClose={onClose}><form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); mutation.mutate() }}><label className="grid gap-1.5 text-sm font-bold">Capacity<input className="min-h-11 rounded-control border border-border-input px-3 font-normal" type="number" min={license.used_capacity} value={capacity} onChange={(event) => setCapacity(event.target.value)} required /></label><label className="grid gap-1.5 text-sm font-bold">Status<select className="min-h-11 rounded-control border border-border-input bg-white px-3 font-normal" value={status} onChange={(event) => setStatus(event.target.value as LicenseStatus)}>{(['active', 'expiring_soon', 'expired', 'cancelled', 'pending_payment'] as LicenseStatus[]).map((value) => <option value={value} key={value}>{value.replaceAll('_', ' ')}</option>)}</select></label><label className="grid gap-1.5 text-sm font-bold">Reason<textarea className="min-h-24 rounded-control border border-border-input p-3 font-normal" value={reason} onChange={(event) => setReason(event.target.value)} required /></label>{mutation.isError ? <p className="rounded-control bg-danger-soft px-3 py-2 text-sm text-danger">{messageFrom(mutation.error)}</p> : null}<SubmitButton pending={mutation.isPending} label="Save adjustment" /></form></Dialog>
+  const isPerRadioOrder = license.billing_model === 'per_radio_order'
+  const mutation = useMutation({ mutationFn: () => api.adjustAdminLicense(organizationId, license.license_number, { ...(isPerRadioOrder ? {} : { capacity: Number(capacity) }), status, reason }), onSuccess: onSaved })
+  return <Dialog title={`Adjust ${license.name}`} onClose={onClose}><form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); mutation.mutate() }}>{isPerRadioOrder ? <div className="rounded-control border border-[#bfd5f5] bg-info-soft px-3 py-3 text-sm text-[#244368]"><strong className="block">{license.covered_radio_count} radios covered</strong><p className="mt-1">The radio count comes from the paid source order and cannot be edited manually.</p></div> : <label className="grid gap-1.5 text-sm font-bold">Capacity<input className="min-h-11 rounded-control border border-border-input px-3 font-normal" type="number" min={license.used_capacity} value={capacity} onChange={(event) => setCapacity(event.target.value)} required /></label>}<label className="grid gap-1.5 text-sm font-bold">Status<select className="min-h-11 rounded-control border border-border-input bg-white px-3 font-normal" value={status} onChange={(event) => setStatus(event.target.value as LicenseStatus)}>{(['active', 'expiring_soon', 'expired', 'cancelled', 'pending_payment'] as LicenseStatus[]).map((value) => <option value={value} key={value}>{value.replaceAll('_', ' ')}</option>)}</select></label><label className="grid gap-1.5 text-sm font-bold">Reason<textarea className="min-h-24 rounded-control border border-border-input p-3 font-normal" value={reason} onChange={(event) => setReason(event.target.value)} required /></label>{mutation.isError ? <p className="rounded-control bg-danger-soft px-3 py-2 text-sm text-danger">{messageFrom(mutation.error)}</p> : null}<SubmitButton pending={mutation.isPending} label="Save adjustment" /></form></Dialog>
 }
 
 function NotificationDialog({ organizationId, licenses, onClose, onSent }: { organizationId: number; licenses: ClientLicenseDetail[]; onClose: () => void; onSent: () => void }) {
@@ -186,8 +249,8 @@ function UserRow({ member, onReset, resetPending }: { member: { name: string; em
   return <div className="flex flex-wrap items-center justify-between gap-3 rounded-panel border border-border px-3 py-3"><div className="min-w-0"><strong className="block truncate text-sm">{member.name}</strong><span className="block truncate text-xs text-muted">{member.email} · {member.role === 'owner' ? 'Organization Owner' : 'License Manager'}</span></div><button className="inline-flex min-h-9 items-center gap-1 rounded-control border border-border-input bg-white px-2.5 text-xs font-bold text-brand disabled:opacity-55" type="button" disabled={resetPending} onClick={onReset}><KeyRound size={14} />Send reset</button></div>
 }
 
-function Dialog({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
-  return <div className="fixed inset-0 z-50 grid place-items-center bg-[#09172d]/45 p-4" role="presentation" onMouseDown={onClose}><section aria-modal="true" className="w-full max-w-lg rounded-panel border border-border bg-white p-5 shadow-xl" role="dialog" onMouseDown={(event) => event.stopPropagation()}><div className="mb-4 flex items-start justify-between gap-3"><h2 className="text-xl">{title}</h2><button aria-label="Close dialog" className="inline-flex size-9 items-center justify-center rounded-control border-0 bg-surface-muted" type="button" onClick={onClose}><X size={19} /></button></div>{children}</section></div>
+function Dialog({ title, onClose, children, wide = false }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  return <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-[#09172d]/45 p-4" role="presentation" onMouseDown={onClose}><section aria-modal="true" className={`my-auto w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} rounded-panel border border-border bg-white p-5 shadow-xl`} role="dialog" onMouseDown={(event) => event.stopPropagation()}><div className="mb-4 flex items-start justify-between gap-3"><h2 className="text-xl">{title}</h2><button aria-label="Close dialog" className="inline-flex size-9 items-center justify-center rounded-control border-0 bg-surface-muted" type="button" onClick={onClose}><X size={19} /></button></div>{children}</section></div>
 }
 
 function SubmitButton({ pending, label, icon }: { pending: boolean; label: string; icon?: React.ReactNode }) {

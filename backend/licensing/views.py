@@ -13,6 +13,8 @@ from rest_framework.views import APIView
 from licensing.serializers import (
     CartCapacityRequestSerializer,
     CartCapacityRequirementSerializer,
+    CoverageQuoteCreateSerializer,
+    CoverageQuoteOptionsSerializer,
     ClientLicenseDetailSerializer,
     ClientLicenseListSerializer,
     LicenseCancellationSerializer,
@@ -35,6 +37,7 @@ from licensing.permissions import OrganizationAccessPolicy
 from licensing.services import (
     CartLicenseService,
     ClientLicenseDetailService,
+    CoverageQuoteService,
     InvitationService,
     LicenseLifecycleService,
     LicenseRenewalOrderService,
@@ -83,7 +86,7 @@ class CartCapacityView(APIView):
     permission_classes = (AllowAny,)
 
     @extend_schema(
-        summary="Calculate required license capacity",
+        summary="Calculate required radio license coverage",
         request=CartCapacityRequestSerializer,
         responses={200: OpenApiTypes.OBJECT},
     )
@@ -138,6 +141,67 @@ class CartCapacityView(APIView):
                 ),
                 "requirements": response_serializer.data,
             }
+        )
+
+
+class CoverageQuoteOptionsView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        summary="List uncovered paid radios available for a coverage quote",
+        responses=CoverageQuoteOptionsSerializer,
+    )
+    def get(self, request):
+        try:
+            organization_id = int(request.query_params.get("organization", ""))
+            license_product_id = int(request.query_params.get("license_product", ""))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                {"detail": "Select an organization and license product."}
+            ) from exc
+        if organization_id < 1 or license_product_id < 1:
+            raise ValidationError(
+                {"detail": "Select an organization and license product."}
+            )
+        try:
+            payload = CoverageQuoteService.options(
+                user=request.user,
+                organization_id=organization_id,
+                license_product_id=license_product_id,
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+        return Response(
+            CoverageQuoteOptionsSerializer(payload, context={"request": request}).data
+        )
+
+
+class CoverageQuoteCreateView(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    @extend_schema(
+        summary="Request a quote for uncovered per-radio license coverage",
+        request=CoverageQuoteCreateSerializer,
+        responses={201: OpenApiTypes.OBJECT},
+    )
+    def post(self, request):
+        serializer = CoverageQuoteCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            quote_request = CoverageQuoteService.create_quote(
+                user=request.user,
+                **serializer.validated_data,
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+        from quotes.serializers import QuoteRequestSerializer
+
+        return Response(
+            QuoteRequestSerializer(
+                quote_request,
+                context={"request": request},
+            ).data,
+            status=status.HTTP_201_CREATED,
         )
 
 

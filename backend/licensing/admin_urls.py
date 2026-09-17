@@ -2,6 +2,7 @@ from django.urls import path
 
 from licensing.admin_views import (
     AdminOrganizationLicenseAdjustmentView,
+    AdminOrganizationManualCoverageView,
     AdminOrganizationLicenseDetailView,
     AdminOrganizationLicenseHistoryView,
     AdminOrganizationLicenseListView,
@@ -73,5 +74,10 @@ urlpatterns = [
         "<str:license_number>/adjust/",
         AdminOrganizationLicenseAdjustmentView.as_view(),
         name="admin-licensing-organization-license-adjust",
+    ),
+    path(
+        "organizations/<int:organization_id>/manual-coverage/",
+        AdminOrganizationManualCoverageView.as_view(),
+        name="admin-licensing-organization-manual-coverage",
     ),
 ]

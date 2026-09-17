@@ -1,17 +1,116 @@
-from io import BytesIO
+from io import BytesIO, StringIO
 import tempfile
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import ValidationError
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from licensing.models import License, Organization
 from orders.models import InventoryReservation, Order, OrderItem
 from products.models import Category, InventoryAdjustment, Product
 from products.serializers import AdminProductSerializer, ProductSerializer, ProductWriteSerializer
 from PIL import Image
+
+
+class ConfigurePerRadioLicenseCommandTests(TestCase):
+    def setUp(self):
+        self.category = Category.objects.create(name="Licenses")
+        self.plan = Product.objects.create(
+            category=self.category,
+            name="Legacy annual plan",
+            sku="LIC-ANNUAL",
+            price="1000.00",
+            sale_price="900.00",
+            bulk_minimum_quantity=5,
+            bulk_unit_price="850.00",
+            licensing_role=Product.LicensingRole.LICENSE_PRODUCT,
+            license_capacity=200,
+            license_term_days=365,
+            status=Product.Status.PUBLISHED,
+        )
+
+    def test_command_converts_plan_to_fixed_per_radio_pricing(self):
+        output = StringIO()
+
+        call_command(
+            "configure_per_radio_license",
+            sku=self.plan.sku,
+            unit_price="120.00",
+            term_days=365,
+            stdout=output,
+        )
+
+        self.plan.refresh_from_db()
+        self.assertEqual(
+            self.plan.license_billing_model,
+            Product.LicenseBillingModel.PER_RADIO,
+        )
+        self.assertIsNone(self.plan.license_capacity)
+        self.assertEqual(self.plan.price, 120)
+        self.assertIsNone(self.plan.sale_price)
+        self.assertIsNone(self.plan.bulk_minimum_quantity)
+        self.assertIsNone(self.plan.bulk_unit_price)
+        self.assertIn("Configured LIC-ANNUAL", output.getvalue())
+
+    def test_command_refuses_to_convert_plan_used_by_open_legacy_order(self):
+        order = Order.objects.create(
+            status=Order.Status.PENDING,
+            customer_first_name="Pending",
+            customer_last_name="Customer",
+            customer_email="pending@example.com",
+            shipping_address="1 Test Street",
+            shipping_city="Test City",
+            shipping_postal_code="10000",
+            shipping_country="GB",
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=self.plan,
+            product_name=self.plan.name,
+            sku=self.plan.sku,
+            unit_price=self.plan.price,
+            quantity=1,
+            line_total=self.plan.price,
+        )
+
+        with self.assertRaisesMessage(CommandError, order.order_number):
+            call_command(
+                "configure_per_radio_license",
+                sku=self.plan.sku,
+                unit_price="120.00",
+            )
+
+        self.plan.refresh_from_db()
+        self.assertIsNone(self.plan.license_billing_model)
+        self.assertEqual(self.plan.license_capacity, 200)
+        self.assertEqual(self.plan.price, 1000)
+
+    def test_command_refuses_to_reprice_a_plan_with_issued_legacy_licenses(self):
+        organization = Organization.objects.create(name="Legacy Customer")
+        license = License.objects.create(
+            organization=organization,
+            license_product=self.plan,
+            name="Existing capacity license",
+            status=License.Status.ACTIVE,
+            capacity=200,
+        )
+
+        with self.assertRaisesMessage(CommandError, license.license_number):
+            call_command(
+                "configure_per_radio_license",
+                sku=self.plan.sku,
+                unit_price="120.00",
+            )
+
+        self.plan.refresh_from_db()
+        self.assertIsNone(self.plan.license_billing_model)
+        self.assertEqual(self.plan.license_capacity, 200)
+        self.assertEqual(self.plan.price, 1000)
 
 
 class CategoryManagementApiTests(TestCase):
@@ -235,6 +334,102 @@ class ProductLicensingContractTests(TestCase):
         self.assertEqual(response.status_code, 200)
         products = response.data.get("results", response.data)
         self.assertIn(self.license_product.sku, {product["sku"] for product in products})
+
+    def test_per_radio_plan_is_visible_in_catalog_and_included_with_radio(self):
+        self.license_product.license_billing_model = Product.LicenseBillingModel.PER_RADIO
+        self.license_product.license_capacity = None
+        self.license_product.price = "120.00"
+        self.license_product.save(
+            update_fields=["license_billing_model", "license_capacity", "price", "updated_at"]
+        )
+        radio = Product.objects.create(
+            category=self.category,
+            name="Annual license radio",
+            sku="ANNUAL-RADIO",
+            price="430.00",
+            licensing_role=Product.LicensingRole.LICENSED_PRODUCT,
+            required_license_product=self.license_product,
+            status=Product.Status.PUBLISHED,
+        )
+
+        response = APIClient().get(reverse("product-list"))
+
+        self.assertEqual(response.status_code, 200)
+        products = response.data.get("results", response.data)
+        by_sku = {product["sku"]: product for product in products}
+        self.assertIn(self.license_product.sku, by_sku)
+        self.assertEqual(
+            by_sku[self.license_product.sku]["license_billing_model"],
+            Product.LicenseBillingModel.PER_RADIO,
+        )
+        self.assertEqual(
+            by_sku[radio.sku]["required_license_product"]["license_billing_model"],
+            Product.LicenseBillingModel.PER_RADIO,
+        )
+
+    def test_write_serializer_accepts_per_radio_plan_without_capacity(self):
+        serializer = ProductWriteSerializer(
+            data={
+                "category": self.license_category.pk,
+                "name": "Annual per-radio license",
+                "sku": "ANNUAL-PER-RADIO",
+                "price": "120.00",
+                "licensing_role": "license_product",
+                "license_billing_model": "per_radio",
+                "license_capacity": None,
+                "license_term_days": 365,
+                "status": "published",
+                "is_active": True,
+            }
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        product = serializer.save()
+        self.assertIsNone(product.license_capacity)
+        self.assertEqual(product.license_billing_model, Product.LicenseBillingModel.PER_RADIO)
+
+    def test_write_serializer_rejects_discounts_on_per_radio_plan(self):
+        serializer = ProductWriteSerializer(
+            data={
+                "category": self.license_category.pk,
+                "name": "Discounted annual license",
+                "sku": "DISCOUNTED-PER-RADIO",
+                "price": "120.00",
+                "sale_price": "100.00",
+                "licensing_role": "license_product",
+                "license_billing_model": "per_radio",
+                "license_capacity": None,
+                "license_term_days": 365,
+            }
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("price", serializer.errors)
+
+    def test_write_serializer_protects_billing_model_after_license_is_issued(self):
+        organization = Organization.objects.create(name="Existing Customer")
+        License.objects.create(
+            organization=organization,
+            license_product=self.license_product,
+            name="Existing capacity license",
+            status=License.Status.ACTIVE,
+            capacity=200,
+        )
+        self.license_product.refresh_from_db()
+        serializer = ProductWriteSerializer(
+            self.license_product,
+            data={
+                "license_billing_model": "per_radio",
+                "license_capacity": None,
+                "sale_price": None,
+                "bulk_minimum_quantity": None,
+                "bulk_unit_price": None,
+            },
+            partial=True,
+        )
+
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("license_billing_model", serializer.errors)
 
     def test_write_serializer_accepts_compatible_license_product(self):
         serializer = ProductWriteSerializer(

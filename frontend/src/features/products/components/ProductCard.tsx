@@ -1,5 +1,5 @@
 import { tw } from "../../../lib/tailwind-styles";
-import { ArrowUpRight, Plus } from 'lucide-react';
+import { ArrowUpRight, FileText, Plus } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useCart } from '../../../contexts/CartContext';
 import { mediaUrl } from '../../../lib/api';
@@ -10,8 +10,11 @@ export function ProductCard({ product }: {
 }) {
     const cart = useCart();
     const image = primaryProductImage(product);
+    const isCoveragePlan = product.licensing_role === 'license_product' && product.license_billing_model === 'per_radio';
     const isAvailable = product.is_stock_tracked === false || product.inventory_quantity > 0;
-    const availabilityLabel = product.is_stock_tracked === false
+    const availabilityLabel = isCoveragePlan
+        ? `${product.license_term_days ?? 365}-day coverage quote`
+        : product.is_stock_tracked === false
         ? `${product.license_term_days ?? 365}-day digital license`
         : product.inventory_quantity > 0
             ? `In stock - ${product.inventory_quantity}`
@@ -29,7 +32,9 @@ export function ProductCard({ product }: {
         </span>
         <div>
           <strong>${Number(product.current_price).toFixed(2)}</strong>
-          {isAvailable ? (<button className={tw("catalog-card-action")} type="button" aria-label={`Add ${product.name} to cart`} onClick={() => cart.add(product)}>
+          {isCoveragePlan ? (<Link className={tw("catalog-card-action quote")} to={`/products/${product.slug}/coverage`} aria-label={`Request ${product.name} coverage quote`}>
+              <FileText size={18}/>
+            </Link>) : isAvailable ? (<button className={tw("catalog-card-action")} type="button" aria-label={`Add ${product.name} to cart`} onClick={() => cart.add(product)}>
               <Plus size={19}/>
             </button>) : (<Link className={tw("catalog-card-action quote")} to={`/products/${product.slug}`} aria-label={`View quote options for ${product.name}`}>
               <ArrowUpRight size={19}/>

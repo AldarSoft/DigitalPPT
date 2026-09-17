@@ -11,8 +11,8 @@ export const clientLicenseListFixture: ClientLicenseListResponse = {
   summary: { license_count: 2, active_license_count: 2, expiring_soon_count: 0, expired_license_count: 0, total_capacity: 400, used_capacity: 250, available_capacity: 150, next_expiry: '2027-08-17', next_expiry_remaining_days: 363, licensed_product_count: 4, licensed_product_quantity: 250, usable_license_capacity: 400, overflow_quantity: 0 },
   renewal_request: { issued: false, issued_at: null },
   licenses: [
-    { id: 1, license_number: 'LIC-RA-01482', name: 'RadioAdmin License 01', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 200, available_capacity: 0, capacity_percentage: 100, starts_on: '2026-08-18', expires_on: '2027-08-17', renews_on: '2027-08-18', remaining_days: 363, has_pending_renewal: false },
-    { id: 2, license_number: 'LIC-RA-01509', name: 'RadioAdmin License 02', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', capacity: 200, used_capacity: 50, available_capacity: 150, capacity_percentage: 25, starts_on: '2027-03-04', expires_on: '2028-03-03', renews_on: '2028-03-04', remaining_days: 562, has_pending_renewal: true },
+    { id: 1, license_number: 'LIC-RA-01482', name: 'RadioAdmin License 01', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', billing_model: 'legacy_capacity', covered_radio_count: 200, capacity: 200, used_capacity: 200, available_capacity: 0, capacity_percentage: 100, starts_on: '2026-08-18', expires_on: '2027-08-17', renews_on: '2027-08-18', remaining_days: 363, has_pending_renewal: false },
+    { id: 2, license_number: 'LIC-RA-01509', name: 'RadioAdmin License 02', plan_name: 'RadioAdmin Business', plan_sku: 'LIC-RA-BUS-200', status: 'active', billing_model: 'legacy_capacity', covered_radio_count: 50, capacity: 200, used_capacity: 50, available_capacity: 150, capacity_percentage: 25, starts_on: '2027-03-04', expires_on: '2028-03-03', renews_on: '2028-03-04', remaining_days: 562, has_pending_renewal: true },
   ],
 }
 
@@ -22,6 +22,8 @@ export const clientLicenseDetailFixture: ClientLicenseDetail = {
   plan_name: 'RadioAdmin Business',
   plan_sku: 'LIC-RA-BUS-200',
   status: 'active',
+  billing_model: 'legacy_capacity',
+  covered_radio_count: 200,
   capacity: 200,
   used_capacity: 200,
   available_capacity: 0,
@@ -73,5 +75,6 @@ export const adminOrganizationDetailFixture: AdminOrganizationLicenseDetail = {
     { id: 2, kind: 'notification_sent', message: 'Renewal invoice sent to organization owner.', actor_name: 'Store Administrator', license_number: null, metadata: {}, created_at: '2026-08-17T09:30:00Z' },
     { id: 3, kind: 'provisioned', message: 'Organization created and Client Local made owner.', actor_name: 'Client Local', license_number: null, metadata: {}, created_at: '2025-08-18T09:30:00Z' },
   ],
-  permissions: { can_adjust: true, can_send_renewal_invoice: true, can_send_notification: true },
+  permissions: { can_adjust: true, can_issue_manual_coverage: true, can_send_renewal_invoice: true, can_send_notification: true },
+  manual_coverage: { plans: [], candidates: [] },
 }

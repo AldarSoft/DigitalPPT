@@ -4,12 +4,15 @@ import type {
   AdminLicenseEvent,
   AdminLicenseEventListResponse,
   AdminLicenseFilters,
+  AdminManualCoverageInput,
   AdminOrganizationLicenseDetail,
   AdminOrganizationLicenseListResponse,
   AdminOrganizationUsers,
   AdminOrganizationCreateInput,
   AdminOrganizationCreateResponse,
   ClientLicenseDetail,
+  CoverageQuoteCreateInput,
+  CoverageQuoteOptions,
   LicenseRenewalSummary,
   ClientLicenseListResponse,
   LicenseAdjustmentInput,
@@ -185,6 +188,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ items }),
     }),
+  coverageQuoteOptions: (organizationId: number, licenseProductId: number) =>
+    request<CoverageQuoteOptions>(`/licensing/coverage-quote-options/?organization=${organizationId}&license_product=${licenseProductId}`),
+  createCoverageQuote: (data: CoverageQuoteCreateInput) =>
+    request<QuoteRequest>('/licensing/coverage-quotes/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   organizationWorkspaces: () => request<OrganizationWorkspaceListResponse>('/licensing/organizations/'),
   createOrganization: (data: OrganizationCreateInput) =>
     request<OrganizationWorkspaceListResponse>('/licensing/organizations/', {
@@ -264,6 +274,11 @@ export const api = {
     }),
   adjustAdminLicense: (organizationId: number, licenseNumber: string, data: LicenseAdjustmentInput) =>
     request<LicenseSummary>(`/admin/licensing/organizations/${organizationId}/licenses/${encodeURIComponent(licenseNumber)}/adjust/`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  issueAdminManualCoverage: (organizationId: number, data: AdminManualCoverageInput) =>
+    request<LicenseSummary>(`/admin/licensing/organizations/${organizationId}/manual-coverage/`, {
       method: 'POST',
       body: JSON.stringify(data),
     }),

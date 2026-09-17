@@ -60,6 +60,7 @@ class LicenseProductSummarySerializer(serializers.ModelSerializer):
             "current_price",
             "license_capacity",
             "license_term_days",
+            "license_billing_model",
         )
 
     def get_current_price(self, obj) -> Decimal:
@@ -109,6 +110,7 @@ class ProductSerializer(serializers.ModelSerializer):
             "required_license_product",
             "license_capacity",
             "license_term_days",
+            "license_billing_model",
             "is_stock_tracked",
             "is_featured",
             "category",
@@ -226,6 +228,7 @@ class ProductWriteSerializer(serializers.ModelSerializer):
             "required_license_product_id",
             "license_capacity",
             "license_term_days",
+            "license_billing_model",
             "status",
             "is_featured",
             "is_active",
@@ -276,8 +279,12 @@ class ProductWriteSerializer(serializers.ModelSerializer):
         license_term_days = attrs.get(
             "license_term_days", getattr(self.instance, "license_term_days", None)
         )
+        license_billing_model = attrs.get(
+            "license_billing_model",
+            getattr(self.instance, "license_billing_model", None),
+        )
         if licensing_role == Product.LicensingRole.STANDARD:
-            if required_license_product or license_capacity or license_term_days:
+            if required_license_product or license_capacity or license_term_days or license_billing_model:
                 errors["licensing_role"] = (
                     "Standard products cannot contain license compatibility metadata."
                 )
@@ -290,17 +297,53 @@ class ProductWriteSerializer(serializers.ModelSerializer):
                 errors["required_license_product_id"] = (
                     "The compatible product must be a license product."
                 )
-            if license_capacity or license_term_days:
+            if license_capacity or license_term_days or license_billing_model:
                 errors["licensing_role"] = (
-                    "Licensed products consume capacity; they do not supply it."
+                    "Licensed products use a plan; they do not define plan settings."
                 )
         elif licensing_role == Product.LicensingRole.LICENSE_PRODUCT:
             if required_license_product:
                 errors["required_license_product_id"] = (
                     "A license product cannot require another license product."
                 )
-            if not license_capacity:
+            effective_billing_model = (
+                license_billing_model
+                or Product.LicenseBillingModel.LEGACY_CAPACITY
+            )
+            if (
+                effective_billing_model == Product.LicenseBillingModel.LEGACY_CAPACITY
+                and not license_capacity
+            ):
                 errors["license_capacity"] = "License capacity must be greater than zero."
+            if effective_billing_model == Product.LicenseBillingModel.PER_RADIO and (
+                sale_price is not None
+                or bulk_minimum_quantity is not None
+                or bulk_unit_price is not None
+            ):
+                errors["price"] = (
+                    "Per-radio plans use one fixed unit price; sale and bulk pricing are not allowed."
+                )
+            if self.instance:
+                current_billing_model = (
+                    self.instance.license_billing_model
+                    or Product.LicenseBillingModel.LEGACY_CAPACITY
+                )
+                if current_billing_model != effective_billing_model:
+                    from licensing.models import License
+                    from orders.models import Order, OrderItem
+
+                    has_issued_licenses = License.objects.filter(
+                        license_product=self.instance
+                    ).exists()
+                    has_open_orders = OrderItem.objects.filter(
+                        product=self.instance,
+                        order__status__in=[Order.Status.DRAFT, Order.Status.PENDING],
+                    ).exists()
+                    if has_issued_licenses or has_open_orders:
+                        errors["license_billing_model"] = (
+                            "The billing model cannot change while issued licenses or "
+                            "open orders reference this plan. Create a separate plan instead."
+                        )
             if not license_term_days:
                 errors["license_term_days"] = "License term must be greater than zero."
         if self.instance and required_license_product == self.instance:

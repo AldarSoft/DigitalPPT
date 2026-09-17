@@ -231,6 +231,10 @@ class License(TimeStampedModel):
         EXPIRED = "expired", "Expired"
         CANCELLED = "cancelled", "Cancelled"
 
+    class BillingModel(models.TextChoices):
+        LEGACY_CAPACITY = "legacy_capacity", "Legacy capacity"
+        PER_RADIO_ORDER = "per_radio_order", "Per-radio order"
+
     organization = models.ForeignKey(
         Organization,
         on_delete=models.PROTECT,
@@ -256,6 +260,12 @@ class License(TimeStampedModel):
     )
     capacity = models.PositiveIntegerField()
     used_capacity = models.PositiveIntegerField(default=0)
+    billing_model = models.CharField(
+        max_length=24,
+        choices=BillingModel.choices,
+        default=BillingModel.LEGACY_CAPACITY,
+        db_index=True,
+    )
     starts_on = models.DateField(null=True, blank=True)
     expires_on = models.DateField(null=True, blank=True, db_index=True)
     renews_on = models.DateField(null=True, blank=True)
@@ -289,6 +299,10 @@ class License(TimeStampedModel):
     @property
     def available_capacity(self):
         return self.capacity - self.used_capacity
+
+    @property
+    def covered_radio_count(self):
+        return self.capacity if self.billing_model == self.BillingModel.PER_RADIO_ORDER else self.used_capacity
 
     def calculate_remaining_days(self, on_date=None):
         if not self.expires_on:
@@ -504,6 +518,86 @@ class LicenseOrderItemProvisioning(TimeStampedModel):
 
     def __str__(self):
         return f"{self.order_item} - {self.get_operation_display()}"
+
+
+class LicenseCoverageQuoteTarget(TimeStampedModel):
+    """Immutable radio quantities selected for a standalone coverage quote."""
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.PROTECT,
+        related_name="coverage_quote_targets",
+    )
+    quote_request = models.ForeignKey(
+        "quotes.QuoteRequest",
+        on_delete=models.PROTECT,
+        related_name="coverage_targets",
+    )
+    quote_item = models.ForeignKey(
+        "quotes.QuoteRequestItem",
+        on_delete=models.PROTECT,
+        related_name="coverage_targets",
+    )
+    order_item = models.ForeignKey(
+        "orders.OrderItem",
+        on_delete=models.PROTECT,
+        related_name="coverage_quote_targets",
+    )
+    quantity = models.PositiveIntegerField()
+
+    class Meta:
+        ordering = ("created_at", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("quote_request", "order_item"),
+                name="licensing_unique_coverage_quote_order_item",
+            ),
+            models.CheckConstraint(
+                condition=Q(quantity__gt=0),
+                name="licensing_coverage_quote_quantity_positive",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=("organization", "created_at")),
+            models.Index(fields=("order_item", "created_at")),
+        ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.quote_item_id and self.quote_request_id:
+            if self.quote_item.quote_request_id != self.quote_request_id:
+                errors["quote_item"] = "The quote item belongs to another quote request."
+        if self.quote_item_id and self.quote_item.product_id:
+            plan = self.quote_item.product
+            if (
+                plan.licensing_role != plan.LicensingRole.LICENSE_PRODUCT
+                or plan.license_billing_model != plan.LicenseBillingModel.PER_RADIO
+            ):
+                errors["quote_item"] = "Coverage quotes require a per-radio license plan."
+        if self.order_item_id and self.order_item.product_id and self.quote_item_id:
+            radio = self.order_item.product
+            if (
+                radio.licensing_role != radio.LicensingRole.LICENSED_PRODUCT
+                or radio.required_license_product_id != self.quote_item.product_id
+            ):
+                errors["order_item"] = "The radio order line is not compatible with this plan."
+            if self.quantity > self.order_item.quantity:
+                errors["quantity"] = "Coverage cannot exceed the purchased radio quantity."
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise ValidationError("Coverage quote targets are immutable.")
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Coverage quote targets are immutable.")
+
+    def __str__(self):
+        return f"{self.quote_request} - {self.quantity} x {self.order_item}"
 
 
 class LicenseEventQuerySet(OrganizationScopedQuerySet):

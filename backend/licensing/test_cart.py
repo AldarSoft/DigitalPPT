@@ -195,3 +195,63 @@ class CartLicenseIntegrationTests(APITestCase):
         self.assertEqual(quantities[self.radio.pk], 2)
         self.assertEqual(quantities[self.license_product.pk], 1)
         self.assertEqual(order.subtotal, 250)
+
+    def test_per_radio_plan_adds_one_annual_unit_for_each_radio(self):
+        self.license_product.license_billing_model = Product.LicenseBillingModel.PER_RADIO
+        self.license_product.license_capacity = None
+        self.license_product.price = "120.00"
+        self.license_product.save(
+            update_fields=["license_billing_model", "license_capacity", "price", "updated_at"]
+        )
+        existing = LicenseLifecycleService.provision(
+            organization=self.organization,
+            license_product=self.license_product,
+            capacity=2,
+        )
+        License.objects.filter(pk=existing.pk).update(used_capacity=2)
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(
+            "/api/v1/licensing/cart-capacity/",
+            self.cart_payload([{"product": self.radio.pk, "quantity": 5}]),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        requirement = response.data["requirements"][0]
+        self.assertEqual(requirement["available_capacity"], 0)
+        self.assertEqual(requirement["covered_quantity"], 0)
+        self.assertEqual(requirement["uncovered_quantity"], 5)
+        self.assertEqual(requirement["required_license_units"], 5)
+        self.assertEqual(requirement["automatic_license_units"], 5)
+
+    def test_per_radio_checkout_replaces_manual_plan_quantity_with_exact_radio_quantity(self):
+        self.license_product.license_billing_model = Product.LicenseBillingModel.PER_RADIO
+        self.license_product.license_capacity = None
+        self.license_product.price = "120.00"
+        self.license_product.save(
+            update_fields=["license_billing_model", "license_capacity", "price", "updated_at"]
+        )
+        self.client.force_authenticate(self.user)
+
+        response = self.client.post(
+            "/api/v1/orders/checkout/",
+            self.checkout_payload(
+                [
+                    {"product": self.radio.pk, "quantity": 5},
+                    {
+                        "product": self.license_product.pk,
+                        "quantity": 1,
+                        "automatic": False,
+                    },
+                ]
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        order = Order.objects.get(order_number=response.data["order_number"])
+        quantities = {item.product_id: item.quantity for item in order.items.all()}
+        self.assertEqual(quantities[self.radio.pk], 5)
+        self.assertEqual(quantities[self.license_product.pk], 5)
+        self.assertEqual(order.subtotal, 1100)

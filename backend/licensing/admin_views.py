@@ -12,12 +12,14 @@ from rest_framework.views import APIView
 from common.pagination import DefaultPagination
 from licensing.admin_services import (
     AdminLicenseNotificationService,
+    AdminManualCoverageService,
     AdminOrganizationLicenseService,
 )
 from licensing.models import License, LicenseEvent, Organization, OrganizationInvitation
 from licensing.serializers import (
     AdminLicenseEventListSerializer,
     AdminLicenseEventSerializer,
+    AdminManualCoverageCreateSerializer,
     AdminOrganizationLicenseDetailSerializer,
     AdminOrganizationLicenseListSerializer,
     AdminOrganizationLicenseQuerySerializer,
@@ -309,6 +311,33 @@ class AdminOrganizationLicenseAdjustmentView(APIView):
         except DjangoValidationError as exc:
             _raise_api_validation(exc)
         return Response(LicenseSummarySerializer(adjusted).data)
+
+
+class AdminOrganizationManualCoverageView(APIView):
+    permission_classes = (CanManageLicenses,)
+
+    @extend_schema(
+        operation_id="admin_licensing_organization_manual_coverage",
+        summary="Issue audited corrective per-radio coverage without a payment",
+        request=AdminManualCoverageCreateSerializer,
+        responses={201: LicenseSummarySerializer},
+    )
+    def post(self, request, organization_id):
+        organization = get_object_or_404(Organization, pk=organization_id)
+        serializer = AdminManualCoverageCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            license = AdminManualCoverageService.issue(
+                organization=organization,
+                actor=request.user,
+                license_product_id=serializer.validated_data["license_product_id"],
+                starts_on=serializer.validated_data.get("starts_on"),
+                allocations=serializer.validated_data["allocations"],
+                reason=serializer.validated_data["reason"],
+            )
+        except DjangoValidationError as exc:
+            _raise_api_validation(exc)
+        return Response(LicenseSummarySerializer(license).data, status=201)
 
 
 class AdminOrganizationUsersView(APIView):

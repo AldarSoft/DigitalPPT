@@ -2,6 +2,8 @@ from django.urls import path
 
 from licensing.views import (
     CartCapacityView,
+    CoverageQuoteCreateView,
+    CoverageQuoteOptionsView,
     ClientLicenseDetailView,
     LicenseCancellationView,
     LicenseAdjustmentView,
@@ -23,6 +25,16 @@ from licensing.views import (
 
 urlpatterns = [
     path("cart-capacity/", CartCapacityView.as_view(), name="licensing-cart-capacity"),
+    path(
+        "coverage-quote-options/",
+        CoverageQuoteOptionsView.as_view(),
+        name="licensing-coverage-quote-options",
+    ),
+    path(
+        "coverage-quotes/",
+        CoverageQuoteCreateView.as_view(),
+        name="licensing-coverage-quote-create",
+    ),
     path(
         "organization/summary/",
         OrganizationSummaryView.as_view(),

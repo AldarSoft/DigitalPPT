@@ -201,6 +201,102 @@ class PaymentSuccessProvisioningTests(TestCase):
             "completed",
         )
 
+    def test_per_radio_payment_creates_one_grouped_license_and_renews_every_radio(self):
+        self.license_product.license_billing_model = Product.LicenseBillingModel.PER_RADIO
+        self.license_product.license_capacity = None
+        self.license_product.price = "120.00"
+        self.license_product.save(
+            update_fields=["license_billing_model", "license_capacity", "price", "updated_at"]
+        )
+        order, radio_item, license_item, attempt = self.create_order()
+        OrderItem.objects.filter(pk=license_item.pk).update(
+            unit_price="120.00",
+            quantity=2,
+            line_total="240.00",
+        )
+        Order.objects.filter(pk=order.pk).update(subtotal="440.00", total="440.00")
+        PaymentAttempt.objects.filter(pk=attempt.pk).update(amount="440.00")
+        attempt.refresh_from_db()
+
+        PaymentService.simulate_checkout(
+            attempt=attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+
+        grouped_license = License.objects.get(source_order_item=license_item)
+        allocation = ProductLicenseAllocation.objects.get(order_item=radio_item)
+        self.assertEqual(grouped_license.billing_model, License.BillingModel.PER_RADIO_ORDER)
+        self.assertEqual(grouped_license.capacity, 2)
+        self.assertEqual(grouped_license.used_capacity, 2)
+        self.assertEqual(grouped_license.covered_radio_count, 2)
+        self.assertEqual(allocation.license, grouped_license)
+        self.assertEqual(allocation.quantity, 2)
+
+        expiry = timezone.localdate() + timedelta(days=30)
+        License.objects.filter(pk=grouped_license.pk).update(
+            status=License.Status.EXPIRING_SOON,
+            expires_on=expiry,
+            renews_on=expiry + timedelta(days=1),
+        )
+        grouped_license.refresh_from_db()
+        renewal_attempt, created = PaymentService.start_license_renewal_checkout(
+            user=self.customer,
+            license_number=grouped_license.license_number,
+            organization_id=grouped_license.organization_id,
+            provider=self.provider,
+            idempotency_key=uuid4(),
+            billing={"email": self.customer.email},
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(renewal_attempt.amount, 240)
+        self.assertEqual(renewal_attempt.metadata["renewal_billing_quantity"], 2)
+        PaymentService.simulate_checkout(
+            attempt=renewal_attempt,
+            user=self.customer,
+            outcome=PaymentAttempt.Status.SUCCEEDED,
+        )
+        grouped_license.refresh_from_db()
+        renewal_order = Order.objects.get(renewal_license=grouped_license)
+        self.assertEqual(renewal_order.items.get().quantity, 2)
+        self.assertEqual(grouped_license.expires_on, expiry + timedelta(days=365))
+        self.assertEqual(License.objects.count(), 1)
+
+    def test_later_per_radio_purchase_creates_a_separate_license_group(self):
+        self.license_product.license_billing_model = Product.LicenseBillingModel.PER_RADIO
+        self.license_product.license_capacity = None
+        self.license_product.price = "120.00"
+        self.license_product.save(
+            update_fields=["license_billing_model", "license_capacity", "price", "updated_at"]
+        )
+
+        for quantity in (2, 1):
+            order, radio_item, license_item, attempt = self.create_order()
+            OrderItem.objects.filter(pk=radio_item.pk).update(
+                quantity=quantity,
+                line_total=str(100 * quantity),
+            )
+            OrderItem.objects.filter(pk=license_item.pk).update(
+                unit_price="120.00",
+                quantity=quantity,
+                line_total=str(120 * quantity),
+            )
+            total = str(220 * quantity)
+            Order.objects.filter(pk=order.pk).update(subtotal=total, total=total)
+            PaymentAttempt.objects.filter(pk=attempt.pk).update(amount=total)
+            attempt.refresh_from_db()
+            PaymentService.simulate_checkout(
+                attempt=attempt,
+                user=self.customer,
+                outcome=PaymentAttempt.Status.SUCCEEDED,
+            )
+
+        licenses = list(License.objects.order_by("created_at"))
+        self.assertEqual(len(licenses), 2)
+        self.assertEqual([license.covered_radio_count for license in licenses], [2, 1])
+        self.assertNotEqual(licenses[0].source_order_item.order_id, licenses[1].source_order_item.order_id)
+
     def test_paid_product_quantity_splits_across_compatible_licenses(self):
         organization = OrganizationService.create(
             name="Existing Capacity Organization",

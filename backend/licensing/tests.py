@@ -781,6 +781,24 @@ class LicenseLifecycleTests(TestCase):
             ).exists()
         )
 
+    def test_per_radio_order_quantity_cannot_be_manually_adjusted(self):
+        license = self.provision()
+        License.objects.filter(pk=license.pk).update(
+            billing_model=License.BillingModel.PER_RADIO_ORDER,
+        )
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+
+        response = api_client.post(
+            f"/api/v1/licensing/licenses/{license.pk}/adjust/",
+            {"capacity": 5, "reason": "Must follow the paid order"},
+        )
+
+        license.refresh_from_db()
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(license.capacity, 3)
+        self.assertIn("capacity", response.data)
+
     def test_owner_cancellation_requires_password_and_records_overflow(self):
         license = self.provision(name="Owner Controlled License")
         allocation = LicenseLifecycleService.allocate(
@@ -1926,6 +1944,143 @@ class LicenseLifecycleTests(TestCase):
         self.assertEqual(event.actor, self.staff)
         self.assertEqual(event.metadata["reason"], "Approved support increase")
         self.assertEqual(wrong_organization.status_code, 404)
+
+    def test_admin_can_replace_stale_capacity_allocation_with_corrective_per_radio_coverage(self):
+        legacy_license = self.provision(name="Legacy Capacity License")
+        stale_allocation = LicenseLifecycleService.allocate(
+            license=legacy_license,
+            product=self.radio,
+            order_item=self.radio_order_item,
+            quantity=3,
+            actor=self.staff,
+        )
+        LicenseOrderItemProvisioning.objects.create(
+            organization=self.organization,
+            order_item=self.radio_order_item,
+            operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+            allocation_ids=[stale_allocation.pk],
+        )
+        per_radio_plan = Product.objects.create(
+            category=self.license_product.category,
+            name="Annual Radio Coverage",
+            sku="RADIO-COVERAGE-120",
+            price="120.00",
+            licensing_role=Product.LicensingRole.LICENSE_PRODUCT,
+            license_billing_model=Product.LicenseBillingModel.PER_RADIO,
+            license_term_days=365,
+            status=Product.Status.PUBLISHED,
+        )
+        Product.objects.filter(pk=self.radio.pk).update(
+            required_license_product=per_radio_plan
+        )
+        self.radio.refresh_from_db()
+        payment_count = PaymentAttempt.objects.count()
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+        detail_url = (
+            f"/api/v1/admin/licensing/organizations/{self.organization.pk}/"
+        )
+
+        detail = api_client.get(detail_url)
+        candidate = detail.data["manual_coverage"]["candidates"][0]
+        issued = api_client.post(
+            f"{detail_url}manual-coverage/",
+            {
+                "license_product_id": per_radio_plan.pk,
+                "starts_on": timezone.localdate().isoformat(),
+                "allocations": [
+                    {
+                        "order_item_id": self.radio_order_item.pk,
+                        "quantity": 3,
+                    }
+                ],
+                "reason": "Repair coverage after migration to per-radio billing.",
+                "confirmed_no_payment": True,
+            },
+            format="json",
+        )
+
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["summary"]["overflow_quantity"], 3)
+        self.assertEqual(candidate["uncovered_quantity"], 3)
+        self.assertEqual(candidate["stale_quantity"], 3)
+        self.assertEqual(issued.status_code, 201)
+        corrective_license = License.objects.get(pk=issued.data["id"])
+        corrective_allocation = ProductLicenseAllocation.objects.get(
+            license=corrective_license,
+            order_item=self.radio_order_item,
+            status=ProductLicenseAllocation.Status.ACTIVE,
+        )
+        stale_allocation.refresh_from_db()
+        legacy_license.refresh_from_db()
+        self.assertEqual(
+            corrective_license.billing_model,
+            License.BillingModel.PER_RADIO_ORDER,
+        )
+        self.assertEqual(corrective_license.capacity, 3)
+        self.assertEqual(corrective_license.used_capacity, 3)
+        self.assertEqual(corrective_allocation.quantity, 3)
+        self.assertEqual(stale_allocation.status, ProductLicenseAllocation.Status.RELEASED)
+        self.assertEqual(legacy_license.used_capacity, 0)
+        self.assertEqual(PaymentAttempt.objects.count(), payment_count)
+        self.assertEqual(
+            OrganizationCoverageService.summary(organization=self.organization)[
+                "overflow_quantity"
+            ],
+            0,
+        )
+        audit_event = corrective_license.events.get(
+            event_type=LicenseEvent.Type.ADJUSTED
+        )
+        self.assertTrue(audit_event.metadata["no_payment_recorded"])
+        self.assertEqual(audit_event.actor, self.staff)
+
+    def test_manual_coverage_requires_confirmation_and_staff_permission(self):
+        per_radio_plan = Product.objects.create(
+            category=self.license_product.category,
+            name="Protected Annual Radio Coverage",
+            sku="PROTECTED-RADIO-COVERAGE-120",
+            price="120.00",
+            licensing_role=Product.LicensingRole.LICENSE_PRODUCT,
+            license_billing_model=Product.LicenseBillingModel.PER_RADIO,
+            license_term_days=365,
+            status=Product.Status.PUBLISHED,
+        )
+        Product.objects.filter(pk=self.radio.pk).update(
+            required_license_product=per_radio_plan
+        )
+        LicenseOrderItemProvisioning.objects.create(
+            organization=self.organization,
+            order_item=self.radio_order_item,
+            operation=LicenseOrderItemProvisioning.Operation.PRODUCT_ALLOCATION,
+        )
+        url = (
+            f"/api/v1/admin/licensing/organizations/{self.organization.pk}/"
+            "manual-coverage/"
+        )
+        payload = {
+            "license_product_id": per_radio_plan.pk,
+            "allocations": [
+                {"order_item_id": self.radio_order_item.pk, "quantity": 3}
+            ],
+            "reason": "Correct a provisioning failure.",
+            "confirmed_no_payment": False,
+        }
+        api_client = APIClient()
+        api_client.force_authenticate(user=self.staff)
+        unconfirmed = api_client.post(url, payload, format="json")
+        api_client.force_authenticate(user=self.manager)
+        forbidden = api_client.post(
+            url,
+            {**payload, "confirmed_no_payment": True},
+            format="json",
+        )
+
+        self.assertEqual(unconfirmed.status_code, 400)
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertFalse(
+            License.objects.filter(license_product=per_radio_plan).exists()
+        )
 
 
 class OrganizationPrivacyRoleMatrixTests(TestCase):

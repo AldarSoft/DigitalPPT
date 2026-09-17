@@ -122,7 +122,7 @@ export function CheckoutPage() {
             <h2>Your quote request</h2>
             {cart.items.map(({ product, quantity, is_automatic }) => (
               <div className={tw('checkout-line')} key={`${product.id}-${is_automatic ? 'automatic' : 'manual'}`}>
-                <span>{product.name} x {quantity}{is_automatic ? <small className={tw('automatic-license-label')}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}</span>
+                <span>{product.name} x {quantity}{is_automatic ? <small className={tw('automatic-license-label')}><LockKeyhole size={13}/>Automatically added - {product.license_billing_model === 'per_radio' ? 'Annual radio coverage' : 'Required license'}</small> : null}</span>
                 <strong>${(Number(product.current_price) * quantity).toFixed(2)}</strong>
               </div>
             ))}

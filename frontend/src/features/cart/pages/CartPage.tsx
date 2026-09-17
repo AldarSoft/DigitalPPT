@@ -63,7 +63,9 @@ export function CartPage() {
                 const unitPrice = unitPriceForQuantity(product, quantity);
                 const bulkPriceActive = Boolean(product.bulk_minimum_quantity && product.bulk_unit_price !== null && quantity >= product.bulk_minimum_quantity);
                 const availabilityLabel = item.is_automatic
-                  ? `Required license - covers up to ${product.license_capacity ?? 0} products`
+                  ? product.license_billing_model === 'per_radio'
+                    ? `Annual coverage - one license unit per radio`
+                    : `Required license - covers up to ${product.license_capacity ?? 0} products`
                   : availableForPayment
                   ? `In stock - ${product.inventory_quantity} ready`
                   : `${product.inventory_quantity} in stock - quote required`;
@@ -75,7 +77,7 @@ export function CartPage() {
                         <Link to={`/products/${product.slug}`}><h2>{product.name}</h2></Link>
                         <p>SKU&nbsp;&nbsp;{product.sku}</p>
                         <span className={tw(availableForPayment ? '' : 'out')}><i />{availabilityLabel}</span>
-                        {item.is_automatic ? <small className={tw("automatic-license-label")}><LockKeyhole size={13}/>Automatically added - Required license</small> : null}
+                        {item.is_automatic ? <small className={tw("automatic-license-label")}><LockKeyhole size={13}/>Automatically added - {product.license_billing_model === 'per_radio' ? 'Annual radio coverage' : 'Required license'}</small> : null}
                       </div>
                       {item.is_automatic ? <div className={tw("quantity-control automatic-quantity-control")} aria-label={`Required quantity for ${product.name}`}>
                         <LockKeyhole size={15}/>
@@ -104,8 +106,8 @@ export function CartPage() {
             </dl>
             {cart.isCatalogRefreshing ? <p>Checking saved cart products against the current catalog...</p> : null}
             {cart.catalogRefreshError ? <section className="mb-3 rounded-control border border-danger bg-danger-soft p-3 text-left text-xs text-danger" role="alert"><strong>Saved cart items could not be verified.</strong><p className="mt-1">Products, prices, or availability may have changed. Try again before requesting a quote or payment.</p><button className={tw('action-button action-button-secondary action-button-compact mt-2 w-full')} type="button" onClick={cart.retryCatalogRefresh}>Try again</button></section> : null}
-            {cart.isLicenseCalculating ? <p>Calculating required license capacity...</p> : null}
-            {cart.licenseCalculationError ? <p role="alert">Required license capacity could not be calculated.</p> : null}
+            {cart.isLicenseCalculating ? <p>Calculating required radio coverage...</p> : null}
+            {cart.licenseCalculationError ? <p role="alert">Required radio coverage could not be calculated.</p> : null}
             {organizationCheckPending ? <p>Checking organization access...</p> : null}
             {needsOrganization || needsSignIn ? <section className="mb-3 rounded-control border border-[#f1d29a] bg-warning-soft p-3 text-left text-xs text-warning" role="alert"><div className="flex items-start gap-2"><AlertTriangle className="mt-0.5 shrink-0" size={17}/><div><strong className="block text-sm text-ink">Organization required</strong><p className="mt-1 !flex !items-start !justify-start !text-left !text-warning">Licenses and licensed radio products must belong to an organization before payment.</p><Link className={tw('action-button action-button-primary action-button-compact mt-3 w-full')} to={auth.user ? '/account?tab=licenses' : '/login'}><Building2 size={16}/>{auth.user ? 'Create organization' : 'Sign in to continue'}</Link></div></div></section> : null}
             {organizationCheckFailed ? <section className="mb-3 rounded-control border border-danger bg-danger-soft p-3 text-left text-xs text-danger" role="alert"><strong>Organization access could not be checked.</strong><button className={tw('action-button action-button-secondary action-button-compact mt-2 w-full')} type="button" onClick={() => void workspacesQuery.refetch()}>Try again</button></section> : null}

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { ArrowRight, BadgeCheck, Check, CreditCard, Headphones, MapPin, MessageSquare, Package, Plus, Radio, RadioTower, ShieldCheck, Truck } from 'lucide-react'
+import { ArrowRight, BadgeCheck, Check, CreditCard, FileText, Headphones, MapPin, MessageSquare, Package, Plus, Radio, RadioTower, ShieldCheck, Truck } from 'lucide-react'
 import { useCart } from '../contexts/CartContext'
 import { api, mediaUrl, unwrap } from '../lib/api'
 import { primaryProductImage } from '../lib/product-images'
@@ -198,6 +198,7 @@ function ProductSection() {
             {visibleProducts.map((product) => {
               const image = primaryProductImage(product);
               const isAvailable = !product.is_stock_tracked || product.inventory_quantity > 0;
+              const isCoveragePlan = product.licensing_role === 'license_product' && product.license_billing_model === 'per_radio';
               return (<article className={tw("product-card")} key={product.id}>
                 <Link className={tw("product-card-link")} to={`/products/${product.slug}`} aria-label={`View ${product.name}`}/>
                 <div className={tw("product-image")}>
@@ -207,9 +208,7 @@ function ProductSection() {
                   <p>{product.category.name.toUpperCase()}</p>
                   <h3>{product.name}</h3>
                   <strong>${Number(product.current_price).toFixed(2)}</strong>
-                  <button className={tw("add-button disabled:cursor-not-allowed disabled:opacity-45")} type="button" disabled={!isAvailable} aria-label={isAvailable ? `Add ${product.name} to cart` : `${product.name} is out of stock`} onClick={() => cart.add(product)}>
-                    <Plus size={21}/>
-                  </button>
+                  {isCoveragePlan ? <Link className={tw("add-button")} to={`/products/${product.slug}/coverage`} aria-label={`Request ${product.name} coverage quote`}><FileText size={19}/></Link> : <button className={tw("add-button disabled:cursor-not-allowed disabled:opacity-45")} type="button" disabled={!isAvailable} aria-label={isAvailable ? `Add ${product.name} to cart` : `${product.name} is out of stock`} onClick={() => cart.add(product)}><Plus size={21}/></button>}
                 </div>
               </article>);
             })}

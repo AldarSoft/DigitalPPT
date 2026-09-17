@@ -17,6 +17,7 @@ from django.utils import timezone
 from common.email_delivery import send_application_email
 from licensing.models import (
     License,
+    LicenseCoverageQuoteTarget,
     LicenseEvent,
     LicenseOrderItemProvisioning,
     Organization,
@@ -74,9 +75,16 @@ class ProductLicenseCompatibilityService:
             raise ValidationError(
                 {"product": "The configured compatibility target is not a license product."}
             )
-        if not license_product.license_capacity or not license_product.license_term_days:
+        billing_model = (
+            license_product.license_billing_model
+            or license_product.LicenseBillingModel.LEGACY_CAPACITY
+        )
+        if not license_product.license_term_days or (
+            billing_model == license_product.LicenseBillingModel.LEGACY_CAPACITY
+            and not license_product.license_capacity
+        ):
             raise ValidationError(
-                {"product": "The compatible license product has incomplete capacity data."}
+                {"product": "The compatible license plan is incomplete."}
             )
         return license_product
 
@@ -128,6 +136,23 @@ class LicenseCapacityService:
             raise ValidationError({"quantity": "Requested quantity cannot be negative."})
         if license_product.licensing_role != license_product.LicensingRole.LICENSE_PRODUCT:
             raise ValidationError({"license_product": "Capacity lookup requires a license product."})
+        billing_model = (
+            license_product.license_billing_model
+            or license_product.LicenseBillingModel.LEGACY_CAPACITY
+        )
+        if billing_model == license_product.LicenseBillingModel.PER_RADIO:
+            return LicenseCapacityRequirement(
+                license_product=license_product,
+                product_quantities=tuple(product_quantities),
+                requested_quantity=requested_quantity,
+                total_capacity=0,
+                used_capacity=0,
+                available_capacity=0,
+                covered_quantity=0,
+                uncovered_quantity=requested_quantity,
+                required_license_units=requested_quantity,
+                coverage_plan=(),
+            )
         supplied_capacity = license_product.license_capacity
         if not supplied_capacity:
             raise ValidationError(
@@ -341,11 +366,15 @@ class CartLicenseService:
         manual_items = []
         for item in items:
             product = item["product"]
-            is_stale_automatic_license = (
-                item.get("automatic", False)
-                and product.licensing_role == product.LicensingRole.LICENSE_PRODUCT
+            is_managed_license_line = (
+                product.licensing_role == product.LicensingRole.LICENSE_PRODUCT
+                and (
+                    item.get("automatic", False)
+                    or product.license_billing_model
+                    == product.LicenseBillingModel.PER_RADIO
+                )
             )
-            if not is_stale_automatic_license:
+            if not is_managed_license_line:
                 manual_items.append((product, item["quantity"]))
 
         organization, requirements = cls.calculate(
@@ -721,10 +750,10 @@ class OrganizationCoverageService:
             return coverage, False
 
         overflow = coverage["overflow_quantity"]
-        title = f"License capacity required for {overflow} radio(s)"
+        title = f"License coverage required for {overflow} radio(s)"
         message = (
-            f"{organization.name} has {overflow} licensed radio product(s) beyond usable "
-            "license capacity. Add or renew a compatible license to restore full coverage."
+            f"{organization.name} has {overflow} licensed radio product(s) without usable "
+            "license coverage. Add or renew a compatible license to restore full coverage."
         )
         User = get_user_model()
         recipients = User.objects.filter(
@@ -816,6 +845,8 @@ class OrganizationLicenseListService:
                     "plan_name": license.license_product.name,
                     "plan_sku": license.license_product.sku,
                     "status": LicenseExpiryService.effective_status(license),
+                    "billing_model": license.billing_model,
+                    "covered_radio_count": license.covered_radio_count,
                     "capacity": license.capacity,
                     "used_capacity": license.used_capacity,
                     "available_capacity": license.available_capacity,
@@ -897,6 +928,8 @@ class ClientLicenseDetailService:
             "plan_name": license.license_product.name,
             "plan_sku": license.license_product.sku,
             "status": LicenseExpiryService.effective_status(license),
+            "billing_model": license.billing_model,
+            "covered_radio_count": license.covered_radio_count,
             "capacity": license.capacity,
             "used_capacity": license.used_capacity,
             "available_capacity": license.available_capacity,
@@ -1385,15 +1418,35 @@ class LicenseLifecycleService:
         actor=None,
         starts_on=None,
         name="",
+        capacity=None,
+        event_metadata=None,
     ):
         if license_product.licensing_role != license_product.LicensingRole.LICENSE_PRODUCT:
             raise ValidationError(
                 {"license_product": "Provisioning requires a license product."}
             )
-        if not license_product.license_capacity or not license_product.license_term_days:
+        product_billing_model = (
+            license_product.license_billing_model
+            or license_product.LicenseBillingModel.LEGACY_CAPACITY
+        )
+        if not license_product.license_term_days:
             raise ValidationError(
-                {"license_product": "The license product needs capacity and a term."}
+                {"license_product": "The license plan needs a term."}
             )
+        if product_billing_model == license_product.LicenseBillingModel.PER_RADIO:
+            if not capacity or capacity <= 0:
+                raise ValidationError(
+                    {"license_product": "Per-radio licenses require a purchased radio quantity."}
+                )
+            issued_capacity = capacity
+            billing_model = License.BillingModel.PER_RADIO_ORDER
+        else:
+            if not license_product.license_capacity:
+                raise ValidationError(
+                    {"license_product": "The legacy license product needs capacity."}
+                )
+            issued_capacity = license_product.license_capacity
+            billing_model = License.BillingModel.LEGACY_CAPACITY
 
         starts_on = starts_on or timezone.localdate()
         expires_on = starts_on + timedelta(days=license_product.license_term_days - 1)
@@ -1402,7 +1455,8 @@ class LicenseLifecycleService:
             license_product=license_product,
             name=name.strip() or license_product.name,
             status=License.Status.ACTIVE,
-            capacity=license_product.license_capacity,
+            capacity=issued_capacity,
+            billing_model=billing_model,
             starts_on=starts_on,
             expires_on=expires_on,
             renews_on=expires_on + timedelta(days=1),
@@ -1410,16 +1464,18 @@ class LicenseLifecycleService:
         )
         license.full_clean()
         license.save()
+        metadata = {
+            "capacity": license.capacity,
+            "license_product_id": license_product.pk,
+            "source_order_item_id": source_order_item.pk if source_order_item else None,
+        }
+        metadata.update(event_metadata or {})
         cls.record_event(
             organization=organization,
             license=license,
             event_type=LicenseEvent.Type.PROVISIONED,
             actor=actor,
-            metadata={
-                "capacity": license.capacity,
-                "license_product_id": license_product.pk,
-                "source_order_item_id": source_order_item.pk if source_order_item else None,
-            },
+            metadata=metadata,
         )
         return license
 
@@ -1548,6 +1604,17 @@ class LicenseLifecycleService:
             )
 
         locked = License.objects.select_for_update().get(pk=license.pk)
+        if (
+            capacity is not None
+            and locked.billing_model == License.BillingModel.PER_RADIO_ORDER
+        ):
+            raise ValidationError(
+                {
+                    "capacity": (
+                        "The radio count for an order-based license is fixed by its paid order."
+                    )
+                }
+            )
         previous = {
             "capacity": locked.capacity,
             "status": locked.status,
@@ -1821,6 +1888,12 @@ class LicenseExpiryService:
 class LicenseRenewalOrderService:
     RENEWAL_WINDOW_DAYS = 60
 
+    @staticmethod
+    def billing_quantity(license):
+        if license.billing_model == License.BillingModel.PER_RADIO_ORDER:
+            return license.covered_radio_count
+        return 1
+
     @classmethod
     def resolve(cls, *, user, license_number, organization_id=None, lock=False):
         membership = OrganizationSummaryService.membership_for_user(
@@ -1879,6 +1952,7 @@ class LicenseRenewalOrderService:
         )
         current_expiry = license.expires_on
         base_date = max(timezone.localdate(), current_expiry or timezone.localdate())
+        billing_quantity = cls.billing_quantity(license)
         return {
             "license_number": license.license_number,
             "license_name": license.name,
@@ -1891,7 +1965,9 @@ class LicenseRenewalOrderService:
             "product_name": product.name,
             "product_sku": product.sku,
             "product_image_url": product.images.order_by("id").values_list("image_url", flat=True).first() or "",
-            "amount": product.price_for_quantity(1),
+            "billing_quantity": billing_quantity,
+            "unit_price": product.price_for_quantity(billing_quantity),
+            "amount": product.price_for_quantity(billing_quantity) * billing_quantity,
         }
 
     @classmethod
@@ -1942,7 +2018,7 @@ class LicenseRenewalOrderService:
             product=product,
             product_name=product.name,
             sku=product.sku,
-            quantity=1,
+            quantity=cls.billing_quantity(license),
             specifications={
                 "renewal": True,
                 "license_number": license.license_number,
@@ -1955,6 +2031,213 @@ class LicenseRenewalOrderService:
             lambda quote_id=quote_request.pk: publish_quote_created(quote_id)
         )
         return quote_request, True
+
+
+class CoverageQuoteService:
+    """Create quote requests for existing radios that lack per-radio coverage."""
+
+    UNRESOLVED_STATUSES = (
+        "new",
+        "reviewing",
+        "quote_approved",
+        "invoice_sent",
+        "awaiting_payment",
+        "payment_rejected",
+    )
+
+    @classmethod
+    def _resolve(cls, *, user, organization_id, license_product_id, lock=False):
+        from products.models import Product
+
+        membership = OrganizationSummaryService.membership_for_user(
+            user,
+            organization_id=organization_id,
+        )
+        if membership is None:
+            raise PermissionDenied("You cannot request coverage for this organization.")
+        organization_query = Organization.objects
+        plan_query = Product.objects.public()
+        if lock:
+            organization_query = organization_query.select_for_update()
+            plan_query = plan_query.select_for_update()
+        organization = organization_query.get(pk=membership.organization_id)
+        try:
+            plan = plan_query.get(
+                pk=license_product_id,
+                licensing_role=Product.LicensingRole.LICENSE_PRODUCT,
+                license_billing_model=Product.LicenseBillingModel.PER_RADIO,
+            )
+        except Product.DoesNotExist as exc:
+            raise ValidationError(
+                {"license_product": "Select an available per-radio license plan."}
+            ) from exc
+        return organization, plan
+
+    @classmethod
+    def options(cls, *, user, organization_id, license_product_id):
+        from licensing.admin_services import AdminManualCoverageService
+
+        organization, plan = cls._resolve(
+            user=user,
+            organization_id=organization_id,
+            license_product_id=license_product_id,
+        )
+        context = AdminManualCoverageService.context(organization=organization)
+        candidates = [
+            dict(candidate)
+            for candidate in context["candidates"]
+            if candidate["license_product_id"] == plan.pk
+        ]
+        pending = {
+            row["order_item_id"]: row["quantity"]
+            for row in LicenseCoverageQuoteTarget.objects.filter(
+                organization=organization,
+                quote_item__product=plan,
+                quote_request__status__in=cls.UNRESOLVED_STATUSES,
+            )
+            .values("order_item_id")
+            .annotate(quantity=models.Sum("quantity"))
+        }
+        available_candidates = []
+        for candidate in candidates:
+            pending_quantity = pending.get(candidate["order_item_id"], 0)
+            available_quantity = max(
+                0,
+                candidate["uncovered_quantity"] - pending_quantity,
+            )
+            if available_quantity <= 0:
+                continue
+            candidate["pending_quote_quantity"] = pending_quantity
+            candidate["available_quantity"] = available_quantity
+            available_candidates.append(candidate)
+        return {
+            "organization": organization,
+            "license_product": plan,
+            "candidates": available_candidates,
+            "available_quantity": sum(
+                candidate["available_quantity"]
+                for candidate in available_candidates
+            ),
+        }
+
+    @classmethod
+    @transaction.atomic
+    def create_quote(
+        cls,
+        *,
+        user,
+        organization_id,
+        license_product_id,
+        targets,
+        notes="",
+    ):
+        from orders.models import OrderItem
+        from quotes.models import QuoteRequest, QuoteRequestItem
+
+        if not targets:
+            raise ValidationError({"targets": "Select at least one uncovered radio line."})
+        organization, plan = cls._resolve(
+            user=user,
+            organization_id=organization_id,
+            license_product_id=license_product_id,
+            lock=True,
+        )
+        options = cls.options(
+            user=user,
+            organization_id=organization.pk,
+            license_product_id=plan.pk,
+        )
+        candidates = {
+            candidate["order_item_id"]: candidate
+            for candidate in options["candidates"]
+        }
+        requested = {}
+        for target in targets:
+            order_item_id = target["order_item_id"]
+            if order_item_id in requested:
+                raise ValidationError(
+                    {"targets": "Each radio order line can only be selected once."}
+                )
+            requested[order_item_id] = target["quantity"]
+
+        order_items = {
+            item.pk: item
+            for item in OrderItem.objects.select_for_update()
+            .select_related("order", "product__required_license_product")
+            .filter(pk__in=requested)
+        }
+        if len(order_items) != len(requested):
+            raise ValidationError({"targets": "One or more radio order lines are unavailable."})
+
+        total_quantity = 0
+        for order_item_id, quantity in requested.items():
+            candidate = candidates.get(order_item_id)
+            order_item = order_items[order_item_id]
+            if (
+                candidate is None
+                or order_item.product.required_license_product_id != plan.pk
+            ):
+                raise ValidationError(
+                    {"targets": "An order line is not eligible for this license plan."}
+                )
+            if quantity <= 0 or quantity > candidate["available_quantity"]:
+                raise ValidationError(
+                    {
+                        "targets": (
+                            f"{order_item.product_name} can receive at most "
+                            f"{candidate['available_quantity']} quoted license(s)."
+                        )
+                    }
+                )
+            total_quantity += quantity
+
+        contact_name = user.get_full_name().strip() or user.email
+        quote_request = QuoteRequest.objects.create(
+            user=user,
+            requester_company_name=organization.name,
+            requester_contact_person=contact_name,
+            requester_email=user.email,
+            requester_phone=getattr(user, "phone_number", "") or "",
+            notes=(notes or "").strip() or (
+                f"Annual radio coverage request for {total_quantity} radio"
+                f"{'s' if total_quantity != 1 else ''}."
+            ),
+        )
+        quote_item = QuoteRequestItem.objects.create(
+            quote_request=quote_request,
+            product=plan,
+            product_name=plan.name,
+            sku=plan.sku,
+            quantity=total_quantity,
+            specifications={
+                "coverage_quote": True,
+                "organization_id": organization.pk,
+            },
+        )
+        for order_item_id, quantity in requested.items():
+            LicenseCoverageQuoteTarget.objects.create(
+                organization=organization,
+                quote_request=quote_request,
+                quote_item=quote_item,
+                order_item=order_items[order_item_id],
+                quantity=quantity,
+            )
+
+        from core.notifications import publish_quote_created
+
+        transaction.on_commit(
+            lambda quote_id=quote_request.pk: publish_quote_created(quote_id)
+        )
+        return (
+            QuoteRequest.objects.select_related("renewal_license")
+            .prefetch_related(
+                "items__product",
+                "orders",
+                "messages__author",
+                "coverage_targets__order_item__order",
+            )
+            .get(pk=quote_request.pk)
+        )
 
 
 @dataclass(frozen=True)
@@ -2144,7 +2427,7 @@ class PaymentSuccessProvisioningService:
 
         order = (
             Order.objects.select_for_update(of=("self",))
-            .select_related("user", "organization", "renewal_license")
+            .select_related("user", "organization", "renewal_license", "quote_request")
             .prefetch_related("items__product__required_license_product")
             .get(pk=payment.order_id)
         )
@@ -2207,6 +2490,34 @@ class PaymentSuccessProvisioningService:
                 if item.product.licensing_role
                 == item.product.LicensingRole.LICENSED_PRODUCT
             ]
+            coverage_targets_by_plan = {}
+            coverage_candidates = {}
+            if order.quote_request_id:
+                coverage_targets = list(
+                    LicenseCoverageQuoteTarget.objects.select_for_update()
+                    .select_related(
+                        "quote_item__product",
+                        "order_item__order",
+                        "order_item__product__required_license_product",
+                    )
+                    .filter(quote_request_id=order.quote_request_id)
+                    .order_by("pk")
+                )
+                if coverage_targets:
+                    from licensing.admin_services import AdminManualCoverageService
+
+                    coverage_context = AdminManualCoverageService.context(
+                        organization=organization
+                    )
+                    coverage_candidates = {
+                        candidate["order_item_id"]: candidate
+                        for candidate in coverage_context["candidates"]
+                    }
+                    for target in coverage_targets:
+                        coverage_targets_by_plan.setdefault(
+                            target.quote_item.product_id,
+                            [],
+                        ).append(target)
             for order_item in license_order_items:
                 provisioning_record = (
                     LicenseOrderItemProvisioning.objects.select_for_update()
@@ -2237,12 +2548,12 @@ class PaymentSuccessProvisioningService:
 
                 created_start = len(created_licenses)
                 renewed_start = len(renewed_licenses)
+                allocation_start = len(created_allocations)
                 existing = list(
                     License.objects.select_for_update()
                     .filter(source_order_item=order_item)
                     .order_by("pk")
                 )
-                renewal_candidates = []
                 if order.renewal_license_id:
                     renewal_candidate = (
                         License.objects.select_for_update()
@@ -2262,30 +2573,161 @@ class PaymentSuccessProvisioningService:
                         raise ValidationError(
                             {"license": "The selected license is no longer available for renewal."}
                         )
-                    renewal_candidates = [renewal_candidate]
-                for unit_index in range(len(existing), order_item.quantity):
-                    if renewal_candidates:
+                    if not existing:
                         renewed_licenses.append(
                             LicenseLifecycleService.renew(
-                                license=renewal_candidates.pop(0),
+                                license=renewal_candidate,
                                 actor=actor or purchaser,
                                 source_order_item=order_item,
                             )
                         )
-                        continue
-                    created_licenses.append(
-                        LicenseLifecycleService.provision(
-                            organization=organization,
-                            license_product=order_item.product,
-                            source_order_item=order_item,
-                            actor=actor or purchaser,
-                            name=(
-                                f"{order_item.product.name} {unit_index + 1:02d}"
-                                if order_item.quantity > 1
-                                else order_item.product.name
-                            ),
+                elif (
+                    order_item.product.license_billing_model
+                    == order_item.product.LicenseBillingModel.PER_RADIO
+                ):
+                    if not existing:
+                        created_licenses.append(
+                            LicenseLifecycleService.provision(
+                                organization=organization,
+                                license_product=order_item.product,
+                                source_order_item=order_item,
+                                actor=actor or purchaser,
+                                name=order_item.product.name,
+                                capacity=order_item.quantity,
+                            )
                         )
+                else:
+                    for unit_index in range(len(existing), order_item.quantity):
+                        created_licenses.append(
+                            LicenseLifecycleService.provision(
+                                organization=organization,
+                                license_product=order_item.product,
+                                source_order_item=order_item,
+                                actor=actor or purchaser,
+                                name=(
+                                    f"{order_item.product.name} {unit_index + 1:02d}"
+                                    if order_item.quantity > 1
+                                    else order_item.product.name
+                                ),
+                            )
+                        )
+
+                coverage_targets = coverage_targets_by_plan.get(
+                    order_item.product_id,
+                    [],
+                )
+                if coverage_targets:
+                    if order.renewal_license_id:
+                        raise ValidationError(
+                            {"license_coverage": "A renewal order cannot contain new coverage targets."}
+                        )
+                    if (
+                        order_item.product.license_billing_model
+                        != order_item.product.LicenseBillingModel.PER_RADIO
+                    ):
+                        raise ValidationError(
+                            {"license_coverage": "Coverage targets require a per-radio plan."}
+                        )
+                    if sum(target.quantity for target in coverage_targets) != order_item.quantity:
+                        raise ValidationError(
+                            {"license_coverage": "The paid license quantity no longer matches its selected radios."}
+                        )
+                    coverage_license = next(
+                        (
+                            license
+                            for license in created_licenses[created_start:]
+                            if license.source_order_item_id == order_item.pk
+                        ),
+                        None,
+                    ) or next(
+                        (
+                            license
+                            for license in existing
+                            if license.source_order_item_id == order_item.pk
+                        ),
+                        None,
                     )
+                    if coverage_license is None:
+                        raise ValidationError(
+                            {"license_coverage": "The paid coverage license could not be resolved."}
+                        )
+                    locked_target_items = {
+                        item.pk: item
+                        for item in OrderItem.objects.select_for_update()
+                        .select_related("product__required_license_product")
+                        .filter(pk__in=[target.order_item_id for target in coverage_targets])
+                    }
+                    for target in coverage_targets:
+                        target_item = locked_target_items.get(target.order_item_id)
+                        candidate = coverage_candidates.get(target.order_item_id)
+                        if (
+                            target.organization_id != organization.pk
+                            or target.quote_item.product_id != order_item.product_id
+                            or target_item is None
+                            or target_item.product.required_license_product_id
+                            != order_item.product_id
+                            or candidate is None
+                            or target.quantity > candidate["uncovered_quantity"]
+                        ):
+                            raise ValidationError(
+                                {
+                                    "license_coverage": (
+                                        "One or more selected radios received coverage after "
+                                        "this quote was created. Review the quote before confirming payment."
+                                    )
+                                }
+                            )
+                        active_allocations = list(
+                            ProductLicenseAllocation.objects.select_for_update()
+                            .select_related("license")
+                            .filter(
+                                order_item=target_item,
+                                status=ProductLicenseAllocation.Status.ACTIVE,
+                            )
+                            .order_by("pk")
+                        )
+                        free_quantity = target_item.quantity - sum(
+                            allocation.quantity for allocation in active_allocations
+                        )
+                        release_needed = max(0, target.quantity - free_quantity)
+                        if release_needed:
+                            released_quantity = 0
+                            for stale in active_allocations:
+                                is_usable = (
+                                    stale.license.license_product_id == order_item.product_id
+                                    and stale.license.status
+                                    in (License.Status.ACTIVE, License.Status.EXPIRING_SOON)
+                                    and (
+                                        stale.license.expires_on is None
+                                        or stale.license.expires_on >= timezone.localdate()
+                                    )
+                                )
+                                if is_usable:
+                                    continue
+                                LicenseLifecycleService.release_allocation(
+                                    allocation=stale,
+                                    actor=actor or purchaser,
+                                    reason=(
+                                        "Replaced by paid coverage quote "
+                                        f"{order.quote_request.quote_number}."
+                                    ),
+                                )
+                                released_quantity += stale.quantity
+                                if released_quantity >= release_needed:
+                                    break
+                            if released_quantity < release_needed:
+                                raise ValidationError(
+                                    {"license_coverage": "Existing active coverage cannot be safely replaced."}
+                                )
+                        created_allocations.append(
+                            LicenseLifecycleService.allocate(
+                                license=coverage_license,
+                                product=target_item.product,
+                                order_item=target_item,
+                                quantity=target.quantity,
+                                actor=actor or purchaser,
+                            )
+                        )
                 LicenseOrderItemProvisioning.objects.create(
                     organization=organization,
                     order_item=order_item,
@@ -2297,6 +2739,10 @@ class PaymentSuccessProvisioningService:
                     ],
                     renewed_license_ids=[
                         license.pk for license in renewed_licenses[renewed_start:]
+                    ],
+                    allocation_ids=[
+                        allocation.pk
+                        for allocation in created_allocations[allocation_start:]
                     ],
                 )
 
@@ -2334,15 +2780,26 @@ class PaymentSuccessProvisioningService:
                 )
                 remaining = order_item.quantity - already_allocated
                 if remaining > 0:
-                    compatible_licenses = list(
-                        LicenseCapacityService.eligible_licenses(
-                            organization=organization,
-                            license_product=(
-                                order_item.product.required_license_product
-                            ),
-                            lock=True,
+                    required_plan = order_item.product.required_license_product
+                    if (
+                        required_plan.license_billing_model
+                        == required_plan.LicenseBillingModel.PER_RADIO
+                    ):
+                        compatible_licenses = [
+                            license
+                            for license in created_licenses
+                            if license.license_product_id == required_plan.pk
+                            and license.source_order_item_id
+                            and license.source_order_item.order_id == order.pk
+                        ]
+                    else:
+                        compatible_licenses = list(
+                            LicenseCapacityService.eligible_licenses(
+                                organization=organization,
+                                license_product=required_plan,
+                                lock=True,
+                            )
                         )
-                    )
                     for license in compatible_licenses:
                         allocation_quantity = min(
                             remaining,
@@ -2366,9 +2823,9 @@ class PaymentSuccessProvisioningService:
                 if remaining:
                     raise ValidationError(
                         {
-                            "license_capacity": (
+                            "license_coverage": (
                                 f"{remaining} unit(s) of {order_item.product.name} do not "
-                                "have paid compatible license capacity."
+                                "have paid compatible license coverage."
                             )
                         }
                     )

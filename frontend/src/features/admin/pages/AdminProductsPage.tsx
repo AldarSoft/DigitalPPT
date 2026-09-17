@@ -184,6 +184,7 @@ type ProductForm = {
     inventory_quantity: number;
     licensing_role: Product['licensing_role'];
     required_license_product_id: number | null;
+    license_billing_model: 'capacity' | 'per_radio';
     license_capacity: string;
     license_term_days: string;
     status: Product['status'];
@@ -258,6 +259,7 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             inventory_quantity: product.on_hand_inventory_quantity ?? product.inventory_quantity,
             licensing_role: product.licensing_role,
             required_license_product_id: product.required_license_product?.id ?? null,
+            license_billing_model: product.license_billing_model ?? 'capacity',
             license_capacity: product.license_capacity?.toString() ?? '',
             license_term_days: product.license_term_days?.toString() ?? '',
             status: product.status,
@@ -272,11 +274,13 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
             inventory_quantity: 0,
             licensing_role: 'standard',
             required_license_product_id: null,
+            license_billing_model: 'per_radio',
             license_capacity: '',
             license_term_days: '',
         },
     });
     const licensingRole = useWatch({ control, name: 'licensing_role' });
+    const licenseBillingModel = useWatch({ control, name: 'license_billing_model' });
     const [initialExtras] = useState(() => JSON.stringify({ images, specifications, layout, overrides }));
     const dirty = isDirty || initialExtras !== JSON.stringify({ images, specifications, layout, overrides });
     const requestClose = () => { if (!dirty || window.confirm('Discard unsaved product changes?')) onClose(); };
@@ -312,13 +316,22 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
                 detail_layout: layout,
                 presentation_overrides: overrides,
                 cost_price: data.cost_price || null,
-                sale_price: data.sale_price || null,
-                bulk_minimum_quantity: data.bulk_minimum_quantity ? Number(data.bulk_minimum_quantity) : null,
-                bulk_unit_price: data.bulk_unit_price || null,
+                sale_price: data.licensing_role === 'license_product' && data.license_billing_model === 'per_radio'
+                    ? null
+                    : data.sale_price || null,
+                bulk_minimum_quantity: data.licensing_role === 'license_product' && data.license_billing_model === 'per_radio'
+                    ? null
+                    : data.bulk_minimum_quantity ? Number(data.bulk_minimum_quantity) : null,
+                bulk_unit_price: data.licensing_role === 'license_product' && data.license_billing_model === 'per_radio'
+                    ? null
+                    : data.bulk_unit_price || null,
                 required_license_product_id: data.licensing_role === 'licensed_product'
                     ? data.required_license_product_id
                     : null,
-                license_capacity: data.licensing_role === 'license_product'
+                license_billing_model: data.licensing_role === 'license_product'
+                    ? data.license_billing_model
+                    : null,
+                license_capacity: data.licensing_role === 'license_product' && data.license_billing_model === 'capacity'
                     ? Number(data.license_capacity)
                     : null,
                 license_term_days: data.licensing_role === 'license_product'
@@ -416,10 +429,10 @@ function ProductEditor({ product, categories, licenseProducts, onClose }: {
           <div className={tw("editor-row")}><label>SKU<input required {...register('sku')}/></label><label>Brand<input {...register('brand')}/></label></div>
           <label>Category<AdminSelect {...register('category', { valueAsNumber: true })}>{categories.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</AdminSelect></label>
           <label>Licensing role<AdminSelect {...register('licensing_role')}><option value="standard">Standard product</option><option value="licensed_product">Licensed product</option><option value="license_product">License product</option></AdminSelect></label>
-          {licensingRole === 'licensed_product' ? <label>Required license product<AdminSelect required {...register('required_license_product_id', { valueAsNumber: true })}><option value="">Select license product</option>{licenseProducts.filter((item) => item.id !== product?.id).map((item) => <option value={item.id} key={item.id}>{item.name} ({item.sku})</option>)}</AdminSelect></label> : null}
-          {licensingRole === 'license_product' ? <div className={tw("editor-row")}><label>Capacity supplied<input type="number" min="1" required {...register('license_capacity')}/></label><label>Term in days<input type="number" min="1" required {...register('license_term_days')}/></label></div> : null}
-          <div className={tw("editor-row")}><label>Price<input type="number" min="0" step="0.01" required {...register('price')}/></label><label>Sale price<input type="number" min="0" step="0.01" {...register('sale_price')}/></label></div>
-          <div className={tw("editor-row")}><label>Bulk from quantity<input type="number" min="2" step="1" {...register('bulk_minimum_quantity')}/></label><label>Bulk unit price<input type="number" min="0.01" step="0.01" {...register('bulk_unit_price')}/></label></div>
+          {licensingRole === 'licensed_product' ? <label>Annual license plan<AdminSelect required {...register('required_license_product_id', { valueAsNumber: true })}><option value="">Select annual license plan</option>{licenseProducts.filter((item) => item.id !== product?.id).map((item) => <option value={item.id} key={item.id}>{item.name} (${Number(item.current_price).toFixed(2)} per radio / {item.license_term_days} days)</option>)}</AdminSelect><small className="font-normal text-muted">This plan is added automatically for every radio in the cart.</small></label> : null}
+          {licensingRole === 'license_product' ? <div className="grid gap-3 rounded-control border border-border bg-surface-raised p-4"><label>Billing model<AdminSelect {...register('license_billing_model')}><option value="per_radio">Per radio - grouped by order</option><option value="capacity">Legacy capacity plan</option></AdminSelect></label><div className={tw("editor-row")}>{licenseBillingModel === 'capacity' ? <label>Capacity supplied<input type="number" min="1" required {...register('license_capacity')}/></label> : <div className="rounded-control border border-[#bfd5f5] bg-info-soft p-3 text-sm text-[#244368]"><strong className="block text-ink">Annual radio coverage</strong><span>Added automatically with new radios. Existing uncovered radios can request this plan through a coverage quote.</span></div>}<label>Term in days<input type="number" min="1" required {...register('license_term_days')}/></label></div></div> : null}
+          <div className={tw("editor-row")}><label>{licensingRole === 'license_product' && licenseBillingModel === 'per_radio' ? 'Annual price per radio' : 'Price'}<input type="number" min="0" step="0.01" required {...register('price')}/>{licensingRole === 'license_product' && licenseBillingModel === 'per_radio' ? <small className="font-normal text-muted">One unit is charged for every radio in the order.</small> : null}</label>{licensingRole === 'license_product' && licenseBillingModel === 'per_radio' ? null : <label>Sale price<input type="number" min="0" step="0.01" {...register('sale_price')}/></label>}</div>
+          {licensingRole === 'license_product' && licenseBillingModel === 'per_radio' ? null : <div className={tw("editor-row")}><label>Bulk from quantity<input type="number" min="2" step="1" {...register('bulk_minimum_quantity')}/></label><label>Bulk unit price<input type="number" min="0.01" step="0.01" {...register('bulk_unit_price')}/></label></div>}
           <div className={tw("editor-row")}><label>Cost price<input type="number" min="0" step="0.01" {...register('cost_price')}/></label><label>Stock quantity<input type="number" min="0" {...register('inventory_quantity', { valueAsNumber: true })}/></label></div>
           <label>Short description<input {...register('short_description')}/></label>
           <label>Description<textarea rows={4} {...register('description')}/></label>

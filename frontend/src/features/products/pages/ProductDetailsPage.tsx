@@ -2,7 +2,7 @@ import { tw } from "../../../lib/tailwind-styles";
 import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowUpRight, CreditCard, MessageCircle, Minus, PackageCheck, Plus, ShieldCheck, ShoppingBag, } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, CreditCard, FileText, MessageCircle, Minus, PackageCheck, Plus, ShieldCheck, ShoppingBag, } from 'lucide-react';
 import { useCart } from '../../../contexts/CartContext';
 import { api, ApiError, mediaUrl, unwrap } from '../../../lib/api';
 import { productRequestState } from '../../../lib/catalog-request-state';
@@ -83,6 +83,7 @@ export function ProductDetailsPage({ preview = false }: { preview?: boolean }) {
         </main>);
     }
     const isLicenseProduct = product.licensing_role === 'license_product';
+    const isCoveragePlan = isLicenseProduct && product.license_billing_model === 'per_radio';
     const availableStock = Math.max(0, product.inventory_quantity);
     const maximumQuantity = product.is_stock_tracked === false ? 1000 : availableStock;
     const isOutOfStock = product.is_stock_tracked !== false && availableStock === 0;
@@ -166,9 +167,9 @@ export function ProductDetailsPage({ preview = false }: { preview?: boolean }) {
             </p>
             <strong className={tw("product-price")}>${unitPrice.toFixed(2)}</strong>
             {product.bulk_minimum_quantity && product.bulk_unit_price ? <p className={tw(`product-bulk-price ${bulkPriceActive ? 'active' : ''}`)}>{bulkPriceActive ? `Bulk price active - $${unitPrice.toFixed(2)} each` : `Buy ${product.bulk_minimum_quantity}+ for $${Number(product.bulk_unit_price).toFixed(2)} each`}</p> : null}
-            <p className={tw(`product-stock ${isOutOfStock ? 'out' : ''}`)}><span /> {isOutOfStock ? 'Currently out of stock' : isLicenseProduct ? `${product.license_term_days ?? 365}-day digital license - activates after payment approval` : `In stock - ${availableStock} ready to ship`}</p>
+            <p className={tw(`product-stock ${isOutOfStock ? 'out' : ''}`)}><span /> {isOutOfStock ? 'Currently out of stock' : isCoveragePlan ? `${product.license_term_days ?? 365}-day radio coverage - activates after quoted payment is confirmed` : isLicenseProduct ? `${product.license_term_days ?? 365}-day digital license - activates after payment approval` : `In stock - ${availableStock} ready to ship`}</p>
 
-            <div className={tw("product-purchase-row")} inert={preview}>
+            {isCoveragePlan ? <div className="mt-6" inert={preview}><Link className={`${tw("product-quote-button")} min-h-[58px] w-full`} to={`/products/${product.slug}/coverage`}><FileText size={20}/>Request coverage quote</Link><p className="mt-3 text-sm leading-relaxed text-muted">Sign in to select uncovered radios from your organization. No payment is collected when you submit the request.</p></div> : <div className={tw("product-purchase-row")} inert={preview}>
               <div className={tw(`quantity-control ${isOutOfStock ? 'disabled' : ''}`)} aria-label="Quantity selector" aria-disabled={isOutOfStock}>
                 <button type="button" aria-label="Decrease quantity" disabled={isOutOfStock || quantity <= 1} onClick={() => updateQuantity(quantity - 1)}>
                   <Minus size={17}/>
@@ -185,8 +186,8 @@ export function ProductDetailsPage({ preview = false }: { preview?: boolean }) {
                   <ShoppingBag size={20}/>
                   Add to cart
                 </button>)}
-            </div>
-            {isOutOfStock || preview ? null : (<button className={tw("product-buy-button")} type="button" onClick={() => onBuyNow(product, quantity)}>
+            </div>}
+            {isCoveragePlan || isOutOfStock || preview ? null : (<button className={tw("product-buy-button")} type="button" onClick={() => onBuyNow(product, quantity)}>
                 Buy now
               </button>)}
 

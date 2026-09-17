@@ -56,7 +56,7 @@ export function AccountOverview({
         <article>
           <Gauge size={23} />
           <strong>{licenseSummary?.usable_license_capacity ?? 0}</strong>
-          <span>Usable license capacity</span>
+          <span>Radios with usable coverage</span>
         </article>
       </div>
       <section className={tw("account-panel")}>

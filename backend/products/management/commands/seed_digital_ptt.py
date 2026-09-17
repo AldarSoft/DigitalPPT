@@ -117,7 +117,7 @@ class Command(BaseCommand):
         license_category, _ = Category.objects.get_or_create(
             name="Licenses",
             defaults={
-                "description": "Annual product-capacity licenses for Digital PTT services.",
+                "description": "Annual per-radio licenses for Digital PTT services.",
                 "is_active": True,
             },
         )
@@ -128,17 +128,21 @@ class Command(BaseCommand):
                 "name": "RadioAdmin Business License",
                 "slug": "radioadmin-business-license",
                 "brand": "Digital PTT",
-                "short_description": "Annual capacity for up to 200 compatible products.",
+                "short_description": "Annual service coverage for one compatible radio.",
                 "description": (
-                    "Annual RadioAdmin Business service license with capacity for up to "
-                    "200 compatible Digital PTT radio products."
+                    "Annual RadioAdmin Business service coverage billed per compatible "
+                    "Digital PTT radio. Radios purchased together renew together."
                 ),
-                "price": Decimal("250.00"),
+                "price": Decimal("120.00"),
+                "sale_price": None,
+                "bulk_minimum_quantity": None,
+                "bulk_unit_price": None,
                 "inventory_quantity": 0,
                 "licensing_role": Product.LicensingRole.LICENSE_PRODUCT,
                 "required_license_product": None,
-                "license_capacity": 200,
+                "license_capacity": None,
                 "license_term_days": 365,
+                "license_billing_model": Product.LicenseBillingModel.PER_RADIO,
                 "status": Product.Status.PUBLISHED,
                 "is_featured": False,
                 "is_active": True,
@@ -158,8 +162,8 @@ class Command(BaseCommand):
             [
                 ProductSpecification(
                     product=license_product,
-                    key="Product capacity",
-                    value="Up to 200 compatible radio products",
+                    key="Coverage",
+                    value="One compatible radio per purchased unit",
                     sort_order=0,
                 ),
                 ProductSpecification(
@@ -210,6 +214,7 @@ class Command(BaseCommand):
                     ),
                     "license_capacity": None,
                     "license_term_days": None,
+                    "license_billing_model": None,
                     "status": Product.Status.PUBLISHED,
                     "is_featured": entry["featured"],
                     "is_active": True,

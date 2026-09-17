@@ -60,8 +60,9 @@ export interface LicenseProductSummary {
   slug: string
   sku: string
   current_price: string
-  license_capacity: number
+  license_capacity: number | null
   license_term_days: number
+  license_billing_model: 'capacity' | 'per_radio' | null
 }
 
 export interface Product {
@@ -89,6 +90,7 @@ export interface Product {
   required_license_product: LicenseProductSummary | null
   license_capacity: number | null
   license_term_days: number | null
+  license_billing_model: 'capacity' | 'per_radio' | null
   is_stock_tracked: boolean
   // Inventory-administrator fields; omitted from public catalog responses.
   status?: 'draft' | 'published' | 'archived'
@@ -273,6 +275,7 @@ export interface OrderItem {
   licensing_role: 'standard' | 'licensed_product' | 'license_product' | null
   license_capacity: number | null
   license_term_days: number | null
+  license_billing_model: 'capacity' | 'per_radio' | null
 }
 
 export interface Order {
@@ -360,6 +363,13 @@ export interface QuoteRequest {
   payment_rejection_reason: string
   messages: QuoteMessage[]
   items: QuoteRequestItem[]
+  coverage_targets: Array<{
+    order_item_id: number
+    order_number: string
+    product_name: string
+    product_sku: string
+    quantity: number
+  }>
   created_at: string
   updated_at: string
 }

@@ -32,7 +32,8 @@ class QuoteService:
     @staticmethod
     def _queryset():
         return QuoteRequest.objects.select_related("renewal_license").prefetch_related(
-            "items__product", "orders", "messages__author"
+            "items__product", "orders", "messages__author",
+            "coverage_targets__order_item__order",
         )
 
     @staticmethod
@@ -365,6 +366,17 @@ class QuoteService:
         from orders.models import OrderItem
         from orders.services import OrderService
 
+        coverage_target = (
+            quote_request.coverage_targets.select_related("organization")
+            .order_by("pk")
+            .first()
+        )
+        target_organization = (
+            quote_request.renewal_license.organization
+            if quote_request.renewal_license_id
+            else coverage_target.organization if coverage_target else None
+        )
+
         if existing_order:
             existing_order.items.all().delete()
             OrderItem.objects.bulk_create([
@@ -385,8 +397,8 @@ class QuoteService:
             existing_order.total = quote_request.quoted_total
             existing_order.notes = quote_request.notes
             existing_order.renewal_license = quote_request.renewal_license
-            if quote_request.renewal_license_id:
-                existing_order.organization = quote_request.renewal_license.organization
+            if target_organization:
+                existing_order.organization = target_organization
             existing_order.save(update_fields=[
                 "subtotal", "shipping_fee", "tax_amount", "total", "notes", "renewal_license", "organization", "updated_at",
             ])
@@ -400,9 +412,7 @@ class QuoteService:
                 "quote_request": quote_request,
                 "renewal_license": quote_request.renewal_license,
                 "organization": (
-                    quote_request.renewal_license.organization
-                    if quote_request.renewal_license_id
-                    else None
+                    target_organization
                 ),
                 "customer_first_name": first_name,
                 "customer_last_name": last_name,

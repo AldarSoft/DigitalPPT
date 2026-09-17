@@ -227,3 +227,59 @@ inventory permission. The admin product editor links to the saved preview.
 
 After deployment, verify a draft is absent from the shop, homepage and direct
 product URL, then verify its authorized preview and a published product's badges.
+
+## Per-Radio Licensing Release
+
+This release keeps existing capacity licenses unchanged. The schema migration
+does not convert the live license product automatically. Activate per-radio
+billing only after the application migration succeeds and the command confirms
+that no draft or pending legacy order references the plan.
+
+Before the release, create and verify a database backup. During a short
+maintenance window, stop the web and notification worker, deploy the backend and
+frontend together, and run migrations. Then activate the selected annual plan:
+
+```bash
+cd /srv/digitalptt
+.venv/bin/python backend/manage.py configure_per_radio_license \
+  --sku LIC-RA-BUS-200 \
+  --unit-price 120.00 \
+  --term-days 365 \
+  --settings=config.settings.prod
+```
+
+Do not bypass the command if it reports draft or pending orders. Cancel and
+recreate those unpaid orders under the new pricing, or complete them under the
+legacy model before retrying. If issued legacy licenses exist, preserve their
+plan and renewal price: create a separate per-radio license product and assign
+the radio products to it. The command clears sale and bulk pricing so every
+radio receives the same annual `$120` charge.
+
+Published per-radio plans appear in the shop with **Request coverage quote**.
+Signed-in customers can select uncovered radios from their organization; the
+request stores those paid order lines as immutable coverage targets. Staff use
+the normal quote and invoice workflow. No license is created when the quote is
+submitted or invoiced. Confirming the invoice payment creates one grouped
+365-day license and allocates it only to the selected radios. If eligibility
+changed while the quote was pending, payment confirmation stops for staff
+review instead of silently reallocating coverage.
+
+Restart the production web and worker services after activation. Temporary IP
+installations use `digitalptt-ip-test-web` and `digitalptt-ip-test-worker`.
+Confirm `/health/`, then verify these cases in the UI:
+
+- One radio adds one annual plan unit for `$120`.
+- Five radios add one plan line with quantity five and a `$600` line total.
+- A successful payment creates one grouped license covering five radios.
+- A later order creates a separate group with its own expiry date.
+- Renewing a five-radio group charges five annual units and extends it once.
+- Existing capacity licenses still display and renew as legacy licenses.
+
+If a paid radio order remains uncovered after a plan migration or provisioning
+failure, open the organization in **Admin > License management** and use **Add
+corrective coverage**. Select only the affected paid order lines, confirm the
+start date, and enter a specific audit reason. The action creates one grouped
+per-radio license, replaces stale incompatible allocations, and records the
+administrator and allocation changes in license history. It deliberately does
+not create an order, invoice, or payment and must not be used to grant coverage
+for unpaid radios.

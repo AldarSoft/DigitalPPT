@@ -31,6 +31,7 @@ const ShopPage = lazy(() => import('../features/products/pages/ShopPage').then((
 const AdminLicenseDetailPage = lazy(() => import('../features/licensing/pages/AdminLicenseDetailPage').then((module) => ({ default: module.AdminLicenseDetailPage })))
 const AdminLicensesPage = lazy(() => import('../features/licensing/pages/AdminLicensesPage').then((module) => ({ default: module.AdminLicensesPage })))
 const AcceptOrganizationInvitationPage = lazy(() => import('../features/licensing/pages/AcceptOrganizationInvitationPage').then((module) => ({ default: module.AcceptOrganizationInvitationPage })))
+const CoverageQuotePage = lazy(() => import('../features/licensing/pages/CoverageQuotePage').then((module) => ({ default: module.CoverageQuotePage })))
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage').then((module) => ({ default: module.NotFoundPage })))
 
 function RouteScrollReset() {
@@ -63,6 +64,7 @@ export function AppRouter() {
           <Route path="invite" element={<AcceptOrganizationInvitationPage />} />
           <Route element={<RequireAuth />}>
             <Route path="account" element={<AccountPage />} />
+            <Route path="products/:slug/coverage" element={<CoverageQuotePage />} />
             <Route path="payment" element={<PaymentPage />} />
           </Route>
           <Route element={<RequireStaff />}>

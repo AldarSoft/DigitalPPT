@@ -70,6 +70,10 @@ class Product(ActiveModel):
         LICENSED_PRODUCT = "licensed_product", "Licensed product"
         LICENSE_PRODUCT = "license_product", "License product"
 
+    class LicenseBillingModel(models.TextChoices):
+        LEGACY_CAPACITY = "capacity", "Legacy capacity"
+        PER_RADIO = "per_radio", "Per radio"
+
     category = models.ForeignKey(
         Category,
         on_delete=models.PROTECT,
@@ -102,6 +106,12 @@ class Product(ActiveModel):
     )
     license_capacity = models.PositiveIntegerField(null=True, blank=True)
     license_term_days = models.PositiveIntegerField(null=True, blank=True)
+    license_billing_model = models.CharField(
+        max_length=20,
+        choices=LicenseBillingModel.choices,
+        null=True,
+        blank=True,
+    )
     status = models.CharField(
         max_length=20,
         choices=Status.choices,
@@ -133,18 +143,32 @@ class Product(ActiveModel):
                         required_license_product__isnull=True,
                         license_capacity__isnull=True,
                         license_term_days__isnull=True,
+                        license_billing_model__isnull=True,
                     )
                     | Q(
                         licensing_role="licensed_product",
                         required_license_product__isnull=False,
                         license_capacity__isnull=True,
                         license_term_days__isnull=True,
+                        license_billing_model__isnull=True,
+                    )
+                    | (
+                        Q(
+                            licensing_role="license_product",
+                            required_license_product__isnull=True,
+                            license_capacity__isnull=False,
+                            license_term_days__isnull=False,
+                        )
+                        & (
+                            Q(license_billing_model__isnull=True)
+                            | Q(license_billing_model="capacity")
+                        )
                     )
                     | Q(
                         licensing_role="license_product",
                         required_license_product__isnull=True,
-                        license_capacity__isnull=False,
                         license_term_days__isnull=False,
+                        license_billing_model="per_radio",
                     )
                 ),
                 name="products_licensing_metadata_by_role",
@@ -170,11 +194,34 @@ class Product(ActiveModel):
                 errors["required_license_product"] = (
                     "The compatible product must be a license product."
                 )
+            if self.license_billing_model:
+                errors["license_billing_model"] = (
+                    "Licensed products select a plan; they do not define its billing model."
+                )
         elif self.licensing_role == self.LicensingRole.LICENSE_PRODUCT:
-            if not self.license_capacity:
+            billing_model = (
+                self.license_billing_model
+                or self.LicenseBillingModel.LEGACY_CAPACITY
+            )
+            if (
+                billing_model == self.LicenseBillingModel.LEGACY_CAPACITY
+                and not self.license_capacity
+            ):
                 errors["license_capacity"] = "License capacity must be greater than zero."
+            if billing_model == self.LicenseBillingModel.PER_RADIO and (
+                self.sale_price is not None
+                or self.bulk_minimum_quantity is not None
+                or self.bulk_unit_price is not None
+            ):
+                errors["price"] = (
+                    "Per-radio plans use one fixed unit price; sale and bulk pricing are not allowed."
+                )
             if not self.license_term_days:
                 errors["license_term_days"] = "License term must be greater than zero."
+        elif self.license_billing_model:
+            errors["license_billing_model"] = (
+                "Standard products do not define a license billing model."
+            )
 
         if errors:
             raise ValidationError(errors)

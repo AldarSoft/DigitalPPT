@@ -8,6 +8,7 @@
 # Frontend dependencies and build output
 /frontend/node_modules/
 /frontend/dist/
+/frontend/dist-license-build/
 /frontend/dist-ssr/
 /frontend/.vite/
 

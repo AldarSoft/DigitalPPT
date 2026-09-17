@@ -453,10 +453,12 @@ class PaymentService:
             reason="Replaced by a newer renewal checkout session.",
         )
         site_settings = SiteSetting.get_solo()
+        billing_quantity = LicenseRenewalOrderService.billing_quantity(renewal_license)
+        unit_price = product.price_for_quantity(billing_quantity)
         attempt = PaymentAttempt.objects.create(
             renewal_license=renewal_license,
             provider=provider,
-            amount=product.price_for_quantity(1),
+            amount=unit_price * billing_quantity,
             currency=site_settings.default_currency or "USD",
             status=PaymentAttempt.Status.PENDING,
             is_test=provider.test_mode,
@@ -466,6 +468,8 @@ class PaymentService:
                 "source": "license_renewal",
                 "billing": billing,
                 "renewal_product_id": product.pk,
+                "renewal_billing_quantity": billing_quantity,
+                "renewal_unit_price": str(unit_price),
                 "renewal_expires_on": renewal_license.expires_on.isoformat() if renewal_license.expires_on else None,
             },
             created_by=user,
@@ -796,6 +800,8 @@ class PaymentService:
         product = Product.objects.select_for_update().get(
             pk=(attempt.metadata or {}).get("renewal_product_id") or renewal_license.license_product_id
         )
+        quantity = max(1, int((attempt.metadata or {}).get("renewal_billing_quantity") or 1))
+        unit_price = attempt.amount / quantity
         order = Order.objects.create(
             user=attempt.created_by,
             organization=renewal_license.organization,
@@ -820,8 +826,8 @@ class PaymentService:
             product=product,
             product_name=product.name,
             sku=product.sku,
-            unit_price=attempt.amount,
-            quantity=1,
+            unit_price=unit_price,
+            quantity=quantity,
             line_total=attempt.amount,
         )
         attempt.order = order

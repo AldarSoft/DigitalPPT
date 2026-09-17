@@ -1,4 +1,7 @@
+import type { Product } from '../../types'
+
 export type LicenseStatus = 'draft' | 'pending_payment' | 'active' | 'expiring_soon' | 'expired' | 'cancelled'
+export type LicenseBillingModel = 'legacy_capacity' | 'per_radio_order'
 export type OrganizationLicenseStatus = LicenseStatus | 'no_licenses'
 export type OrganizationRole = 'owner' | 'license_manager'
 export type OrganizationStatus = 'draft' | 'active' | 'inactive'
@@ -62,6 +65,8 @@ export interface ClientLicenseListItem {
   plan_name: string
   plan_sku: string
   status: LicenseStatus
+  billing_model: LicenseBillingModel
+  covered_radio_count: number
   capacity: number
   used_capacity: number
   available_capacity: number
@@ -86,6 +91,8 @@ export interface ClientLicenseDetail {
   plan_name: string
   plan_sku: string
   status: LicenseStatus
+  billing_model: LicenseBillingModel
+  covered_radio_count: number
   capacity: number
   used_capacity: number
   available_capacity: number
@@ -110,6 +117,8 @@ export interface LicenseRenewalSummary {
   product_name: string
   product_sku: string
   product_image_url: string
+  billing_quantity: number
+  unit_price: string
   amount: string
 }
 
@@ -137,6 +146,35 @@ export interface OrganizationWorkspace {
 export interface OrganizationWorkspaceListResponse {
   organizations: OrganizationWorkspace[]
   default_organization_id: number | null
+}
+
+export interface CoverageQuoteCandidate {
+  order_item_id: number
+  order_number: string
+  ordered_at: string
+  product_id: number
+  product_name: string
+  product_sku: string
+  purchased_quantity: number
+  covered_quantity: number
+  stale_quantity: number
+  uncovered_quantity: number
+  pending_quote_quantity: number
+  available_quantity: number
+}
+
+export interface CoverageQuoteOptions {
+  organization: { id: number; public_id: string; name: string; billing_email: string }
+  license_product: Product
+  candidates: CoverageQuoteCandidate[]
+  available_quantity: number
+}
+
+export interface CoverageQuoteCreateInput {
+  organization_id: number
+  license_product_id: number
+  targets: Array<{ order_item_id: number; quantity: number }>
+  notes?: string
 }
 
 export interface OrganizationCreateInput {
@@ -186,7 +224,42 @@ export interface AdminOrganizationLicenseDetail {
   licenses: ClientLicenseDetail[]
   notifications: { renewal_reminder_scheduled_for: string | null; renewal_invoice_status: string }
   events: AdminLicenseEvent[]
-  permissions: { can_adjust: boolean; can_send_renewal_invoice: boolean; can_send_notification: boolean }
+  permissions: { can_adjust: boolean; can_issue_manual_coverage: boolean; can_send_renewal_invoice: boolean; can_send_notification: boolean }
+  manual_coverage: {
+    plans: AdminManualCoveragePlan[]
+    candidates: AdminManualCoverageCandidate[]
+  }
+}
+
+export interface AdminManualCoveragePlan {
+  id: number
+  name: string
+  sku: string
+  unit_price: string
+  term_days: number
+  available: boolean
+}
+
+export interface AdminManualCoverageCandidate {
+  order_item_id: number
+  order_number: string
+  ordered_at: string
+  product_id: number
+  product_name: string
+  product_sku: string
+  license_product_id: number
+  purchased_quantity: number
+  covered_quantity: number
+  stale_quantity: number
+  uncovered_quantity: number
+}
+
+export interface AdminManualCoverageInput {
+  license_product_id: number
+  starts_on: string
+  allocations: Array<{ order_item_id: number; quantity: number }>
+  reason: string
+  confirmed_no_payment: boolean
 }
 
 export interface AdminOrganizationUsers {
@@ -208,6 +281,7 @@ export interface LicenseSummary {
   license_number: string
   name: string
   status: LicenseStatus
+  billing_model: LicenseBillingModel
   capacity: number
   used_capacity: number
   remaining_days: number | null

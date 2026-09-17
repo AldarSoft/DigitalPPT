@@ -21,7 +21,8 @@ from quotes.services import QuoteService
 
 class QuoteRequestViewSet(viewsets.ModelViewSet):
     queryset = QuoteRequest.objects.prefetch_related(
-        "items__product", "orders", "messages__author"
+        "items__product", "orders", "messages__author",
+        "coverage_targets__order_item__order",
     )
     http_method_names = ["get", "post", "patch", "head", "options"]
     lookup_field = "quote_number"

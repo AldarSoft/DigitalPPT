@@ -33,6 +33,55 @@ class CartCapacityRequirementSerializer(serializers.Serializer):
     automatic_license_units = serializers.IntegerField()
 
 
+class CoverageQuoteCandidateSerializer(serializers.Serializer):
+    order_item_id = serializers.IntegerField()
+    order_number = serializers.CharField()
+    ordered_at = serializers.DateTimeField()
+    product_id = serializers.IntegerField()
+    product_name = serializers.CharField()
+    product_sku = serializers.CharField()
+    purchased_quantity = serializers.IntegerField()
+    covered_quantity = serializers.IntegerField()
+    stale_quantity = serializers.IntegerField()
+    uncovered_quantity = serializers.IntegerField()
+    pending_quote_quantity = serializers.IntegerField()
+    available_quantity = serializers.IntegerField()
+
+
+class CoverageQuoteOrganizationSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    public_id = serializers.UUIDField()
+    name = serializers.CharField()
+    billing_email = serializers.EmailField(allow_blank=True)
+
+
+class CoverageQuoteOptionsSerializer(serializers.Serializer):
+    organization = CoverageQuoteOrganizationSerializer()
+    license_product = ProductSerializer()
+    candidates = CoverageQuoteCandidateSerializer(many=True)
+    available_quantity = serializers.IntegerField()
+
+
+class CoverageQuoteTargetSerializer(serializers.Serializer):
+    order_item_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1, max_value=1000)
+
+
+class CoverageQuoteCreateSerializer(serializers.Serializer):
+    organization_id = serializers.IntegerField(min_value=1)
+    license_product_id = serializers.IntegerField(min_value=1)
+    targets = CoverageQuoteTargetSerializer(many=True, allow_empty=False)
+    notes = serializers.CharField(max_length=2000, required=False, allow_blank=True)
+
+    def validate_targets(self, value):
+        order_item_ids = [target["order_item_id"] for target in value]
+        if len(order_item_ids) != len(set(order_item_ids)):
+            raise serializers.ValidationError(
+                "Each radio order line can only be selected once."
+            )
+        return value
+
+
 class LicenseSummarySerializer(serializers.ModelSerializer):
     remaining_days = serializers.IntegerField(read_only=True, allow_null=True)
     has_pending_renewal = serializers.SerializerMethodField()
@@ -44,6 +93,7 @@ class LicenseSummarySerializer(serializers.ModelSerializer):
             "license_number",
             "name",
             "status",
+            "billing_model",
             "capacity",
             "used_capacity",
             "remaining_days",
@@ -149,6 +199,8 @@ class ClientLicenseListItemSerializer(serializers.Serializer):
     plan_name = serializers.CharField()
     plan_sku = serializers.CharField()
     status = serializers.ChoiceField(choices=License.Status.choices)
+    billing_model = serializers.ChoiceField(choices=License.BillingModel.choices)
+    covered_radio_count = serializers.IntegerField()
     capacity = serializers.IntegerField()
     used_capacity = serializers.IntegerField()
     available_capacity = serializers.IntegerField()
@@ -205,6 +257,8 @@ class ClientLicenseDetailSerializer(serializers.Serializer):
     plan_name = serializers.CharField()
     plan_sku = serializers.CharField()
     status = serializers.ChoiceField(choices=License.Status.choices)
+    billing_model = serializers.ChoiceField(choices=License.BillingModel.choices)
+    covered_radio_count = serializers.IntegerField()
     capacity = serializers.IntegerField()
     used_capacity = serializers.IntegerField()
     available_capacity = serializers.IntegerField()
@@ -229,6 +283,8 @@ class LicenseRenewalSummarySerializer(serializers.Serializer):
     product_name = serializers.CharField()
     product_sku = serializers.CharField()
     product_image_url = serializers.CharField(allow_blank=True)
+    billing_quantity = serializers.IntegerField()
+    unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
 
 
@@ -462,8 +518,37 @@ class AdminLicenseEventSerializer(serializers.Serializer):
 
 class AdminOrganizationPermissionsSerializer(serializers.Serializer):
     can_adjust = serializers.BooleanField()
+    can_issue_manual_coverage = serializers.BooleanField()
     can_send_renewal_invoice = serializers.BooleanField()
     can_send_notification = serializers.BooleanField()
+
+
+class AdminManualCoveragePlanSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    sku = serializers.CharField()
+    unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
+    term_days = serializers.IntegerField()
+    available = serializers.BooleanField()
+
+
+class AdminManualCoverageCandidateSerializer(serializers.Serializer):
+    order_item_id = serializers.IntegerField()
+    order_number = serializers.CharField()
+    ordered_at = serializers.DateTimeField()
+    product_id = serializers.IntegerField()
+    product_name = serializers.CharField()
+    product_sku = serializers.CharField()
+    license_product_id = serializers.IntegerField()
+    purchased_quantity = serializers.IntegerField()
+    covered_quantity = serializers.IntegerField()
+    stale_quantity = serializers.IntegerField()
+    uncovered_quantity = serializers.IntegerField()
+
+
+class AdminManualCoverageContextSerializer(serializers.Serializer):
+    plans = AdminManualCoveragePlanSerializer(many=True)
+    candidates = AdminManualCoverageCandidateSerializer(many=True)
 
 
 class AdminOrganizationLicenseDetailSerializer(serializers.Serializer):
@@ -473,6 +558,7 @@ class AdminOrganizationLicenseDetailSerializer(serializers.Serializer):
     notifications = AdminOrganizationNotificationSummarySerializer()
     events = AdminLicenseEventSerializer(many=True)
     permissions = AdminOrganizationPermissionsSerializer()
+    manual_coverage = AdminManualCoverageContextSerializer()
 
 
 class AdminLicenseEventListSerializer(serializers.Serializer):
@@ -490,3 +576,23 @@ class AdminOrganizationNotificationCreateSerializer(serializers.Serializer):
         required=False,
         allow_blank=True,
     )
+
+
+class AdminManualCoverageAllocationSerializer(serializers.Serializer):
+    order_item_id = serializers.IntegerField(min_value=1)
+    quantity = serializers.IntegerField(min_value=1)
+
+
+class AdminManualCoverageCreateSerializer(serializers.Serializer):
+    license_product_id = serializers.IntegerField(min_value=1)
+    starts_on = serializers.DateField(required=False)
+    allocations = AdminManualCoverageAllocationSerializer(many=True, allow_empty=False)
+    reason = serializers.CharField(max_length=500, trim_whitespace=True)
+    confirmed_no_payment = serializers.BooleanField()
+
+    def validate_confirmed_no_payment(self, value):
+        if not value:
+            raise serializers.ValidationError(
+                "Confirm that this corrective action does not record a payment."
+            )
+        return value

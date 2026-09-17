@@ -71,6 +71,7 @@ class QuoteRequestSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True,
     )
+    coverage_targets = serializers.SerializerMethodField()
 
     class Meta:
         model = QuoteRequest
@@ -80,8 +81,20 @@ class QuoteRequestSerializer(serializers.ModelSerializer):
             "requester_phone", "notes", "admin_message", "quoted_subtotal",
             "quoted_shipping", "quoted_total", "quoted_at", "invoice_number",
             "invoice_pdf_url", "invoiced_at", "payment_rejection_reason",
-            "messages", "items", "created_at", "updated_at",
+            "messages", "items", "coverage_targets", "created_at", "updated_at",
         )
+
+    def get_coverage_targets(self, obj):
+        return [
+            {
+                "order_item_id": target.order_item_id,
+                "order_number": target.order_item.order.order_number,
+                "product_name": target.order_item.product_name,
+                "product_sku": target.order_item.sku,
+                "quantity": target.quantity,
+            }
+            for target in obj.coverage_targets.all()
+        ]
 
     def get_order_number(self, obj) -> str:
         order = obj.orders.order_by("created_at", "id").first()
@@ -146,6 +159,33 @@ class QuoteRequestCreateSerializer(serializers.ModelSerializer):
     def validate_items(self, value):
         if not value:
             raise serializers.ValidationError("Add at least one product.")
+        required_per_radio = {}
+        provided_per_radio = {}
+        for item in value:
+            product = item["product"]
+            quantity = item["quantity"]
+            if (
+                product.licensing_role == Product.LicensingRole.LICENSED_PRODUCT
+                and product.required_license_product_id
+                and product.required_license_product.license_billing_model
+                == Product.LicenseBillingModel.PER_RADIO
+            ):
+                plan_id = product.required_license_product_id
+                required_per_radio[plan_id] = required_per_radio.get(plan_id, 0) + quantity
+            elif (
+                product.licensing_role == Product.LicensingRole.LICENSE_PRODUCT
+                and product.license_billing_model
+                == Product.LicenseBillingModel.PER_RADIO
+            ):
+                provided_per_radio[product.pk] = (
+                    provided_per_radio.get(product.pk, 0) + quantity
+                )
+        for plan_id in required_per_radio.keys() | provided_per_radio.keys():
+            if required_per_radio.get(plan_id, 0) != provided_per_radio.get(plan_id, 0):
+                raise serializers.ValidationError(
+                    "Per-radio license quantities must match their radio quantities. "
+                    "Standalone coverage must be requested from the license product page."
+                )
         return value
 
     def validate(self, attrs):

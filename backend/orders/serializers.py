@@ -21,6 +21,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
     licensing_role = serializers.SerializerMethodField()
     license_capacity = serializers.SerializerMethodField()
     license_term_days = serializers.SerializerMethodField()
+    license_billing_model = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
@@ -41,6 +42,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             "licensing_role",
             "license_capacity",
             "license_term_days",
+            "license_billing_model",
         )
 
     def get_image_url(self, obj) -> str:
@@ -66,6 +68,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     def get_license_term_days(self, obj) -> int | None:
         return obj.product.license_term_days if obj.product else None
+
+    def get_license_billing_model(self, obj) -> str | None:
+        return obj.product.license_billing_model if obj.product else None
 
 
 class ShipmentItemSerializer(serializers.ModelSerializer):
