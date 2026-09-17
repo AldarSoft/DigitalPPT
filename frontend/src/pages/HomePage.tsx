@@ -30,7 +30,7 @@ function StoreLink({ href, className, children }: { href: string; className: str
     if (safeHref === null) {
         return <span className={className}>{children}</span>;
     }
-    if (safeHref.startsWith('/') || safeHref.startsWith('#')) {
+    if (safeHref.startsWith('/')) {
         return <Link className={className} to={safeHref}>{children}</Link>;
     }
     return <a className={className} href={safeHref}>{children}</a>;
